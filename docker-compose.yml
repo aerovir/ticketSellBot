@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ticketbot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ticketbot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticketbot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  app:
+    build: .
+    container_name: ticketbot-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      VK_TOKEN: ${VK_TOKEN:-}
+      VK_GROUP_ID: ${VK_GROUP_ID:-}
+      MAX_TOKEN: ${MAX_TOKEN:-}
+      DEBUG: ${DEBUG:-false}
+    labels:
+      description: "TicketBot — кроссплатформенный бот для продажи билетов"
+
+  seed:
+    build: .
+    container_name: ticketbot-seed
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
+    command: ["python", "seed.py"]
+    profiles:
+      - seed
+
+volumes:
+  pgdata:

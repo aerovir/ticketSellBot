@@ -1,0 +1,23 @@
+# Core
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0
+
+# Telegram
+aiogram>=3.0
+
+# VK
+vkbottle>=4.10.0
+
+# MAX (official SDK)
+# pip install max-bot-api-client-py
+# Раскомментируйте, когда пакет станет доступен:
+# max-bot-api-client-py>=0.2
+
+# Migrations
+alembic>=1.13
+
+# Development
+# pytest>=8.0 (опционально)

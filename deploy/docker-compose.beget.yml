@@ -1,0 +1,53 @@
+# Beget-specific override для TicketBot
+# — оптимизация PostgreSQL под 1-2 GB RAM VPS
+#
+# Использование:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.beget.yml up -d
+#
+# Или через Makefile:
+#   make -C deploy up-beget
+
+services:
+  db:
+    ports: []  # Не открываем порт БД наружу
+    environment:
+      # ─── Оптимизация PostgreSQL для 1-2 GB RAM ───────
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ticketbot
+      POSTGRES_CONFIG: |
+        # Минимальные shared_buffers для 512 MB – 1 GB
+        shared_buffers = 256MB
+        effective_cache_size = 512MB
+        work_mem = 4MB
+        maintenance_work_mem = 64MB
+        # Минимизируем фоновые процессы
+        max_worker_processes = 2
+        max_parallel_workers = 2
+        max_parallel_workers_per_gather = 1
+        # Отключаем дорогие фичи
+        track_activities = off
+        track_counts = on
+        track_functions = none
+        track_io_timing = off
+        # Минимизируем WAL
+        wal_level = minimal
+        max_wal_senders = 0
+        # Автовакуум пореже
+        autovacuum_max_workers = 1
+        autovacuum_naptime = 1min
+
+  app:
+    restart: always
+    volumes: []         # Не монтируем код — используем образ
+    ports: []           # Не открываем порты
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"   # На NVMe 15GB — экономим место
+        max-file: "2"
+
+  seed:
+    restart: "no"
+    profiles:
+      - seed
