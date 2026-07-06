@@ -81,9 +81,12 @@ if id "$RUNNER_USER" &>/dev/null; then
     log "Пользователь $RUNNER_USER уже существует"
 else
     useradd -m -s /bin/bash -d "/home/$RUNNER_USER" "$RUNNER_USER"
-    usermod -aG docker "$RUNNER_USER"
-    log "Пользователь $RUNNER_USER создан и добавлен в группу docker"
+    log "Пользователь $RUNNER_USER создан"
 fi
+
+# Добавляем в группу docker (всегда — даже если пользователь уже был)
+usermod -aG docker "$RUNNER_USER"
+log "Пользователь $RUNNER_USER добавлен в группу docker"
 
 # ─── 4. GitHub Actions Runner ─────────────────────────
 header "Шаг 4/5: GitHub Actions Runner"
