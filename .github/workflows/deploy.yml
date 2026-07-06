@@ -6,7 +6,6 @@ on:
   workflow_dispatch:  # ручной запуск
 
 env:
-  PROJECT_DIR: /opt/ticketbot
   COMPOSE_FILES: -f docker-compose.yml -f deploy/docker-compose.beget.yml
 
 jobs:
@@ -33,17 +32,11 @@ jobs:
     if: success() && github.ref == 'refs/heads/main'
 
     steps:
-      - name: ❌ Остановка при ошибке тестов
-        if: failure()
-        run: echo "Тесты не прошли. Деплой остановлен." && exit 1
-
       - name: 📥 Получить код
         uses: actions/checkout@v6
-        with:
-          path: ${{ env.PROJECT_DIR }}
 
       - name: 📋 Создать .env из секретов
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           cat > .env << 'ENVEOF'
           DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
@@ -56,24 +49,24 @@ jobs:
           echo "✅ .env создан"
 
       - name: 🛑 Остановить старые контейнеры
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           docker compose ${{ env.COMPOSE_FILES }} down --remove-orphans 2>/dev/null || true
           echo "✅ Старые контейнеры остановлены"
 
       - name: 🏗️ Собрать новые образы
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           docker compose ${{ env.COMPOSE_FILES }} build
           echo "✅ Образы собраны"
 
       - name: 🐘 Запустить PostgreSQL
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           docker compose ${{ env.COMPOSE_FILES }} up -d db
 
       - name: ⏳ Ожидание PostgreSQL
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           for i in $(seq 1 30); do
             if docker compose exec -T db pg_isready -U postgres -d ticketbot &>/dev/null; then
@@ -85,7 +78,7 @@ jobs:
           done
 
       - name: 🗄️ Применить миграции / создать таблицы
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           docker compose ${{ env.COMPOSE_FILES }} run --rm app python -c "
           import asyncio;
@@ -95,13 +88,13 @@ jobs:
           " 2>&1
 
       - name: 🚀 Запустить бота
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           docker compose ${{ env.COMPOSE_FILES }} up -d app
           echo "✅ Бот запущен"
 
       - name: 🩺 Проверка работоспособности
-        working-directory: ${{ env.PROJECT_DIR }}
+
         run: |
           sleep 5
           if docker compose ps | grep -q "app.*Up"; then
