@@ -13,10 +13,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Проверка Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -43,7 +43,7 @@ jobs:
         run: echo "Тесты не прошли. Деплой остановлен." && exit 1
 
       - name: 📥 Получить код
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: ${{ env.PROJECT_DIR }}
 
