@@ -24,13 +24,8 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Проверка импортов
-        run: python -c "
-          from config import settings;
-          from core.database import Base;
-          from core.models import User, Event, Ticket, Payment;
-          from core.schemas import EventOut, TicketOut;
-          print('✅ Импорты OK');
-          "
+        run: |
+          python -c "from config import settings; from core.database import Base; from core.models import User, Event, Ticket, Payment; from core.schemas import EventOut, TicketOut; print('✅ Импорты OK')"
 
   deploy:
     runs-on: self-hosted
