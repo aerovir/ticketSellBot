@@ -1,16 +1,18 @@
-from typing import Optional
+import logging
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from core.database import async_session_factory
 from core.models import PlatformType
 from core.services import UserService, EventService, TicketService
 from platforms.base import PlatformBot
+from platforms.telegram.channel import ChannelManager
+
+logger = logging.getLogger("ticketbot.telegram")
 
 
 class TelegramBot(PlatformBot):
@@ -19,15 +21,26 @@ class TelegramBot(PlatformBot):
             raise ValueError("TELEGRAM_TOKEN is not set")
         self.bot = Bot(token=settings.telegram_token)
         self.dp = Dispatcher()
+        self.channel = ChannelManager(self.bot)
         self._register_handlers()
 
     def _register_handlers(self):
+        # ─── Личные сообщения (DM) ─────────────────────
         self.dp.message.register(self.cmd_start, Command("start"))
         self.dp.message.register(self.cmd_events, Command("events"))
         self.dp.message.register(self.cmd_event, Command("event"))
         self.dp.message.register(self.cmd_buy, Command("buy"))
         self.dp.message.register(self.cmd_my_tickets, Command("my_tickets"))
         self.dp.message.register(self.cmd_cancel, Command("cancel"))
+
+        # ─── Сообщения из канала (channel_post) ────────
+        # В канале доступны только просмотр: /events и /event <id>
+        self.dp.channel_post.register(self.channel_cmd_events, Command("events"))
+        self.dp.channel_post.register(self.channel_cmd_event, Command("event"))
+
+    # ═══════════════════════════════════════════════════════
+    # ХЕНДЛЕРЫ ЛИЧНЫХ СООБЩЕНИЙ
+    # ═══════════════════════════════════════════════════════
 
     async def _get_user_id(self, message: types.Message) -> UUID:
         async with async_session_factory() as session:
@@ -43,6 +56,9 @@ class TelegramBot(PlatformBot):
         await self._get_user_id(message)
         text = (
             "🎫 <b>TicketBot</b>\n\n"
+            "Я помогаю покупать билеты на мероприятия.\n\n"
+            "Подпишитесь на наш канал, чтобы получать анонсы:\n"
+            f"{self._channel_link()}\n\n"
             "Доступные команды:\n"
             "/events — список мероприятий\n"
             "/event &lt;id&gt; — детали мероприятия\n"
@@ -188,6 +204,93 @@ class TelegramBot(PlatformBot):
             except ValueError as e:
                 await message.answer(f"❌ {e}")
 
+    # ═══════════════════════════════════════════════════════
+    # ХЕНДЛЕРЫ КАНАЛА (только просмотр)
+    # ═══════════════════════════════════════════════════════
+
+    async def channel_cmd_events(self, channel_post: types.Message):
+        """/events в канале — выводит список прямо в канал."""
+        async with async_session_factory() as session:
+            event_svc = EventService(session)
+            events = await event_svc.list_upcoming()
+
+        if not events:
+            await channel_post.answer("😔 Нет предстоящих мероприятий.")
+            return
+
+        lines = ["🎫 <b>Предстоящие мероприятия:</b>\n"]
+        for e in events:
+            date_str = e.date.strftime("%d.%m.%Y %H:%M")
+            lines.append(
+                f"📌 <b>{e.title}</b>\n"
+                f"📅 {date_str}\n"
+                f"📍 {e.location or 'Не указано'}\n"
+                f"💰 {e.price:.0f}₽ | Осталось: {e.available_tickets}/{e.total_tickets}\n"
+                f"➡️ Купить: @{self.bot.username} /buy {e.id}\n"
+            )
+
+        await channel_post.answer("\n".join(lines), parse_mode="HTML")
+
+    async def channel_cmd_event(self, channel_post: types.Message):
+        """/event <id> в канале — детали мероприятия прямо в канал."""
+        args = channel_post.text.split(maxsplit=1)
+        if len(args) < 2:
+            await channel_post.answer("Укажите ID мероприятия: /event &lt;id&gt;")
+            return
+
+        try:
+            event_id = UUID(args[1])
+        except ValueError:
+            await channel_post.answer("Неверный ID мероприятия.")
+            return
+
+        async with async_session_factory() as session:
+            event_svc = EventService(session)
+            event = await event_svc.get_by_id(event_id)
+
+        if event is None:
+            await channel_post.answer("Мероприятие не найдено.")
+            return
+
+        date_str = event.date.strftime("%d.%m.%Y %H:%M")
+        text = (
+            f"🎫 <b>{event.title}</b>\n\n"
+            f"{event.description or 'Описание отсутствует'}\n\n"
+            f"📅 {date_str}\n"
+            f"📍 {event.location or 'Не указано'}\n"
+            f"💰 {event.price:.0f}₽\n"
+            f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}\n\n"
+            f"👇 Для покупки напишите мне в личку:\n"
+            f"@{self.bot.username} — команда /buy {event.id}"
+        )
+
+        await channel_post.answer(text, parse_mode="HTML")
+
+    # ═══════════════════════════════════════════════════════
+    # ПУБЛИЧНЫЕ МЕТОДЫ
+    # ═══════════════════════════════════════════════════════
+
+    async def post_announcement(self, event_id: UUID):
+        """Отправить анонс мероприятия в канал. Вызывается из seed/admin."""
+        async with async_session_factory() as session:
+            event_svc = EventService(session)
+            event = await event_svc.get_by_id(event_id)
+            if event:
+                await self.channel.post_event_announcement(event)
+
+    def _channel_link(self) -> str:
+        """Возвращает ссылку на канал или заглушку."""
+        cid = settings.telegram_channel_id
+        if not cid:
+            return ""
+        if cid.startswith("@"):
+            return f"👉 {cid}"
+        return f"👉 <a href='https://t.me/{cid}'>Канал</a>"
+
+    # ═══════════════════════════════════════════════════════
+    # ЗАПУСК / ОСТАНОВКА
+    # ═══════════════════════════════════════════════════════
+
     async def run(self):
         import asyncio
 
@@ -195,7 +298,10 @@ class TelegramBot(PlatformBot):
         max_retries = 10
         while retries < max_retries:
             try:
-                await self.dp.start_polling(self.bot)
+                await self.dp.start_polling(
+                    self.bot,
+                    allowed_updates=["message", "channel_post"],
+                )
                 return
             except Exception as e:
                 retries += 1

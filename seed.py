@@ -98,6 +98,22 @@ async def seed():
         await session.flush()
         logger.info("✅ Добавлено %d тестовых мероприятий!", len(events))
 
+        # Отправляем анонсы в Telegram канал (если настроен)
+        from config import settings as app_settings
+        if app_settings.telegram_token and app_settings.telegram_channel_id:
+            try:
+                from aiogram import Bot as AiogramBot
+                from platforms.telegram.channel import ChannelManager
+
+                bot = AiogramBot(token=app_settings.telegram_token)
+                channel = ChannelManager(bot)
+                for event in events:
+                    await channel.post_event_announcement(event)
+                await bot.session.close()
+                logger.info("📢 Анонсы отправлены в Telegram канал")
+            except Exception as e:
+                logger.warning("Не удалось отправить анонсы: %s", e)
+
 
 if __name__ == "__main__":
     asyncio.run(seed())

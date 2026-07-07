@@ -1,0 +1,92 @@
+"""
+ChannelManager — отправка анонсов в Telegram канал.
+
+Бот должен быть добавлен в канал как администратор с правами:
+- Отправлять сообщения
+- Читать сообщения
+
+Privacy Mode в BotFather должен быть выключен.
+"""
+import logging
+from uuid import UUID
+
+from aiogram import Bot
+from aiogram.types import FSInputFile, InputMediaPhoto
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from config import settings
+from core.database import async_session_factory
+from core.models import Event
+from core.services import EventService
+
+logger = logging.getLogger("ticketbot.telegram.channel")
+
+
+class ChannelManager:
+    """Управляет отправкой анонсов в Telegram канал."""
+
+    def __init__(self, bot: Bot):
+        self.bot = bot
+        self.channel_id = settings.telegram_channel_id
+
+    @property
+    def is_configured(self) -> bool:
+        """Проверяет, настроен ли канал для анонсов."""
+        return bool(self.channel_id)
+
+    async def post_event_announcement(self, event: Event):
+        """Отправляет анонс мероприятия в канал."""
+        if not self.is_configured:
+            logger.info("Канал не настроен, пропускаем анонс")
+            return
+
+        date_str = event.date.strftime("%d.%m.%Y %H:%M")
+        text = (
+            f"🎫 <b>{event.title}</b>\n\n"
+            f"{event.description or 'Описание отсутствует'}\n\n"
+            f"📅 {date_str}\n"
+            f"📍 {event.location or 'Не указано'}\n"
+            f"💰 {event.price:.0f}₽\n"
+            f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}\n\n"
+            f"👇 Купить билет в личных сообщениях:\n"
+            f"@{self.bot.username} — напишите /buy {event.id}"
+        )
+
+        try:
+            await self.bot.send_message(
+                chat_id=self.channel_id,
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            logger.info("Анонс отправлен в канал %s: %s", self.channel_id, event.title)
+        except Exception as e:
+            logger.error("Ошибка отправки анонса в канал %s: %s", self.channel_id, e)
+
+    async def post_events_list(self, events: list[Event]):
+        """Отправляет список предстоящих мероприятий в канал."""
+        if not self.is_configured:
+            return
+
+        if not events:
+            await self.bot.send_message(
+                chat_id=self.channel_id,
+                text="😔 Нет предстоящих мероприятий.",
+            )
+            return
+
+        lines = ["🎫 <b>Предстоящие мероприятия:</b>\n"]
+        for e in events:
+            date_str = e.date.strftime("%d.%m.%Y %H:%M")
+            lines.append(
+                f"📌 <b>{e.title}</b>\n"
+                f"📅 {date_str}\n"
+                f"📍 {e.location or 'Не указано'}\n"
+                f"💰 {e.price:.0f}₽ | Осталось: {e.available_tickets}/{e.total_tickets}\n"
+            )
+
+        await self.bot.send_message(
+            chat_id=self.channel_id,
+            text="\n".join(lines),
+            parse_mode="HTML",
+        )

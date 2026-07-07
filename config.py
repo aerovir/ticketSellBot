@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_token: Optional[str] = None
+    telegram_channel_id: Optional[str] = None  # @username или числовой ID канала для анонсов
 
     # VK
     vk_token: Optional[str] = None

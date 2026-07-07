@@ -28,6 +28,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
       VK_TOKEN: ${VK_TOKEN:-}
       VK_GROUP_ID: ${VK_GROUP_ID:-}
       MAX_TOKEN: ${MAX_TOKEN:-}
@@ -46,6 +47,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
       DEBUG: ${DEBUG:-false}
     command: ["python", "run_telegram.py"]
     profiles:
@@ -76,6 +78,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
+      TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
     command: ["python", "seed.py"]
     profiles:
       - seed
