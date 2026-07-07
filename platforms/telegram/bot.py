@@ -189,7 +189,22 @@ class TelegramBot(PlatformBot):
                 await message.answer(f"❌ {e}")
 
     async def run(self):
-        await self.dp.start_polling(self.bot)
+        import asyncio
+
+        retries = 0
+        max_retries = 10
+        while retries < max_retries:
+            try:
+                await self.dp.start_polling(self.bot)
+                return
+            except Exception as e:
+                retries += 1
+                wait = min(retries * 5, 60)
+                logger.warning(
+                    "Telegram polling error (попытка %d/%d): %s. Ждём %dс...",
+                    retries, max_retries, e, wait,
+                )
+                await asyncio.sleep(wait)
 
     async def stop(self):
         await self.bot.session.close()
