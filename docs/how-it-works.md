@@ -4,9 +4,19 @@
 
 ---
 
-## 1. Точка входа: main.py
+## 1. Точка входа: main.py (или run_telegram.py / run_vk.py / run_max.py)
 
-**Команда запуска:** `python main.py` или `docker compose up -d`
+**Команда запуска:**
+- `python main.py` — запускает всех ботов, для которых есть токены
+- `python run_telegram.py` — только Telegram
+- `python run_vk.py` — только VK
+- `python run_max.py` — только MAX (заглушка)
+
+Или через Docker:
+- `docker compose up -d` — запускает app + db
+- `docker compose --profile standalone up -d telegram` — только Telegram бот
+- `docker compose --profile standalone up -d vk` — только VK бот
+
 
 ### Последовательность запуска
 
@@ -55,6 +65,78 @@
 3. seed — запускается только вручную
    └─ docker compose run --rm seed
 ```
+
+---
+
+## 1.1 Telegram канал для анонсов
+
+Бот работает по схеме **Вариант А**:
+- **Канал** — только анонсы и просмотр (команды `/events`, `/event <id>`)
+- **Личные сообщения** — покупка билетов и управление
+
+### Последовательность отправки анонса в канал
+
+```
+seed.py / админ-панель
+    │
+    ├─ EventService.create_event()
+    │   └─ INSERT в events
+    │
+    └─ ChannelManager.post_event_announcement(event)
+        │
+        ├─ Формирует HTML: название, дата, место, цена
+        ├─ bot.send_message(chat_id=TELEGRAM_CHANNEL_ID, ...)
+        └─ Результат:
+            ┌──────────────────────────────────────┐
+            │  🎫 Рок-концерт                       │
+            │                                      │
+            │  Грандиозный концерт с лучшими        │
+            │  рок-хитами в исполнении оркестра.    │
+            │                                      │
+            │  📅 21.07.2026 19:00                  │
+            │  📍 Москва, Крокус Сити Холл          │
+            │  💰 2500₽                             │
+            │                                      │
+            │  👇 Купить в личных сообщениях:       │
+            │  @bot /buy <id>                       │
+            └──────────────────────────────────────┘
+```
+
+### Что происходит при команде в канале
+
+```
+Пользователь пишет /events в канале (не боту, а в чат канала)
+    │
+    ├─ aiogram получает channel_post (не message!)
+    ├─ Хендлер channel_cmd_events()
+    ├─ EventService.list_upcoming()
+    └─ channel_post.answer() → ответ пишется прямо в канал
+```
+
+### Какие команды работают в канале, какие — только в личке
+
+| Команда | В канале | В личке |
+|---------|:--------:|:-------:|
+| `/events` | ✅ Список | ✅ Список + кнопки |
+| `/event <id>` | ✅ Детали | ✅ Детали + кнопка Купить |
+| `/start` | ❌ | ✅ Приветствие |
+| `/buy <id>` | ❌ | ✅ Купить билет |
+| `/my_tickets` | ❌ | ✅ Мои билеты |
+| `/cancel <id>` | ❌ | ✅ Отменить билет |
+
+### ChannelManager
+
+Класс `ChannelManager` (файл `platforms/telegram/channel.py`) отвечает за:
+
+- `post_event_announcement(event)` — отправить анонс мероприятия в канал
+- `post_events_list(events)` — отправить список всех мероприятий
+- Ничего не делает, если `TELEGRAM_CHANNEL_ID` не настроен (безопасный пропуск)
+
+### Требования для работы канала
+
+1. Бот добавлен в канал как **администратор** (права: отправлять + читать)
+2. В BotFather отключён **Privacy Mode**
+3. В `config.py` или `.env` указан `TELEGRAM_CHANNEL_ID`
 
 ---
 
@@ -258,10 +340,11 @@ System process tree:
 | Функция | Статус | Почему |
 |---------|:------:|--------|
 | **Оплата** | 🟡 Заглушка | Payment создаётся со status=completed сразу |
+| **VK Bot** | ⏸️ Отключён | Код готов, ждёт настройки группы и токена |
+| **MAX Bot** | ⏸️ Заглушка | Ждёт выхода/доступа к max-bot-api-client-py |
 | **Выбор места** | ❌ Не реализовано | Места не предусмотрены моделью |
 | **Скидочные купоны** | ❌ Не реализовано | Нет кода для купонов |
-| **Уведомления** | ❌ Не реализовано | Нет отправки email/push |
-| **MAX Bot** | 🟡 Требуется токен | MAX может быть недоступен для создания ботов |
+| **Уведомления** | ❌ Не реализовано | Нет отправки push/email до мероприятия |
 
 ---
 
@@ -294,13 +377,17 @@ docker compose down -v
 
 | Файл | Роль |
 |------|------|
-| `main.py` | Точка входа, запуск всех ботов |
+| `main.py` | Запуск всех ботов по токенам |
+| `run_telegram.py` | Запуск только Telegram бота |
+| `run_vk.py` | Запуск только VK бота |
+| `run_max.py` | Запуск только MAX бота (заглушка) |
 | `config.py` | Чтение .env через pydantic-settings |
 | `core/database.py` | async engine, сессии, init_db |
 | `core/models.py` | ORM-модели (5 таблиц) |
 | `core/services.py` | Бизнес-логика (UserService, EventService, TicketService) |
 | `core/schemas.py` | Pydantic-схемы для API |
 | `platforms/telegram/bot.py` | Telegram адаптер (aiogram) |
+| `platforms/telegram/channel.py` | Менеджер анонсов в Telegram канал |
 | `platforms/vk/bot.py` | VK адаптер (vkbottle) |
 | `platforms/max/bot.py` | MAX адаптер (max-bot-api) |
 | `platforms/base.py` | Абстрактный класс PlatformBot |
