@@ -95,7 +95,7 @@ async def seed():
         for event in events:
             session.add(event)
 
-        await session.flush()
+        await session.commit()
         logger.info("✅ Добавлено %d тестовых мероприятий!", len(events))
 
         # Отправляем анонсы в Telegram канал (если настроен)

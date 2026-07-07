@@ -185,6 +185,7 @@ class TelegramBot(PlatformBot):
             ticket_svc = TicketService(session)
             try:
                 ticket = await ticket_svc.buy_ticket(user_id, event_id)
+                await session.commit()
                 await message.answer(
                     f"✅ Билет куплен!\n"
                     f"Номер билета: <code>{ticket.id}</code>\n\n"
@@ -236,6 +237,7 @@ class TelegramBot(PlatformBot):
             ticket_svc = TicketService(session)
             try:
                 await ticket_svc.cancel_ticket(ticket_id, user_id)
+                await session.commit()
                 await message.answer("✅ Билет возвращён.")
             except ValueError as e:
                 await message.answer(f"❌ {e}")
@@ -449,6 +451,7 @@ class TelegramBot(PlatformBot):
         async with async_session_factory() as session:
             svc = EventService(session)
             event = await svc.set_active(event_id, activate)
+            await session.commit()
 
         if event is None:
             await message.answer("Мероприятие не найдено.")
@@ -528,8 +531,10 @@ class TelegramBot(PlatformBot):
                     price=fsm_data["price"],
                     total_tickets=fsm_data["tickets"],
                 )
+                await session.commit()
 
             await state.clear()
+            await callback.answer()
             await callback.message.edit_text(
                 f"✅ Мероприятие «{event.title}» создано!\n"
                 f"ID: <code>{event.id}</code>",
@@ -540,6 +545,7 @@ class TelegramBot(PlatformBot):
 
         elif data == "admin:cancel_create":
             await state.clear()
+            await callback.answer()
             await callback.message.edit_text("❌ Создание отменено.")
 
         else:
