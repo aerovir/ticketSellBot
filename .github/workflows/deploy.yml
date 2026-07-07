@@ -20,11 +20,11 @@ jobs:
           python-version: "3.12"
 
       - name: Установка зависимостей
-        run: pip install -r requirements.txt
+        run: pip install -e .
 
       - name: Проверка импортов
         run: |
-          python -c "from config import settings; from core.database import Base; from core.models import User, Event, Ticket, Payment; from core.schemas import EventOut, TicketOut; print('✅ Импорты OK')"
+          python -c "from app.config import settings; from app.core.database import Base; from app.core.models import User, Event, Ticket, Payment; from app.core.schemas import EventOut, TicketOut; print('✅ Импорты OK')"
 
   deploy:
     runs-on: self-hosted
@@ -84,7 +84,7 @@ jobs:
         run: |
           docker compose ${{ env.COMPOSE_FILES }} run --rm app python -c "
           import asyncio;
-          from core.database import init_db;
+          from app.core.database import init_db;
           asyncio.run(init_db());
           print('✅ Таблицы созданы');
           " 2>&1

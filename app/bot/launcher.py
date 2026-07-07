@@ -18,8 +18,8 @@ TicketBot — кроссплатформенный бот для продажи 
 import asyncio
 import logging
 
-from config import settings
-from core.database import init_db, close_db
+from app.config import settings
+from app.core.database import init_db, close_db
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -38,7 +38,7 @@ async def main():
     # Telegram
     if settings.telegram_token:
         try:
-            from platforms.telegram.bot import TelegramBot
+            from app.platforms.telegram.bot import TelegramBot
 
             tg_bot = TelegramBot()
             bots.append(("Telegram", tg_bot))
@@ -51,7 +51,7 @@ async def main():
     # VK — закомментирован (запускать через run_vk.py)
     # if settings.vk_token and settings.vk_group_id:
     #     try:
-    #         from platforms.vk.bot import VKPlatformBot
+    #         from app.platforms.vk.bot import VKPlatformBot
     #         vk_bot = VKPlatformBot()
     #         bots.append(("VK", vk_bot))
     #         logger.info("VK бот зарегистрирован")
@@ -63,7 +63,7 @@ async def main():
     # MAX — закомментирован (запускать через run_max.py)
     # if settings.max_token:
     #     try:
-    #         from platforms.max.bot import MaxPlatformBot
+    #         from app.platforms.max.bot import MaxPlatformBot
     #         max_bot = MaxPlatformBot()
     #         bots.append(("MAX", max_bot))
     #         logger.info("MAX бот зарегистрирован")

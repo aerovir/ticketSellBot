@@ -4,11 +4,11 @@ from uuid import UUID
 from vkbottle import Bot as VKBot
 from vkbottle.bot import Message
 
-from config import settings
-from core.database import async_session_factory
-from core.models import PlatformType
-from core.services import UserService, EventService, TicketService
-from platforms.base import PlatformBot
+from app.config import settings
+from app.core.database import async_session_factory
+from app.core.models import PlatformType
+from app.core.services import UserService, EventService, TicketService
+from app.platforms.base import PlatformBot
 
 logger = logging.getLogger("ticketbot.vk")
 

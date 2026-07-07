@@ -8,12 +8,12 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from config import settings
-from core.database import async_session_factory
-from core.models import PlatformType
-from core.services import UserService, EventService, TicketService
-from platforms.base import PlatformBot
-from platforms.telegram.channel import ChannelManager
+from app.config import settings
+from app.core.database import async_session_factory
+from app.core.models import PlatformType
+from app.core.services import UserService, EventService, TicketService
+from app.platforms.base import PlatformBot
+from app.platforms.telegram.channel import ChannelManager
 
 logger = logging.getLogger("ticketbot.telegram")
 

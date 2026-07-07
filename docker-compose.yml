@@ -51,7 +51,7 @@ services:
       TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
       ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
       DEBUG: ${DEBUG:-false}
-    command: ["python", "run_telegram.py"]
+    command: ["python", "-m", "bot.telegram"]
     profiles:
       - standalone
 
@@ -68,7 +68,7 @@ services:
       VK_TOKEN: ${VK_TOKEN:-}
       VK_GROUP_ID: ${VK_GROUP_ID:-}
       DEBUG: ${DEBUG:-false}
-    command: ["python", "run_vk.py"]
+    command: ["python", "-m", "bot.vk"]
     profiles:
       - standalone
 
@@ -81,7 +81,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
       TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
-    command: ["python", "seed.py"]
+    command: ["python", "-m", "bot.seed"]
     profiles:
       - seed
 

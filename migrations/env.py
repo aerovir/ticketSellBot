@@ -1,5 +1,10 @@
+import os
+import sys
 import asyncio
 from logging.config import fileConfig
+
+# Добавляем корень проекта в PYTHONPATH для src-layout
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
@@ -17,8 +22,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Import all models so Alembic can detect them
-from core.database import Base
-from core.models import User, Event, Ticket, Payment  # noqa: F401
+from app.core.database import Base
+from app.core.models import User, Event, Ticket, Payment  # noqa: F401
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

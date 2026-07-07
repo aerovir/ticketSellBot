@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
-from config import settings
+from app.config import settings
 
 
 engine = create_async_engine(settings.database_url, echo=settings.debug)
@@ -28,7 +28,7 @@ async def get_session() -> AsyncSession:
 async def init_db():
     """Create all tables (for development). Use Alembic in production."""
     # Импортируем модели, чтобы они зарегистрировались в Base.metadata
-    from core.models import User, Event, Ticket, Payment  # noqa: F401
+    from app.core.models import User, Event, Ticket, Payment  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

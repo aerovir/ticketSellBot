@@ -15,11 +15,11 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import settings
-from core.database import async_session_factory
-from core.models import PlatformType
-from core.services import UserService, EventService, TicketService
-from platforms.base import PlatformBot
+from app.config import settings
+from app.core.database import async_session_factory
+from app.core.models import PlatformType
+from app.core.services import UserService, EventService, TicketService
+from app.platforms.base import PlatformBot
 
 # MAX Bot API Python SDK (official)
 # https://pypi.org/project/max-bot-api-client-py/

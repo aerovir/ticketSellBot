@@ -87,49 +87,51 @@ docker compose run --rm seed
 ## Архитектура
 
 ```
-├── run_telegram.py     # Entry point: только Telegram
-├── run_vk.py           # Entry point: только VK
-├── run_max.py          # Entry point: только MAX (заглушка)
-├── main.py             # Лаунчер — запускает всех ботов по токенам
+├── app/                # Весь Python-код (пакет, PYTHONPATH=/app)
+│   ├── config.py       # pydantic-settings из .env
+│   ├── core/           # Бизнес-логика (общая для всех платформ)
+│   │   ├── models.py   # SQLAlchemy: User, Event, Ticket, Payment
+│   │   ├── database.py # Асинхронный движок + фабрика сессий
+│   │   ├── services.py # UserService, EventService, TicketService
+│   │   └── schemas.py  # Pydantic схемы
+│   ├── platforms/      # Адаптеры платформ
+│   │   ├── base.py     # Abstract base class PlatformBot
+│   │   ├── telegram/   # aiogram 3.x — хендлеры + клавиатуры
+│   │   │   ├── bot.py
+│   │   │   └── channel.py
+│   │   ├── vk/         # vkbottle 4.x — хендлеры
+│   │   └── max/        # max-bot-api-client-py (заглушка)
+│   └── bot/            # Entry points (python -m bot.xxx)
+│       ├── launcher.py # Запуск всех ботов
+│       ├── telegram.py # Только Telegram
+│       ├── vk.py       # Только VK
+│       ├── max.py      # Только MAX (заглушка)
+│       └── seed.py     # Тестовые мероприятия
 │
-├── core/               # Бизнес-логика (общая для всех платформ)
-│   ├── models.py       # SQLAlchemy: User, Event, Ticket, Payment
-│   ├── database.py     # Асинхронный движок + фабрика сессий
-│   ├── services.py     # UserService, EventService, TicketService
-│   └── schemas.py      # Pydantic схемы
+├── scripts/            # Вспомогательные скрипты
+│   ├── healthcheck.py
+│   └── cron-healthcheck.py
 │
-├── platforms/          # Адаптеры платформ
-│   ├── base.py         # Abstract base class PlatformBot
-│   ├── telegram/bot.py # aiogram 3.x — хендлеры + клавиатуры
-│   ├── vk/bot.py       # vkbottle 4.x — хендлеры
-│   └── max/bot.py      # max-bot-api-client-py (заглушка)
-│
-├── config.py           # pydantic-settings из .env
-├── seed.py             # Тестовые мероприятия
-│
+├── tests/              # Тесты (pytest)
 ├── deploy/             # Деплой и DevOps
-│   ├── Makefile         # up-beget / logs-beget / down-beget
-│   ├── docker-compose.beget.yml  # Override для Beget VPS
-│   ├── docker-compose.prod.yml   # Override для прода
-│   ├── setup-runner.sh           # Настройка GitHub Actions runner
-│   ├── beget-setup.sh            # Разовый деплой на Beget
-│   ├── deploy-vps.sh             # Универсальный деплой
-│   ├── healthcheck.py            # Проверка здоровья
-│   └── cron-healthcheck.py       # Healthcheck по крону
-│
 ├── docs/               # Документация
-├── .github/workflows/  # CI/CD
-└── Dockerfile
+├── migrations/         # Alembic миграции
+│
+├── pyproject.toml      # Зависимости и метаданные проекта
+├── Dockerfile
+├── docker-compose.yml
+└── alembic.ini
 ```
 
 ### Принцип разделения
 
 Каждая платформа — **независимый entry point**:
-- `run_telegram.py` — `python run_telegram.py` запустит только Telegram
-- `run_vk.py` — `python run_vk.py` запустит только VK
-- `run_max.py` — `python run_max.py` запустит только MAX
+- `python -m bot.telegram` — запустит только Telegram
+- `python -m bot.vk` — запустит только VK
+- `python -m bot.max` — запустит только MAX
+- `python -m bot.launcher` — лаунчер для всех платформ
 
-Общий `main.py` пытается запустить все платформы, для которых есть токены.
+Общий `python -m bot.launcher` пытается запустить все платформы, для которых есть токены.
 
 Каждый entry point можно запустить в отдельном Docker контейнере (через profiles).
 
@@ -178,7 +180,35 @@ make -C deploy down-beget    # остановить
 - **Исправление** — что конкретно изменили в коде
 - **Дата** — когда исправили
 
-#### 2. Учёт задач
+#### 2. Порядок работы с ошибками
+
+При обнаружении ошибки (по логам, тестам, сообщению пользователя):
+
+**а) Анализ** — обязательный шаг перед любыми правками:
+   - Запросить логи, если их нет
+   - Оценить, ошибка в этой сессии или новая
+   - Определить тип: сломанная логика, состояние, инфраструктура
+   - Проверить, нет ли похожей ошибки в `docs/errors.md`
+   - **Результат анализа сразу записать в `docs/errors.md`** — до написания исправления
+
+**б) Классификация вероятности причины:**
+   - **Гипотеза** — если причина не подтверждена кодом, а только предполагается на основе логов. Помечать маркером `(гипотеза)`. Не применять исправления на основе гипотез, пока причина не подтверждена чтением кода
+   - **Точное значение** — после прочтения кода. Помечать маркером `(подтверждено: <файл>:<строка>)`. Только такие причины можно исправлять
+
+**в) Исправление** — только после подтверждения причины чтением кода:
+   - Указать точные строки кода и почему они неправильные
+   - Написать конкретное исправление
+   - После исправления — проверить, что новых ошибок не появилось
+   - **Результат исправления добавить в ту же запись в `docs/errors.md`** — что изменили, в каких файлах, строках
+
+**г) Отметка об исправлении** — после того как исправление записано в документацию:
+   - В `docs/errors.md` поставить маркер `✅ Исправлено` в заголовке записи
+   - Если исправление ещё не применялось (только анализ) — оставить как есть
+   - Если исправление не сработало — добавить отметку `🔄 Требует доработки` и начать новый цикл анализа
+
+**д) Учёт задач** — если ошибка была заведена как задача, обновить статус в `docs/tasks.md`
+
+#### 3. Учёт задач
 Текущие и выполненные задачи ведутся в `docs/tasks.md`:
 - **Статус** — pending / in progress / done / cancelled
 - **Описание** — что нужно сделать
@@ -195,17 +225,33 @@ make -C deploy down-beget    # остановить
 
 ## Разработка
 
+### 🌿 Ветвление (git flow)
+
+1. **Основная ветка** — `main`. В неё мержит только автор проекта.
+2. **Рабочая ветка** — `dev`. От неё ответвляются все изменения.
+3. **Правила создания веток:**
+   - Каждое изменение (фикс или фича) — **новая ветка от `dev`**
+   - Имена веток должны быть **уникальными** и осмысленными
+   - Префиксы:
+     - `bugfix/` — исправление ошибки (например, `bugfix/ticket-id-null`)
+     - `feature/` — новая функциональность (например, `feature/admin-panel`)
+   - После завершения → PR в `dev`, после проверки → мерж в `dev`
+   - В `main` мержит **только автор** после полного цикла проверки
+
+### Локальный запуск
+
 ```bash
 # Локально
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 
-# Запустить только Telegram
-./run_telegram.py
+# Запустить только Telegram (PYTHONPATH=/app автоматически)
+export PYTHONPATH=/app
+python -m bot.telegram
 
 # Накатить тестовые мероприятия
-./seed.py
+python -m bot.seed
 ```
 
 ### Добавление новой платформы

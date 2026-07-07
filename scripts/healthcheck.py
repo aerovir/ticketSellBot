@@ -76,8 +76,8 @@ async def check_database() -> bool:
 
     try:
         from sqlalchemy import select, func, text
-        from core.database import async_session_factory
-        from core.models import Event
+        from app.core.database import async_session_factory
+        from app.core.models import Event
 
         async with async_session_factory() as session:
             result = await session.execute(select(func.count(Event.id)))
