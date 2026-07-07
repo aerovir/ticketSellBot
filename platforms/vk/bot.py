@@ -1,14 +1,16 @@
+import logging
 from uuid import UUID
 
 from vkbottle import Bot as VKBot
 from vkbottle.bot import Message
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from core.database import async_session_factory
 from core.models import PlatformType
 from core.services import UserService, EventService, TicketService
 from platforms.base import PlatformBot
+
+logger = logging.getLogger("ticketbot.vk")
 
 
 class VKPlatformBot(PlatformBot):
@@ -19,12 +21,19 @@ class VKPlatformBot(PlatformBot):
         self._register_handlers()
 
     def _register_handlers(self):
-        self.bot.on.message(text=["/start", "start"])(self.cmd_start)
-        self.bot.on.message(text=["/events", "events"])(self.cmd_events)
-        self.bot.on.message(text=["/event <event_id>"])(self.cmd_event)
-        self.bot.on.message(text=["/buy <event_id>"])(self.cmd_buy)
-        self.bot.on.message(text=["/my_tickets", "my_tickets"])(self.cmd_my_tickets)
-        self.bot.on.message(text=["/cancel <ticket_id>"])(self.cmd_cancel)
+        self.bot.on.message(text="/start")(self.cmd_start)
+        self.bot.on.message(text="/events")(self.cmd_events)
+        self.bot.on.message(text="/event <event_id>")(self.cmd_event)
+        self.bot.on.message(text="/buy <event_id>")(self.cmd_buy)
+        self.bot.on.message(text="/my_tickets")(self.cmd_my_tickets)
+        self.bot.on.message(text="/cancel <ticket_id>")(self.cmd_cancel)
+
+    async def _get_user_name(self, message: Message) -> str:
+        """Безопасно получает имя пользователя."""
+        if message.sender:
+            parts = [message.sender.first_name or "", message.sender.last_name or ""]
+            return " ".join(parts).strip() or str(message.from_id)
+        return str(message.from_id)
 
     async def _get_user_id(self, message: Message) -> UUID:
         async with async_session_factory() as session:
@@ -32,7 +41,7 @@ class VKPlatformBot(PlatformBot):
             user = await user_svc.get_or_create(
                 platform=PlatformType.vk,
                 platform_user_id=str(message.from_id),
-                name=message.sender.first_name + " " + (message.sender.last_name or ""),
+                name=await self._get_user_name(message),
             )
             return user.id
 
@@ -161,7 +170,22 @@ class VKPlatformBot(PlatformBot):
                 await message.answer(f"❌ {e}")
 
     async def run(self):
-        await self.bot.run()
+        import asyncio
+
+        retries = 0
+        max_retries = 10
+        while retries < max_retries:
+            try:
+                await self.bot.run()
+                return
+            except Exception as e:
+                retries += 1
+                wait = min(retries * 5, 60)
+                logger.warning(
+                    "VK polling error (попытка %d/%d): %s. Ждём %dс...",
+                    retries, max_retries, e, wait,
+                )
+                await asyncio.sleep(wait)
 
     async def stop(self):
         await self.bot.close()

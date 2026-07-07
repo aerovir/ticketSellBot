@@ -4,7 +4,15 @@ TicketBot — кроссплатформенный бот для продажи 
 Поддерживаемые платформы:
 - Telegram (aiogram 3.x)
 - VK (vkbottle)
-- MAX / max.ru (max-bot-api-client-py)
+- MAX / max.ru (max-bot-api-client-py) — заглушка
+
+Запуск всех доступных ботов:
+    python main.py
+
+Запуск конкретной платформы:
+    python run_telegram.py
+    python run_vk.py
+    python run_max.py
 """
 
 import asyncio
@@ -31,6 +39,7 @@ async def main():
     if settings.telegram_token:
         try:
             from platforms.telegram.bot import TelegramBot
+
             tg_bot = TelegramBot()
             bots.append(("Telegram", tg_bot))
             logger.info("Telegram бот зарегистрирован")
@@ -39,8 +48,8 @@ async def main():
     else:
         logger.info("Telegram бот пропущен: токен не указан")
 
-    # VK — заглушен (временно)
-    # if settings.vk_token:
+    # VK — закомментирован (запускать через run_vk.py)
+    # if settings.vk_token and settings.vk_group_id:
     #     try:
     #         from platforms.vk.bot import VKPlatformBot
     #         vk_bot = VKPlatformBot()
@@ -51,7 +60,7 @@ async def main():
     # else:
     #     logger.info("VK бот пропущен: токен не указан")
 
-    # MAX — заглушен (временно)
+    # MAX — закомментирован (запускать через run_max.py)
     # if settings.max_token:
     #     try:
     #         from platforms.max.bot import MaxPlatformBot
@@ -67,9 +76,10 @@ async def main():
         logger.warning("Нет запущенных ботов. Укажите хотя бы один токен в .env")
         return
 
-    logger.info("Запущено ботов: %d (%s)", len(bots), ", ".join(name for name, _ in bots))
+    logger.info(
+        "Запущено ботов: %d (%s)", len(bots), ", ".join(name for name, _ in bots)
+    )
 
-    # Run all bots concurrently
     try:
         await asyncio.gather(*[bot.run() for _, bot in bots])
     except KeyboardInterrupt:

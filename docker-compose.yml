@@ -35,6 +35,39 @@ services:
     labels:
       description: "TicketBot — кроссплатформенный бот для продажи билетов"
 
+  # Telegram бот (отдельный контейнер, если нужен только TG)
+  telegram:
+    build: .
+    container_name: ticketbot-telegram
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      DEBUG: ${DEBUG:-false}
+    command: ["python", "run_telegram.py"]
+    profiles:
+      - standalone
+
+  # VK бот (отдельный контейнер)
+  vk:
+    build: .
+    container_name: ticketbot-vk
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
+      VK_TOKEN: ${VK_TOKEN:-}
+      VK_GROUP_ID: ${VK_GROUP_ID:-}
+      DEBUG: ${DEBUG:-false}
+    command: ["python", "run_vk.py"]
+    profiles:
+      - standalone
+
   seed:
     build: .
     container_name: ticketbot-seed
