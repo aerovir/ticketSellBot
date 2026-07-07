@@ -77,7 +77,7 @@ jobs:
             sleep 2
           done
 
-      - name: 🗄️ Применить миграции / создать таблицы
+      - name: 🗄️ Создать таблицы
 
         run: |
           docker compose ${{ env.COMPOSE_FILES }} run --rm app python -c "
@@ -86,6 +86,11 @@ jobs:
           asyncio.run(init_db());
           print('✅ Таблицы созданы');
           " 2>&1
+
+      - name: 🌱 Накатить тестовые мероприятия
+
+        run: |
+          docker compose ${{ env.COMPOSE_FILES }} run --rm seed 2>&1 || echo "⚠️ Seed пропущен (возможно уже есть данные)"
 
       - name: 🚀 Запустить бота
 
