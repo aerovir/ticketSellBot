@@ -115,7 +115,7 @@ done
 # Применяем миграции
 docker compose run --rm app alembic upgrade head 2>/dev/null || {
     warn "Alembic не сработал, создаю таблицы через init_db..."
-    docker compose run --rm app python -c "import asyncio; from core.database import init_db; asyncio.run(init_db())"
+    docker compose run --rm app python -c "import asyncio; from app.core.database import init_db; asyncio.run(init_db())"
 }
 
 # Поднимаем бота

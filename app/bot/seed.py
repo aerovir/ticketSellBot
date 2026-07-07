@@ -9,8 +9,8 @@ import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 
-from core.database import async_session_factory, init_db, close_db
-from core.models import Event
+from app.core.database import async_session_factory, init_db, close_db
+from app.core.models import Event
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("seed")
@@ -99,11 +99,11 @@ async def seed():
         logger.info("✅ Добавлено %d тестовых мероприятий!", len(events))
 
         # Отправляем анонсы в Telegram канал (если настроен)
-        from config import settings as app_settings
+        from app.config import settings as app_settings
         if app_settings.telegram_token and app_settings.telegram_channel_id:
             try:
                 from aiogram import Bot as AiogramBot
-                from platforms.telegram.channel import ChannelManager
+                from app.platforms.telegram.channel import ChannelManager
 
                 bot = AiogramBot(token=app_settings.telegram_token)
                 channel = ChannelManager(bot)

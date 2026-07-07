@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# PYTHONPATH для src-layout: app/ — корневой пакет
+ENV PYTHONPATH=/app
+
 # Устанавливаем зависимости PostgreSQL (libpq для asyncpg)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
@@ -9,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Копируем и устанавливаем зависимости Python
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+RUN pip install --no-cache-dir .
 
 # Копируем код проекта
 COPY . .
@@ -41,4 +44,4 @@ exit 1\n' > /usr/local/bin/wait-for-db \
     && chmod +x /usr/local/bin/wait-for-db
 
 ENTRYPOINT ["wait-for-db"]
-CMD ["python", "main.py"]
+CMD ["python", "-m", "bot.launcher"]

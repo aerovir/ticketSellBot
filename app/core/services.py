@@ -5,8 +5,8 @@ from typing import Optional
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import User, Event, Ticket, Payment, TicketStatus, PaymentStatus, PlatformType
-from core.schemas import EventOut, EventShortOut, TicketOut, UserOut
+from app.core.models import User, Event, Ticket, Payment, TicketStatus, PaymentStatus, PlatformType
+from app.core.schemas import EventOut, EventShortOut, TicketOut, UserOut
 
 
 # ─── User Service ────────────────────────────────────────────────────────────

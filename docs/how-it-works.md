@@ -4,13 +4,13 @@
 
 ---
 
-## 1. Точка входа: main.py (или run_telegram.py / run_vk.py / run_max.py)
+## 1. Точка входа: bot.launcher (или bot.telegram / bot.vk / bot.max)
 
 **Команда запуска:**
-- `python main.py` — запускает всех ботов, для которых есть токены
-- `python run_telegram.py` — только Telegram
-- `python run_vk.py` — только VK
-- `python run_max.py` — только MAX (заглушка)
+- `python -m bot.launcher` — запускает всех ботов, для которых есть токены
+- `python -m bot.telegram` — только Telegram
+- `python -m bot.vk` — только VK
+- `python -m bot.max` — только MAX (заглушка)
 
 Или через Docker:
 - `docker compose up -d` — запускает app + db
@@ -21,7 +21,7 @@
 ### Последовательность запуска
 
 ```
-1. main.py
+1. python -m bot.launcher (или bot.telegram / bot.vk / bot.max)
    │
    ├─ Загрузка config из .env
    │
@@ -56,7 +56,7 @@
 
 2. Когда db здоров → запускается app (наш бот)
    └─ wait-for-db: проверяет TCP-доступность PostgreSQL
-   └─ main.py:
+   └─ bot/launcher.py:
        ├─ init_db() → создаёт таблицы
        ├─ TelegramBot().run()      (если есть токен)
        ├─ VKPlatformBot().run()    (если есть токен)
@@ -77,7 +77,7 @@
 ### Последовательность отправки анонса в канал
 
 ```
-seed.py / админ-панель
+bot/launcher.py / админ-панель
     │
     ├─ EventService.create_event()
     │   └─ INSERT в events
@@ -407,7 +407,7 @@ TicketService.cancel_ticket(ticket_id, user_id)
 ```
 System process tree:
   ├─ init (PID 1 — в Docker это процесс Python)
-  │   ├─ main.py (Python)
+  │   ├─ bot/launcher.py (Python)
   │   │   ├─ Telegram polling (aiogram)
   │   │   ├─ VK polling (vkbottle)
   │   │   └─ MAX polling (max-bot-api)
@@ -473,20 +473,20 @@ docker compose down -v
 
 | Файл | Роль |
 |------|------|
-| `main.py` | Запуск всех ботов по токенам |
-| `run_telegram.py` | Запуск только Telegram бота |
-| `run_vk.py` | Запуск только VK бота |
-| `run_max.py` | Запуск только MAX бота (заглушка) |
-| `config.py` | Чтение .env через pydantic-settings |
-| `core/database.py` | async engine, сессии, init_db |
-| `core/models.py` | ORM-модели (5 таблиц) |
-| `core/services.py` | Бизнес-логика (UserService, EventService, TicketService) |
-| `core/schemas.py` | Pydantic-схемы для API |
-| `platforms/telegram/bot.py` | Telegram адаптер (aiogram) |
-| `platforms/telegram/channel.py` | Менеджер анонсов в Telegram канал |
-| `platforms/vk/bot.py` | VK адаптер (vkbottle) |
-| `platforms/max/bot.py` | MAX адаптер (max-bot-api) |
-| `platforms/base.py` | Абстрактный класс PlatformBot |
+| `app/bot/launcher.py` | Запуск всех ботов по токенам (python -m bot.launcher) |
+| `app/bot/telegram.py` | Запуск только Telegram бота (python -m bot.telegram) |
+| `app/bot/vk.py` | Запуск только VK бота (python -m bot.vk) |
+| `app/bot/max.py` | Запуск только MAX бота (python -m bot.max) |
+| `app/config.py` | Чтение .env через pydantic-settings |
+| `app/core/database.py` | async engine, сессии, init_db |
+| `app/core/models.py` | ORM-модели (5 таблиц) |
+| `app/core/services.py` | Бизнес-логика (UserService, EventService, TicketService) |
+| `app/core/schemas.py` | Pydantic-схемы для API |
+| `app/platforms/telegram/bot.py` | Telegram адаптер (aiogram) |
+| `app/platforms/telegram/channel.py` | Менеджер анонсов в Telegram канал |
+| `app/platforms/vk/bot.py` | VK адаптер (vkbottle) |
+| `app/platforms/max/bot.py` | MAX адаптер (max-bot-api) |
+| `app/platforms/base.py` | Абстрактный класс PlatformBot |
 
 ---
 

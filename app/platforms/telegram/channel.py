@@ -14,10 +14,10 @@ from aiogram import Bot
 from aiogram.types import FSInputFile, InputMediaPhoto
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import settings
-from core.database import async_session_factory
-from core.models import Event
-from core.services import EventService
+from app.config import settings
+from app.core.database import async_session_factory
+from app.core.models import Event
+from app.core.services import EventService
 
 logger = logging.getLogger("ticketbot.telegram.channel")
 

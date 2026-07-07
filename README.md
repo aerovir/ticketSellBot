@@ -228,10 +228,10 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.beget.yml up -d
 
 # Создать таблицы
 docker compose run --rm app python -c \
-  "import asyncio; from core.database import init_db; asyncio.run(init_db())"
+  "import asyncio; from app.core.database import init_db; asyncio.run(init_db())"
 
 # Залить тестовые данные
-docker compose run --rm seed python seed.py
+docker compose run --rm seed
 
 # Проверить логи
 docker compose logs -f app
@@ -285,7 +285,7 @@ cd ticketBot
 ### 2. Установить зависимости
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
 Состав зависимостей:
@@ -344,13 +344,13 @@ createdb ticketbot
 alembic upgrade head
 
 # Либо быстрый старт (создание таблиц через metadata.create_all)
-python -c "import asyncio; from core.database import init_db; asyncio.run(init_db())"
+python -c "import asyncio; from app.core.database import init_db; asyncio.run(init_db())"
 ```
 
 ### 5. Залить тестовые мероприятия
 
 ```bash
-python seed.py
+python -m bot.seed
 ```
 
 Будут созданы 6 мероприятий:
@@ -367,7 +367,7 @@ python seed.py
 ### 6. Запустить бота
 
 ```bash
-python main.py
+python -m bot.launcher
 ```
 
 Бот запустится на всех платформах, для которых указаны токены. Если токен для платформы не указан — она пропускается.
@@ -378,36 +378,41 @@ python main.py
 
 ```
 ticketBot/
-├── core/                          # Ядро
-│   ├── __init__.py
-│   ├── database.py                # Асинхронный SQLAlchemy engine и сессии
-│   ├── models.py                  # ORM-модели (User, Event, Ticket, Payment)
-│   ├── schemas.py                 # Pydantic-схемы
-│   └── services.py                # Бизнес-логика
-├── platforms/                     # Адаптеры платформ
-│   ├── __init__.py
-│   ├── base.py                    # Базовый класс PlatformBot
-│   ├── telegram/
-│   │   ├── __init__.py
-│   │   └── bot.py                 # Telegram бот (aiogram)
-│   ├── vk/
-│   │   ├── __init__.py
-│   │   └── bot.py                 # VK бот (vkbottle)
-│   └── max/
-│       ├── __init__.py
-│       └── bot.py                 # MAX бот (max-bot-api-client-py)
-├── migrations/
-│   ├── env.py                     # Настройка Alembic
-│   ├── script.py.mako             # Шаблон миграций
-│   └── versions/
-│       └── 0001_initial.py        # Начальная миграция
-├── main.py                        # Точка входа
-├── seed.py                        # Сидирование БД тестовыми данными
-├── config.py                      # Настройки из .env (pydantic-settings)
-├── .env.example                   # Пример конфигурации
-├── requirements.txt               # Зависимости
-├── alembic.ini                    # Конфигурация Alembic
-└── README.md                      # Документация
+├── app/                             # Весь Python-код (пакет, PYTHONPATH=/app)
+│   ├── config.py                    # Настройки из .env (pydantic-settings)
+│   ├── core/                        # Ядро
+│   │   ├── database.py              # Асинхронный SQLAlchemy engine и сессии
+│   │   ├── models.py                # ORM-модели (User, Event, Ticket, Payment)
+│   │   ├── schemas.py               # Pydantic-схемы
+│   │   └── services.py              # Бизнес-логика
+│   ├── platforms/                   # Адаптеры платформ
+│   │   ├── base.py                  # Базовый класс PlatformBot
+│   │   ├── telegram/
+│   │   │   ├── bot.py               # Telegram бот (aiogram)
+│   │   │   └── channel.py           # Анонсы в Telegram канал
+│   │   ├── vk/
+│   │   │   └── bot.py               # VK бот (vkbottle)
+│   │   └── max/
+│   │       └── bot.py               # MAX бот (max-bot-api-client-py, заглушка)
+│   └── bot/                         # Entry points (python -m bot.xxx)
+│       ├── launcher.py              # Запуск всех ботов
+│       ├── telegram.py              # Только Telegram
+│       ├── vk.py                    # Только VK
+│       ├── max.py                   # Только MAX
+│       └── seed.py                  # Тестовые мероприятия
+├── scripts/                         # Вспомогательные скрипты
+│   ├── healthcheck.py
+│   └── cron-healthcheck.py
+├── tests/                           # Тесты (pytest)
+├── deploy/                          # DevOps
+├── docs/                            # Документация
+├── migrations/                      # Alembic
+├── pyproject.toml                   # Зависимости и метаданные
+├── Dockerfile
+├── docker-compose.yml
+├── alembic.ini
+├── .env.example
+└── README.md
 ```
 
 ---
@@ -481,18 +486,19 @@ ticketBot/
 
 ### Добавление новой платформы
 
-1. Создать директорию `platforms/new_platform/`
+1. Создать `app/platforms/new_platform/bot.py`
 2. Реализовать класс, унаследованный от `PlatformBot`:
    - `__init__` — создать клиента платформы и зарегистрировать хендлеры
    - `run()` — запустить polling
    - `stop()` — остановить бота
-3. В хендлерах вызывать сервисы из `core/services.py`
-4. В `main.py` добавить импорт и проверку токена
+3. В хендлерах вызывать сервисы из `app.core.services`
+4. Создать `app/bot/new_platform.py` по шаблону `app/bot/telegram.py`
+5. Добавить в `app/bot/launcher.py` импорт и проверку токена
 
 Пример скелета адаптера:
 
 ```python
-from platforms.base import PlatformBot
+from app.platforms.base import PlatformBot
 
 class MyPlatformBot(PlatformBot):
     async def run(self):

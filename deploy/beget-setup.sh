@@ -163,7 +163,7 @@ for i in $(seq 1 30); do
 done
 
 info "Миграции БД..."
-docker compose run --rm app python -c "import asyncio; from core.database import init_db; asyncio.run(init_db())" \
+docker compose run --rm app python -c "import asyncio; from app.core.database import init_db; asyncio.run(init_db())" \
   && log "Таблицы созданы" \
   || warn "Не удалось создать таблицы"
 

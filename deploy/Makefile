@@ -36,7 +36,7 @@ restart-beget: ## Перезапустить бота на Beget
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml restart app
 
 seed: ## Залить тестовые мероприятия
-	docker compose -f ../docker-compose.yml run --rm seed python seed.py
+	docker compose -f ../docker-compose.yml run --rm seed
 
 clean-beget: ## Остановить и удалить всё (включая БД) на Beget
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml down -v
@@ -48,8 +48,8 @@ deploy: ## Полный деплой: БД → миграции → seed → з�
 	@echo "Ожидание БД..."
 	@sleep 5
 	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm app python -c \
-		"import asyncio; from core.database import init_db; asyncio.run(init_db())"
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm seed python seed.py
+		"import asyncio; from app.core.database import init_db; asyncio.run(init_db())"
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm seed
 	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml up -d app
 	@echo "✅ Деплой завершён"
 
@@ -58,7 +58,7 @@ deploy-beget: ## Полный деплой на Beget
 	@echo "Ожидание БД..."
 	@sleep 5
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm app python -c \
-		"import asyncio; from core.database import init_db; asyncio.run(init_db())"
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm seed python seed.py
+		"import asyncio; from app.core.database import init_db; asyncio.run(init_db())"
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm seed
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d app
 	@echo "✅ Деплой на Beget завершён"
