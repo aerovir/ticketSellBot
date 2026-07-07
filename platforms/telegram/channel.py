@@ -25,8 +25,9 @@ logger = logging.getLogger("ticketbot.telegram.channel")
 class ChannelManager:
     """Управляет отправкой анонсов в Telegram канал."""
 
-    def __init__(self, bot: Bot):
+    def __init__(self, bot: Bot, bot_username: str | None = None):
         self.bot = bot
+        self.bot_username = bot_username
         self.channel_id = settings.telegram_channel_id
 
     @property
@@ -49,7 +50,7 @@ class ChannelManager:
             f"💰 {event.price:.0f}₽\n"
             f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}\n\n"
             f"👇 Купить билет в личных сообщениях:\n"
-            f"@{self.bot.username} — напишите /buy {event.id}"
+            f"@{self.bot_username or 'bot'} — напишите /buy {event.id}"
         )
 
         try:

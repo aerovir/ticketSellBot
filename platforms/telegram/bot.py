@@ -35,6 +35,7 @@ class TelegramBot(PlatformBot):
             raise ValueError("TELEGRAM_TOKEN is not set")
         self.bot = Bot(token=settings.telegram_token)
         self.dp = Dispatcher(storage=MemoryStorage())
+        self._bot_username = None  # будет заполнен в run()
         self.channel = ChannelManager(self.bot)
         self._register_handlers()
 
@@ -573,7 +574,7 @@ class TelegramBot(PlatformBot):
                 f"📅 {date_str}\n"
                 f"📍 {e.location or 'Не указано'}\n"
                 f"💰 {e.price:.0f}₽ | Осталось: {e.available_tickets}/{e.total_tickets}\n"
-                f"➡️ Купить: @{self.bot.username} /buy {e.id}\n"
+                f"➡️ Купить: @{self._bot_username} /buy {e.id}\n"
             )
 
         await channel_post.answer("\n".join(lines), parse_mode="HTML")
@@ -608,7 +609,7 @@ class TelegramBot(PlatformBot):
             f"💰 {event.price:.0f}₽\n"
             f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}\n\n"
             f"👇 Для покупки напишите мне в личку:\n"
-            f"@{self.bot.username} — команда /buy {event.id}"
+            f"@{self._bot_username} — команда /buy {event.id}"
         )
 
         await channel_post.answer(text, parse_mode="HTML")
@@ -645,6 +646,10 @@ class TelegramBot(PlatformBot):
         max_retries = 10
         while retries < max_retries:
             try:
+                # Получаем username бота (в aiogram 3.x нет bot.username)
+                me = await self.bot.get_me()
+                self._bot_username = me.username
+                self.channel.bot_username = me.username
                 await self.dp.start_polling(
                     self.bot,
                     allowed_updates=["message", "channel_post", "callback_query"],
