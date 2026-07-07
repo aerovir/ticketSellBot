@@ -39,29 +39,29 @@ async def main():
     else:
         logger.info("Telegram бот пропущен: токен не указан")
 
-    # VK
-    if settings.vk_token:
-        try:
-            from platforms.vk.bot import VKPlatformBot
-            vk_bot = VKPlatformBot()
-            bots.append(("VK", vk_bot))
-            logger.info("VK бот зарегистрирован")
-        except (ImportError, ValueError) as e:
-            logger.warning("VK бот не запущен: %s", e)
-    else:
-        logger.info("VK бот пропущен: токен не указан")
+    # VK — заглушен (временно)
+    # if settings.vk_token:
+    #     try:
+    #         from platforms.vk.bot import VKPlatformBot
+    #         vk_bot = VKPlatformBot()
+    #         bots.append(("VK", vk_bot))
+    #         logger.info("VK бот зарегистрирован")
+    #     except (ImportError, ValueError) as e:
+    #         logger.warning("VK бот не запущен: %s", e)
+    # else:
+    #     logger.info("VK бот пропущен: токен не указан")
 
-    # MAX
-    if settings.max_token:
-        try:
-            from platforms.max.bot import MaxPlatformBot
-            max_bot = MaxPlatformBot()
-            bots.append(("MAX", max_bot))
-            logger.info("MAX бот зарегистрирован")
-        except (ImportError, ValueError) as e:
-            logger.warning("MAX бот не запущен: %s", e)
-    else:
-        logger.info("MAX бот пропущен: токен не указан")
+    # MAX — заглушен (временно)
+    # if settings.max_token:
+    #     try:
+    #         from platforms.max.bot import MaxPlatformBot
+    #         max_bot = MaxPlatformBot()
+    #         bots.append(("MAX", max_bot))
+    #         logger.info("MAX бот зарегистрирован")
+    #     except (ImportError, ValueError) as e:
+    #         logger.warning("MAX бот не запущен: %s", e)
+    # else:
+    #     logger.info("MAX бот пропущен: токен не указан")
 
     if not bots:
         logger.warning("Нет запущенных ботов. Укажите хотя бы один токен в .env")
