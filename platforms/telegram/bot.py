@@ -2,7 +2,10 @@ import logging
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER
+from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import settings
@@ -15,12 +18,23 @@ from platforms.telegram.channel import ChannelManager
 logger = logging.getLogger("ticketbot.telegram")
 
 
+# ─── FSM States для создания мероприятия ──────────────────────────────────
+class CreateEvent(StatesGroup):
+    title = State()
+    description = State()
+    date = State()
+    location = State()
+    price = State()
+    tickets = State()
+    confirm = State()
+
+
 class TelegramBot(PlatformBot):
     def __init__(self):
         if not settings.telegram_token:
             raise ValueError("TELEGRAM_TOKEN is not set")
         self.bot = Bot(token=settings.telegram_token)
-        self.dp = Dispatcher()
+        self.dp = Dispatcher(storage=MemoryStorage())
         self.channel = ChannelManager(self.bot)
         self._register_handlers()
 
@@ -33,8 +47,30 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.cmd_my_tickets, Command("my_tickets"))
         self.dp.message.register(self.cmd_cancel, Command("cancel"))
 
+        # ─── Админ-команды ─────────────────────────────
+        self.dp.message.register(self.admin_menu, Command("admin"))
+        self.dp.message.register(self.admin_create_event, Command("create_event"))
+        self.dp.message.register(self.admin_events_all, Command("events_all"))
+        self.dp.message.register(self.admin_deactivate, Command("deactivate"))
+        self.dp.message.register(self.admin_activate, Command("activate"))
+        self.dp.message.register(self.admin_stats, Command("stats"))
+
+        # ─── FSM: шаги создания мероприятия ────────────
+        self.dp.message.register(self.fsm_title, CreateEvent.title)
+        self.dp.message.register(self.fsm_description, CreateEvent.description)
+        self.dp.message.register(self.fsm_date, CreateEvent.date)
+        self.dp.message.register(self.fsm_location, CreateEvent.location)
+        self.dp.message.register(self.fsm_price, CreateEvent.price)
+        self.dp.message.register(self.fsm_tickets, CreateEvent.tickets)
+        self.dp.message.register(self.fsm_confirm, CreateEvent.confirm)
+
+        # Отмена во время FSM
+        self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(CreateEvent))
+
+        # ─── Callback-запросы (инлайн-кнопки) ──────────
+        self.dp.callback_query.register(self.cmd_callback)
+
         # ─── Сообщения из канала (channel_post) ────────
-        # В канале доступны только просмотр: /events и /event <id>
         self.dp.channel_post.register(self.channel_cmd_events, Command("events"))
         self.dp.channel_post.register(self.channel_cmd_event, Command("event"))
 
@@ -205,6 +241,311 @@ class TelegramBot(PlatformBot):
                 await message.answer(f"❌ {e}")
 
     # ═══════════════════════════════════════════════════════
+    # АДМИН-ХЕНДЛЕРЫ
+    # ═══════════════════════════════════════════════════════
+
+    def _is_admin(self, user_id: int) -> bool:
+        """Check if a Telegram user is in the admin list."""
+        if not settings.admin_telegram_ids:
+            return False
+        admin_ids = [x.strip() for x in settings.admin_telegram_ids.split(",") if x.strip()]
+        return str(user_id) in admin_ids
+
+    async def admin_menu(self, message: types.Message):
+        """Show admin panel menu."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+        text = (
+            "🎫 <b>Панель администратора</b>\n\n"
+            "/create_event — создать мероприятие\n"
+            "/events_all — все мероприятия\n"
+            "/stats &lt;id&gt; — статистика продаж\n"
+            "/deactivate &lt;id&gt; — отключить мероприятие\n"
+            "/activate &lt;id&gt; — включить мероприятие"
+        )
+        await message.answer(text, parse_mode="HTML")
+
+    # ─── FSM: Создание мероприятия ──────────────────────────────────────
+
+    async def admin_create_event(self, message: types.Message, state: FSMContext):
+        """Start the create-event wizard."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+        await state.set_state(CreateEvent.title)
+        await message.answer(
+            "📝 Введите <b>название</b> мероприятия:",
+            parse_mode="HTML",
+        )
+
+    async def fsm_cancel(self, message: types.Message, state: FSMContext):
+        """Cancel the FSM at any step."""
+        await state.clear()
+        await message.answer("❌ Создание мероприятия отменено.")
+
+    async def fsm_title(self, message: types.Message, state: FSMContext):
+        await state.update_data(title=message.text.strip())
+        await state.set_state(CreateEvent.description)
+        await message.answer(
+            "📝 Введите <b>описание</b> мероприятия\n"
+            "Или отправьте <code>-</code> чтобы пропустить.",
+            parse_mode="HTML",
+        )
+
+    async def fsm_description(self, message: types.Message, state: FSMContext):
+        text = message.text.strip()
+        if text == "-":
+            await state.update_data(description=None)
+        else:
+            await state.update_data(description=text)
+        await state.set_state(CreateEvent.date)
+        await message.answer(
+            "📅 Введите <b>дату и время</b> в формате:\n"
+            "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n\n"
+            "Пример: <code>25.12.2026 19:00</code>",
+            parse_mode="HTML",
+        )
+
+    async def fsm_date(self, message: types.Message, state: FSMContext):
+        text = message.text.strip()
+        try:
+            from datetime import datetime
+            date = datetime.strptime(text, "%d.%m.%Y %H:%M")
+        except ValueError:
+            await message.answer(
+                "❌ Неверный формат. Используйте <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+                "Пример: <code>25.12.2026 19:00</code>",
+                parse_mode="HTML",
+            )
+            return
+        await state.update_data(date=date.isoformat())
+        await state.set_state(CreateEvent.location)
+        await message.answer(
+            "📍 Введите <b>место проведения</b>\n"
+            "Или отправьте <code>-</code> чтобы пропустить.",
+            parse_mode="HTML",
+        )
+
+    async def fsm_location(self, message: types.Message, state: FSMContext):
+        text = message.text.strip()
+        if text == "-":
+            await state.update_data(location=None)
+        else:
+            await state.update_data(location=text)
+        await state.set_state(CreateEvent.price)
+        await message.answer(
+            "💰 Введите <b>цену билета</b> (число, в рублях):",
+            parse_mode="HTML",
+        )
+
+    async def fsm_price(self, message: types.Message, state: FSMContext):
+        text = message.text.strip().replace(",", ".")
+        try:
+            price = float(text)
+            if price < 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Введите число (например: <code>1500</code> или <code>0</code> для бесплатного):", parse_mode="HTML")
+            return
+        await state.update_data(price=price)
+        await state.set_state(CreateEvent.tickets)
+        await message.answer(
+            "🎟 Введите <b>количество билетов</b> (целое число):",
+            parse_mode="HTML",
+        )
+
+    async def fsm_tickets(self, message: types.Message, state: FSMContext):
+        text = message.text.strip()
+        try:
+            tickets = int(text)
+            if tickets <= 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Введите целое число больше 0 (например: <code>100</code>):", parse_mode="HTML")
+            return
+        data = await state.update_data(tickets=tickets)
+        await state.set_state(CreateEvent.confirm)
+
+        # Показать сводку
+        from datetime import datetime
+        date = datetime.fromisoformat(data["date"])
+        date_str = date.strftime("%d.%m.%Y %H:%M")
+        desc = data.get("description") or "—"
+        loc = data.get("location") or "—"
+        summary = (
+            f"📝 <b>Проверьте данные:</b>\n\n"
+            f"📌 Название: {data['title']}\n"
+            f"📖 Описание: {desc}\n"
+            f"📅 Дата: {date_str}\n"
+            f"📍 Место: {loc}\n"
+            f"💰 Цена: {data['price']:.0f}₽\n"
+            f"🎟 Билетов: {data['tickets']}\n\n"
+            f"Подтвердить создание?"
+        )
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin:confirm_create"),
+                    InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel_create"),
+                ]
+            ]
+        )
+        await message.answer(summary, parse_mode="HTML", reply_markup=kb)
+
+    async def fsm_confirm(self, message: types.Message, state: FSMContext):
+        """Handle text messages in confirm state (ignore, only buttons work)."""
+        await message.answer("Используйте кнопки ниже для подтверждения или отмены.")
+
+    # ─── /events_all ─────────────────────────────────────────────────────
+
+    async def admin_events_all(self, message: types.Message):
+        """Show ALL events (admin view)."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+        async with async_session_factory() as session:
+            svc = EventService(session)
+            events = await svc.list_all()
+
+        if not events:
+            await message.answer("Нет мероприятий.")
+            return
+
+        lines = ["🎫 <b>Все мероприятия:</b>\n"]
+        for e in events:
+            status = "🟢" if e.is_active else "🔴"
+            date_str = e.date.strftime("%d.%m.%Y %H:%M")
+            lines.append(
+                f"{status} <b>{e.title}</b>\n"
+                f"📅 {date_str}\n"
+                f"🎟 {e.available_tickets}/{e.total_tickets}\n"
+            )
+            if e.is_active:
+                lines.append(f"/stats {e.id} | /deactivate {e.id}\n")
+            else:
+                lines.append(f"/stats {e.id} | /activate {e.id}\n")
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    # ─── /deactivate /activate ───────────────────────────────────────────
+
+    async def _toggle_active(self, message: types.Message, activate: bool):
+        """Toggle event active state."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            cmd = "activate" if activate else "deactivate"
+            await message.answer(f"Укажите ID мероприятия: /{cmd} &lt;id&gt;")
+            return
+        try:
+            event_id = UUID(args[1])
+        except ValueError:
+            await message.answer("Неверный ID мероприятия.")
+            return
+
+        async with async_session_factory() as session:
+            svc = EventService(session)
+            event = await svc.set_active(event_id, activate)
+
+        if event is None:
+            await message.answer("Мероприятие не найдено.")
+            return
+
+        verb = "включено" if activate else "отключено"
+        await message.answer(f"✅ Мероприятие «{event.title}» {verb}.")
+
+    async def admin_deactivate(self, message: types.Message):
+        await self._toggle_active(message, activate=False)
+
+    async def admin_activate(self, message: types.Message):
+        await self._toggle_active(message, activate=True)
+
+    # ─── /stats ──────────────────────────────────────────────────────────
+
+    async def admin_stats(self, message: types.Message):
+        """Show event sales stats."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer("Укажите ID мероприятия: /stats &lt;id&gt;")
+            return
+        try:
+            event_id = UUID(args[1])
+        except ValueError:
+            await message.answer("Неверный ID мероприятия.")
+            return
+
+        async with async_session_factory() as session:
+            svc = EventService(session)
+            try:
+                stats = await svc.get_event_stats(event_id)
+                event = await svc.get_by_id(event_id)
+            except ValueError as e:
+                await message.answer(f"❌ {e}")
+                return
+
+        if event is None:
+            await message.answer("Мероприятие не найдено.")
+            return
+
+        active = stats["sold"] - stats["refunded"]
+        text = (
+            f"📊 <b>Статистика: {event.title}</b>\n\n"
+            f"🎟 Всего билетов: {stats['total_tickets']}\n"
+            f"✅ Продано: {stats['sold']} ({stats['sold_pct']}%)\n"
+            f"🔄 Возвращено: {stats['refunded']}\n"
+            f"🏷 Активных: {active}\n"
+            f"💰 Выручка: {stats['revenue']:.0f}₽\n\n"
+            f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}\n"
+            f"🟢 {'Активно' if event.is_active else 'Отключено'}"
+        )
+        await message.answer(text, parse_mode="HTML")
+
+    # ─── Callback-запросы (инлайн-кнопки) ────────────────────────────────
+
+    async def cmd_callback(self, callback: types.CallbackQuery, state: FSMContext):
+        """Handle all callback queries (admin panel + other)."""
+        data = callback.data
+
+        if data == "admin:confirm_create":
+            # Create event from FSM data
+            fsm_data = await state.get_data()
+            from datetime import datetime
+            event_date = datetime.fromisoformat(fsm_data["date"])
+
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.create(
+                    title=fsm_data["title"],
+                    description=fsm_data.get("description"),
+                    date=event_date,
+                    location=fsm_data.get("location"),
+                    price=fsm_data["price"],
+                    total_tickets=fsm_data["tickets"],
+                )
+
+            await state.clear()
+            await callback.message.edit_text(
+                f"✅ Мероприятие «{event.title}» создано!\n"
+                f"ID: <code>{event.id}</code>",
+                parse_mode="HTML",
+            )
+            # Post announcement to channel
+            await self.post_announcement(event.id)
+
+        elif data == "admin:cancel_create":
+            await state.clear()
+            await callback.message.edit_text("❌ Создание отменено.")
+
+        else:
+            await callback.answer("Команда не распознана", show_alert=True)
+
+    # ═══════════════════════════════════════════════════════
     # ХЕНДЛЕРЫ КАНАЛА (только просмотр)
     # ═══════════════════════════════════════════════════════
 
@@ -300,7 +641,7 @@ class TelegramBot(PlatformBot):
             try:
                 await self.dp.start_polling(
                     self.bot,
-                    allowed_updates=["message", "channel_post"],
+                    allowed_updates=["message", "channel_post", "callback_query"],
                 )
                 return
             except Exception as e:

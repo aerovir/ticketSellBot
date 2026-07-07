@@ -42,6 +42,7 @@ jobs:
           DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHANNEL_ID=${{ secrets.TELEGRAM_CHANNEL_ID }}
+          ADMIN_TELEGRAM_IDS=${{ secrets.ADMIN_TELEGRAM_IDS }}
           VK_TOKEN=${{ secrets.VK_TOKEN }}
           VK_GROUP_ID=${{ secrets.VK_GROUP_ID }}
           MAX_TOKEN=${{ secrets.MAX_TOKEN }}

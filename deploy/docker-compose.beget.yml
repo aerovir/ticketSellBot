@@ -41,6 +41,8 @@ services:
     restart: always
     volumes: []         # Не монтируем код — используем образ
     ports: []           # Не открываем порты
+    environment:
+      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
     logging:
       driver: "json-file"
       options:
