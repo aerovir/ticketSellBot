@@ -116,3 +116,18 @@
 - **Причина:** vkbottle возвращает `sender = None` при ошибках получения профиля.
 - **Исправление:** `platforms/vk/bot.py` — добавлен метод `_get_user_name()` с проверкой `if message.sender`.
 - **Коммит:** `e17488f` — Разделение кода соцсетей + правки VK бота
+
+---
+
+## 012 — Payment.ticket_id = null при покупке билета
+
+- **Дата:** 2026-07-07
+- **Статус:** ✅ Исправлено
+- **Описание:** При покупке билета (`/buy`) бот падает с `NotNullViolationError: null value in column "ticket_id" of relation "payments" violates not-null constraint`. Лог показывает, что в INSERT в payments параметр `ticket_id` = None.
+- **Анализ:** `core/services.py:180-192`
+   1. `ticket = Ticket(...)` — в конструкторе не передан `id`. Поле `id` модели имеет `default=uuid.uuid4`, но это column-level default, который не выполняется при создании объекта в Python → `ticket.id == None`
+   2. `payment = Payment(ticket_id=ticket.id)` — передаётся None
+   3. `self.session.flush()` — Ticket получает UUID от БД, но Payment уже сформирован с `ticket_id = None`
+- **Причина (подтверждено: core/models.py:79-80, core/services.py:180-192):** `default=uuid.uuid4` в SQLAlchemy ORM — это column default, не заполняющий атрибут объекта до flush()
+- **Исправление:** `core/services.py:180` — явная генерация `id=uuid.uuid4()` при создании Ticket
+- **Связанные ошибки:** нет

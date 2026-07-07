@@ -178,6 +178,7 @@ class TicketService:
 
         # Create ticket
         ticket = Ticket(
+            id=uuid.uuid4(),  # явно, чтобы ticket.id не был None до flush
             event_id=event_id,
             user_id=user_id,
             status=TicketStatus.active,
