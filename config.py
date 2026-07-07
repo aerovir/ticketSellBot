@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # MAX
     max_token: Optional[str] = None
 
+    # Admin
+    admin_telegram_ids: str = ""  # через запятую: "123456,789012"
+
     # App
     debug: bool = False
 
