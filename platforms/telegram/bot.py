@@ -87,6 +87,7 @@ class TelegramBot(PlatformBot):
                 platform_user_id=str(message.from_user.id),
                 name=message.from_user.full_name,
             )
+            await session.commit()
             return user.id
 
     async def cmd_start(self, message: types.Message):
