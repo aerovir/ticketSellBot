@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select, func, and_
@@ -43,7 +43,7 @@ class EventService:
 
     async def list_upcoming(self) -> list[Event]:
         """Get all active events that haven't passed yet."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         stmt = (
             select(Event)
             .where(
@@ -159,7 +159,7 @@ class TicketService:
             raise ValueError("Мероприятие не найдено")
         if not event.is_active:
             raise ValueError("Мероприятие неактивно")
-        if event.date < datetime.utcnow():
+        if event.date < datetime.now(timezone.utc):
             raise ValueError("Мероприятие уже прошло")
         if event.available_tickets <= 0:
             raise ValueError("Билеты закончились")

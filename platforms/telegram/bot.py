@@ -314,8 +314,8 @@ class TelegramBot(PlatformBot):
     async def fsm_date(self, message: types.Message, state: FSMContext):
         text = message.text.strip()
         try:
-            from datetime import datetime
-            date = datetime.strptime(text, "%d.%m.%Y %H:%M")
+            from datetime import datetime, timezone
+            date = datetime.strptime(text, "%d.%m.%Y %H:%M").replace(tzinfo=timezone.utc)
         except ValueError:
             await message.answer(
                 "❌ Неверный формат. Используйте <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"

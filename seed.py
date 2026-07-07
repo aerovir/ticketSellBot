@@ -7,7 +7,7 @@ Seed script — заполняет БД тестовыми мероприяти�
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 from core.database import async_session_factory, init_db, close_db
 from core.models import Event
@@ -28,7 +28,7 @@ async def seed():
             logger.info("В базе уже есть %d мероприятий, пропускаем сидирование.", count)
             return
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         events = [
             Event(
                 title="Концерт 'Рок-хиты'",
