@@ -11,6 +11,21 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ticketbot_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
       - uses: actions/checkout@v6
 
@@ -20,11 +35,23 @@ jobs:
           python-version: "3.12"
 
       - name: Установка зависимостей
-        run: pip install -e .
+        run: pip install -e ".[dev]"
 
       - name: Проверка импортов
         run: |
-          python -c "from app.config import settings; from app.core.database import Base; from app.core.models import User, Event, Ticket, Payment; from app.core.schemas import EventOut, TicketOut; print('✅ Импорты OK')"
+          python -c "
+          from app.config import settings;
+          from app.core.database import Base;
+          from app.core.models import User, Event, Ticket, Payment;
+          from app.core.schemas import EventOut, TicketOut;
+          print('✅ Импорты OK')
+          "
+
+      - name: Запуск тестов
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ticketbot_test
+        run: |
+          pytest tests/ -v --timeout=30
 
   deploy:
     runs-on: self-hosted
@@ -35,40 +62,53 @@ jobs:
       - name: 📥 Получить код
         uses: actions/checkout@v6
 
-      - name: 📋 Создать .env из секретов
-
+      - name: 📋 Создать .env.telegram из секретов
         run: |
-          cat > .env << 'ENVEOF'
-          DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
+          cat > .env.telegram << 'ENVEOF'
+          DATABASE_URL=postgresql+asyncpg://tg_user:${{ secrets.DB_PASSWORD_TG }}@db:5432/ticketbot
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHANNEL_ID=${{ secrets.TELEGRAM_CHANNEL_ID }}
           ADMIN_TELEGRAM_IDS=${{ secrets.ADMIN_TELEGRAM_IDS }}
+          DEBUG=false
+          ENVEOF
+          echo "✅ .env.telegram создан"
+
+      - name: 📋 Создать .env.vk из секретов
+        if: ${{ secrets.VK_TOKEN != '' }}
+        run: |
+          cat > .env.vk << 'ENVEOF'
+          DATABASE_URL=postgresql+asyncpg://vk_user:${{ secrets.DB_PASSWORD_VK }}@db:5432/ticketbot
           VK_TOKEN=${{ secrets.VK_TOKEN }}
           VK_GROUP_ID=${{ secrets.VK_GROUP_ID }}
+          DEBUG=false
+          ENVEOF
+          echo "✅ .env.vk создан"
+
+      - name: 📋 Создать .env.max из секретов
+        if: ${{ secrets.MAX_TOKEN != '' }}
+        run: |
+          cat > .env.max << 'ENVEOF'
+          DATABASE_URL=postgresql+asyncpg://max_user:${{ secrets.DB_PASSWORD_MAX }}@db:5432/ticketbot
           MAX_TOKEN=${{ secrets.MAX_TOKEN }}
           DEBUG=false
           ENVEOF
-          echo "✅ .env создан"
+          echo "✅ .env.max создан"
 
       - name: 🛑 Остановить старые контейнеры
-
         run: |
           docker compose ${{ env.COMPOSE_FILES }} down --remove-orphans 2>/dev/null || true
           echo "✅ Старые контейнеры остановлены"
 
       - name: 🏗️ Собрать новые образы
-
         run: |
           docker compose ${{ env.COMPOSE_FILES }} build
           echo "✅ Образы собраны"
 
       - name: 🐘 Запустить PostgreSQL
-
         run: |
           docker compose ${{ env.COMPOSE_FILES }} up -d db
 
       - name: ⏳ Ожидание PostgreSQL
-
         run: |
           for i in $(seq 1 30); do
             if docker compose exec -T db pg_isready -U postgres -d ticketbot &>/dev/null; then
@@ -79,46 +119,86 @@ jobs:
             sleep 2
           done
 
-      - name: 🗄️ Создать таблицы
-
+      - name: 🗄️ Создать роли PostgreSQL
         run: |
-          docker compose ${{ env.COMPOSE_FILES }} run --rm app python -c "
+          docker compose exec -T db bash -c "
+          psql -U postgres -d ticketbot <<-EOSQL
+            DO \\\$\\\$ BEGIN
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'tg_user') THEN
+                CREATE ROLE tg_user WITH LOGIN PASSWORD '${{ secrets.DB_PASSWORD_TG }}';
+              END IF;
+            END \\\$\\\$;
+            GRANT CONNECT ON DATABASE ticketbot TO tg_user;
+            GRANT USAGE ON SCHEMA public TO tg_user;
+
+            DO \\\$\\\$ BEGIN
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'vk_user') THEN
+                CREATE ROLE vk_user WITH LOGIN PASSWORD '${{ secrets.DB_PASSWORD_VK }}';
+              END IF;
+            END \\\$\\\$;
+            GRANT CONNECT ON DATABASE ticketbot TO vk_user;
+            GRANT USAGE ON SCHEMA public TO vk_user;
+
+            DO \\\$\\\$ BEGIN
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'max_user') THEN
+                CREATE ROLE max_user WITH LOGIN PASSWORD '${{ secrets.DB_PASSWORD_MAX }}';
+              END IF;
+            END \\\$\\\$;
+            GRANT CONNECT ON DATABASE ticketbot TO max_user;
+            GRANT USAGE ON SCHEMA public TO max_user;
+            SELECT rolname FROM pg_catalog.pg_roles WHERE rolname IN ('tg_user', 'vk_user', 'max_user');
+          EOSQL
+          "
+          echo "✅ Роли PostgreSQL созданы"
+
+      - name: 🗄️ Создать таблицы
+        run: |
+          docker compose ${{ env.COMPOSE_FILES }} run --rm \
+            -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@db:5432/ticketbot" \
+            telegram python -c "
           import asyncio;
           from app.core.database import init_db;
           asyncio.run(init_db());
           print('✅ Таблицы созданы');
           " 2>&1
 
+      - name: 🐘 Выдать права на таблицы
+        run: |
+          docker compose exec -T db psql -U postgres -d ticketbot -c "
+            GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO tg_user;
+            GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO vk_user;
+            GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO max_user;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO tg_user;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO vk_user;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO max_user;
+          "
+          echo "✅ Права на таблицы выданы"
+
       - name: 🌱 Накатить тестовые мероприятия
-
         run: |
-          docker compose ${{ env.COMPOSE_FILES }} run --rm seed 2>&1 || echo "⚠️ Seed пропущен (возможно уже есть данные)"
+          docker compose ${{ env.COMPOSE_FILES }} run --rm \
+            -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@db:5432/ticketbot" \
+            seed 2>&1 || echo "⚠️ Seed пропущен (возможно уже есть данные)"
 
-      - name: 🚀 Запустить бота
-
+      - name: 🚀 Запустить Telegram бота
         run: |
-          docker compose ${{ env.COMPOSE_FILES }} up -d app
-          echo "✅ Бот запущен"
+          docker compose ${{ env.COMPOSE_FILES }} up -d telegram
+          echo "✅ Telegram бот запущен"
+
+      - name: 🚀 Запустить VK бота (если есть токен)
+        if: ${{ secrets.VK_TOKEN != '' }}
+        run: |
+          docker compose ${{ env.COMPOSE_FILES }} --profile all up -d vk
+          echo "✅ VK бот запущен"
 
       - name: 🩺 Проверка работоспособности
-
         run: |
           sleep 5
-          if docker compose ps | grep -q "app.*Up"; then
-            echo "✅ Бот работает!"
-            docker compose logs --tail 10 app
+          if docker compose ps | grep -q "telegram.*Up"; then
+            echo "✅ Telegram бот работает!"
+            docker compose logs --tail 10 telegram
           else
-            echo "❌ Бот не запустился!"
-            docker compose logs app
+            echo "❌ Telegram бот не запустился!"
+            docker compose logs telegram
             exit 1
-          fi
-
-      - name: 📢 Уведомление в Telegram (опционально)
-        if: always()
-        run: |
-          STATUS="${{ job.status }}"
-          if [ "$STATUS" = "success" ]; then
-            echo "✅ Деплой TicketBot завершён успешно"
-          else
-            echo "❌ Деплой TicketBot завершился с ошибкой: $STATUS"
           fi

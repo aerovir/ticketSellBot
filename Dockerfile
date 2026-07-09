@@ -44,4 +44,4 @@ exit 1\n' > /usr/local/bin/wait-for-db \
     && chmod +x /usr/local/bin/wait-for-db
 
 ENTRYPOINT ["wait-for-db"]
-CMD ["python", "-m", "bot.launcher"]
+CMD ["python", "-m", "bot.telegram"]

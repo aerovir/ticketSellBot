@@ -1,8 +1,7 @@
 # Production override for docker-compose.yml
 # Используется: docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
 #
-# Отключает проброс портов БД наружу, добавляет рестарт-политики,
-# убирает лишнее из override.yml разработки.
+# Отключает проброс портов БД наружу, добавляет рестарт-политики.
 
 services:
   db:
@@ -13,11 +12,29 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
+  telegram:
     restart: always
-    # В продакшене не монтируем код — используем образ
     volumes: []
-    # Убираем лишний порт
+    ports: []
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  vk:
+    restart: always
+    volumes: []
+    ports: []
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  max:
+    restart: always
+    volumes: []
     ports: []
     logging:
       driver: "json-file"

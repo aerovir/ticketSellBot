@@ -1,0 +1,255 @@
+"""
+Тесты Telegram Bot хендлеров.
+
+Используем mock для aiogram, тестируем логику ответов на команды.
+"""
+
+import uuid
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
+from app.core.models import PlatformType
+
+
+# ═══════════════════════════════════════════════════════════════
+# Fixtures
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def mock_message():
+    """Создаёт mock-сообщение Telegram."""
+    msg = AsyncMock()
+    msg.from_user.id = 12345
+    msg.from_user.full_name = "Test User"
+    msg.text = ""
+    msg.answer = AsyncMock()
+    msg.reply = AsyncMock()
+    return msg
+
+
+@pytest.fixture
+def mock_callback():
+    """Создаёт mock callback запроса."""
+    cb = AsyncMock()
+    cb.data = ""
+    cb.answer = AsyncMock()
+    cb.message = AsyncMock()
+    cb.message.edit_text = AsyncMock()
+    return cb
+
+
+@pytest.fixture
+def telegram_bot():
+    """Создаёт TelegramBot с захардкоженным токеном (не настоящим)."""
+    with (
+        patch("app.platforms.telegram.bot.settings.telegram_token", "test:token"),
+        patch("app.platforms.telegram.bot.Bot") as mock_bot_cls,
+    ):
+        mock_bot = AsyncMock()
+        mock_bot_cls.return_value = mock_bot
+
+        from app.platforms.telegram.bot import TelegramBot
+
+        bot = TelegramBot()
+        bot._bot_username = "test_bot"
+        bot.bot = mock_bot
+        return bot
+
+
+# ═══════════════════════════════════════════════════════════════
+# User commands
+# ═══════════════════════════════════════════════════════════════
+
+class TestUserCommands:
+    async def test_cmd_start(self, telegram_bot, mock_message):
+        """Команда /start возвращает приветствие."""
+        mock_message.text = "/start"
+
+        with patch(
+            "app.platforms.telegram.bot.UserService.get_or_create",
+            new_callable=AsyncMock,
+            return_value=Mock(id=uuid.uuid4()),
+        ):
+            await telegram_bot.cmd_start(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        text = mock_message.answer.call_args[0][0]
+        assert "TicketBot" in text
+        assert "/events" in text
+        assert "/buy" in text
+
+    async def test_cmd_events_empty(self, telegram_bot, mock_message):
+        """Команда /events когда нет мероприятий."""
+        with patch(
+            "app.platforms.telegram.bot.EventService.list_upcoming",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await telegram_bot.cmd_events(mock_message)
+
+        mock_message.answer.assert_awaited_once_with(
+            "😔 Нет предстоящих мероприятий."
+        )
+
+    async def test_cmd_event_no_id(self, telegram_bot, mock_message):
+        """Команда /event без ID мероприятия."""
+        mock_message.text = "/event"
+        await telegram_bot.cmd_event(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+
+    async def test_cmd_event_invalid_id(self, telegram_bot, mock_message):
+        """Команда /event с неверным ID."""
+        mock_message.text = "/event not-a-uuid"
+        await telegram_bot.cmd_event(mock_message)
+
+        mock_message.answer.assert_awaited_once_with(
+            "Неверный ID мероприятия."
+        )
+
+    async def test_cmd_buy_no_id(self, telegram_bot, mock_message):
+        """Команда /buy без ID."""
+        mock_message.text = "/buy"
+        await telegram_bot.cmd_buy(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+
+    async def test_cmd_my_tickets_empty(self, telegram_bot, mock_message):
+        """Команда /my_tickets без билетов."""
+        mock_message.text = "/my_tickets"
+
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch(
+                "app.platforms.telegram.bot.TicketService.get_user_tickets",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            await telegram_bot.cmd_my_tickets(mock_message)
+
+        mock_message.answer.assert_awaited_once_with(
+            "У вас нет билетов."
+        )
+
+    async def test_cmd_cancel_no_id(self, telegram_bot, mock_message):
+        """Команда /cancel без ID."""
+        mock_message.text = "/cancel"
+
+        with patch(
+            "app.platforms.telegram.bot.UserService.get_or_create",
+            new_callable=AsyncMock,
+            return_value=Mock(id=uuid.uuid4()),
+        ):
+            await telegram_bot.cmd_cancel(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Укажите ID билета" in mock_message.answer.call_args[0][0]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Admin commands
+# ═══════════════════════════════════════════════════════════════
+
+class TestAdminCommands:
+    async def test_admin_menu_unauthorized(self, telegram_bot, mock_message):
+        """Обычный пользователь не может открыть админку."""
+        mock_message.from_user.id = 99999  # не админ
+        await telegram_bot.admin_menu(mock_message)
+
+        mock_message.answer.assert_awaited_once_with(
+            "У вас нет доступа к панели администратора."
+        )
+
+    async def test_admin_menu_authorized(self, telegram_bot, mock_message):
+        """Администратор видит меню."""
+        with patch(
+            "app.platforms.telegram.bot.settings.admin_telegram_ids",
+            "12345",
+        ):
+            mock_message.text = "/admin"
+            await telegram_bot.admin_menu(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        text = mock_message.answer.call_args[0][0]
+        assert "Панель администратора" in text
+        assert "/create_event" in text
+
+    async def test_admin_create_event_unauthorized(self, telegram_bot, mock_message):
+        """Обычный пользователь не может создать мероприятие."""
+        mock_message.from_user.id = 99999
+        mock_state = AsyncMock()
+
+        await telegram_bot.admin_create_event(mock_message, mock_state)
+
+        mock_message.answer.assert_awaited_once_with(
+            "У вас нет доступа к панели администратора."
+        )
+
+    async def test_deactivate_no_id(self, telegram_bot, mock_message):
+        """/deactivate без ID."""
+        mock_message.text = "/deactivate"
+        with patch(
+            "app.platforms.telegram.bot.settings.admin_telegram_ids",
+            "12345",
+        ):
+            await telegram_bot.admin_deactivate(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+
+    async def test_activate_no_id(self, telegram_bot, mock_message):
+        """/activate без ID."""
+        mock_message.text = "/activate"
+        with patch(
+            "app.platforms.telegram.bot.settings.admin_telegram_ids",
+            "12345",
+        ):
+            await telegram_bot.admin_activate(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+
+    async def test_stats_no_id(self, telegram_bot, mock_message):
+        """/stats без ID."""
+        mock_message.text = "/stats"
+        with patch(
+            "app.platforms.telegram.bot.settings.admin_telegram_ids",
+            "12345",
+        ):
+            await telegram_bot.admin_stats(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Channel commands
+# ═══════════════════════════════════════════════════════════════
+
+class TestChannelCommands:
+    async def test_channel_events_empty(self, telegram_bot, mock_message):
+        """/events в канале без мероприятий."""
+        with patch(
+            "app.platforms.telegram.bot.EventService.list_upcoming",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await telegram_bot.channel_cmd_events(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+
+    async def test_channel_event_no_id(self, telegram_bot, mock_message):
+        """/event в канале без ID."""
+        mock_message.text = "/event"
+        await telegram_bot.channel_cmd_event(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Укажите ID" in mock_message.answer.call_args[0][0]
