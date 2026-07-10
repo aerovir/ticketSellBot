@@ -165,3 +165,24 @@
   Принцип: `${{ secrets.X }}` в `env:` резолвится в пустую строку, если секрет не задан. `env.X != ''` — корректное runtime-выражение.
 - **Коммит:** `3f9d205` — fix: secrets in GitHub Actions if: expressions
 - **Связанные ошибки:** нет
+
+---
+
+## 014 — CI: RuntimeError — starlette.testclient requires httpx2 (тесты test_web_api не собираются)
+
+- **Дата:** 2026-07-10
+- **Статус:** ✅ Исправлено
+- **Описание:** На CI (GitHub Actions) тесты падают при сборе с ошибкой:
+  ```
+  ERROR collecting tests/test_web_api.py
+  RuntimeError: The starlette.testclient module requires the httpx2 package
+  ```
+  Локально тесты проходят, на CI — нет. При этом `test_web_api.py` импортирует `TestClient` из `fastapi.testclient`.
+- **Анализ:**
+  - **Гипотеза:** `httpx` не указан в зависимостях, на CI fresh install без него.
+  - **Подтверждено (`pyproject.toml:19-24`):** В `[project.optional-dependencies] dev` отсутствует `httpx`. Локально он уже есть в окружении (`pip list`), на CI — нет.
+  - Ошибка говорит "httpx2", но имеется в виду пакет `httpx` версии 2.x (современный). `fastapi.testclient` требует `httpx>=0.28`.
+- **Исправление (подтверждено: pyproject.toml:24):**
+  Добавлена строка `"httpx>=0.28"` в `dev`-зависимости.
+- **Коммит:** (текущий)
+- **Связанные ошибки:** нет
