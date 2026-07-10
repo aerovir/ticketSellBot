@@ -11,7 +11,7 @@ import logging
 from uuid import UUID
 
 from aiogram import Bot
-from aiogram.types import FSInputFile, InputMediaPhoto
+from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -36,7 +36,7 @@ class ChannelManager:
         return bool(self.channel_id)
 
     async def post_event_announcement(self, event: Event):
-        """Отправляет анонс мероприятия в канал."""
+        """Отправляет анонс мероприятия в канал с кнопкой Mini App."""
         if not self.is_configured:
             logger.info("Канал не настроен, пропускаем анонс")
             return
@@ -49,9 +49,22 @@ class ChannelManager:
             f"📍 {event.location or 'Не указано'}\n"
             f"💰 {event.price:.0f}₽\n"
             f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}\n\n"
-            f"👇 Купить билет в личных сообщениях:\n"
-            f"@{self.bot_username or 'bot'} — напишите /buy {event.id}"
+            f"👇 Купить билет:\n"
+            f"@{self.bot_username or 'bot'} — /buy {event.id}"
         )
+
+        # Mini App button
+        kb = None
+        if settings.webapp_url:
+            mini_app_url = f"{settings.webapp_url.rstrip('/')}?event_id={event.id}"
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🎟 Выбрать билет",
+                        web_app=WebAppInfo(url=mini_app_url),
+                    )
+                ]]
+            )
 
         try:
             await self.bot.send_message(
@@ -59,6 +72,7 @@ class ChannelManager:
                 text=text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_markup=kb,
             )
             logger.info("Анонс отправлен в канал %s: %s", self.channel_id, event.title)
         except Exception as e:

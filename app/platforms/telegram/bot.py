@@ -1,12 +1,12 @@
 import logging
 from uuid import UUID
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from app.config import settings
 from app.core.database import async_session_factory
@@ -70,6 +70,9 @@ class TelegramBot(PlatformBot):
 
         # ─── Callback-запросы (инлайн-кнопки) ──────────
         self.dp.callback_query.register(self.cmd_callback)
+
+        # ─── Данные из Mini App (WebApp) ─────────────────
+        self.dp.message.register(self.cmd_web_app_data, F.web_app_data)
 
         # ─── Сообщения из канала (channel_post) ────────
         self.dp.channel_post.register(self.channel_cmd_events, Command("events"))
@@ -552,6 +555,17 @@ class TelegramBot(PlatformBot):
 
         else:
             await callback.answer("Команда не распознана", show_alert=True)
+
+    # ═══════════════════════════════════════════════════════
+    # ХЕНДЛЕР WEB APP DATA (из Mini App)
+    # ═══════════════════════════════════════════════════════
+
+    async def cmd_web_app_data(self, message: types.Message):
+        """Handle data sent from Mini App via sendData()."""
+        web_app_data = message.web_app_data
+        if web_app_data:
+            logger.info("WebApp data received: %s", web_app_data.data)
+            await message.answer("✅ Данные получены", show_alert=True)
 
     # ═══════════════════════════════════════════════════════
     # ХЕНДЛЕРЫ КАНАЛА (только просмотр)

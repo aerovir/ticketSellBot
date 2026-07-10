@@ -42,6 +42,16 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  web:
+    restart: always
+    volumes: []
+    ports: []  # За reverse proxy (Caddy/Nginx)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   seed:
     restart: "no"
     profiles:

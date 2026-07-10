@@ -76,5 +76,22 @@ services:
     profiles:
       - seed
 
+  # ─── Web (Mini App API) — FastAPI сервер (profile: all) ──────
+  web:
+    build: .
+    container_name: ticketbot-web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env.telegram
+    command: ["python", "-m", "bot.web"]
+    ports:
+      - "8080:8080"
+    profiles:
+      - all
+    labels:
+      description: "TicketBot — Web/Mini App API"
+
 volumes:
   pgdata:

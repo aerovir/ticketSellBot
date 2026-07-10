@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     # Admin
     admin_telegram_ids: str = ""  # через запятую: "123456,789012"
 
+    # Web / Mini App
+    web_host: str = "0.0.0.0"
+    web_port: int = 8080
+    webapp_url: str = ""  # Публичный HTTPS URL Mini App (для WebAppInfo в кнопках)
+
     # App
     debug: bool = False
 

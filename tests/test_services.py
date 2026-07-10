@@ -213,6 +213,46 @@ class TestTicketService:
         with pytest.raises(ValueError, match="У вас уже есть активный билет"):
             await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
 
+    async def test_buy_ticket_webapp_success(self, db_session, ticket_svc, sample_user, sample_event):
+        """Покупка билета через Mini App (Payment.status = pending)."""
+        result = await ticket_svc.buy_ticket_webapp(sample_user.id, sample_event.id)
+        await db_session.commit()
+
+        assert result["ticket_id"] is not None
+        assert result["event_title"] == sample_event.title
+        assert result["amount"] == float(sample_event.price)
+        assert result["payment_status"] == "pending"
+
+        # Check that available_tickets decreased
+        assert result["ticket_id"] != ""
+
+    async def test_buy_ticket_webapp_sold_out(self, db_session, ticket_svc, sample_user, event_svc):
+        """Покупка через Mini App при отсутствии билетов."""
+        future = datetime.now(timezone.utc) + timedelta(days=10)
+        event = await event_svc.create(
+            title="Sold Out WA", description=None, date=future, price=0,
+            total_tickets=0, location="Msk",
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValueError, match="Билеты закончились"):
+            await ticket_svc.buy_ticket_webapp(sample_user.id, event.id)
+
+    async def test_buy_ticket_webapp_pending_payment(self, db_session, ticket_svc, sample_user, sample_event):
+        """Проверка, что payment создаётся с status=pending."""
+        from app.core.models import Payment, PaymentStatus
+        from sqlalchemy import select
+
+        result = await ticket_svc.buy_ticket_webapp(sample_user.id, sample_event.id)
+        await db_session.commit()
+
+        # Verify payment in DB
+        stmt = select(Payment).where(Payment.ticket_id == result["ticket_id"])
+        payment = (await db_session.execute(stmt)).scalar_one_or_none()
+        assert payment is not None
+        assert payment.status == PaymentStatus.pending
+        assert float(payment.amount) == float(sample_event.price)
+
     async def test_cancel_ticket_success(self, db_session, ticket_svc, sample_user, sample_event):
         """Успешный возврат билета."""
         ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
