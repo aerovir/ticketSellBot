@@ -2,11 +2,11 @@ import logging
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER, StateFilter
+from aiogram.filters import Command, CommandObject, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
 from app.core.database import async_session_factory
@@ -16,6 +16,8 @@ from app.platforms.base import PlatformBot
 from app.platforms.telegram.channel import ChannelManager
 
 logger = logging.getLogger("ticketbot.telegram")
+
+PAGE_SIZE = 5  # мероприятий/билетов на страницу
 
 
 # ─── FSM States для создания мероприятия ──────────────────────────────────
@@ -71,9 +73,6 @@ class TelegramBot(PlatformBot):
         # ─── Callback-запросы (инлайн-кнопки) ──────────
         self.dp.callback_query.register(self.cmd_callback)
 
-        # ─── Данные из Mini App (WebApp) ─────────────────
-        self.dp.message.register(self.cmd_web_app_data, F.web_app_data)
-
         # ─── Сообщения из канала (channel_post) ────────
         self.dp.channel_post.register(self.channel_cmd_events, Command("events"))
         self.dp.channel_post.register(self.channel_cmd_event, Command("event"))
@@ -83,17 +82,36 @@ class TelegramBot(PlatformBot):
     # ═══════════════════════════════════════════════════════
 
     async def _get_user_id(self, message: types.Message) -> UUID:
+        return await self._resolve_user_id(
+            str(message.from_user.id),
+            message.from_user.full_name,
+        )
+
+    async def _resolve_user_id(self, platform_user_id: str, name: str = "") -> UUID:
+        """Find or create user by Telegram ID, return internal UUID."""
         async with async_session_factory() as session:
             user_svc = UserService(session)
             user = await user_svc.get_or_create(
                 platform=PlatformType.telegram,
-                platform_user_id=str(message.from_user.id),
-                name=message.from_user.full_name,
+                platform_user_id=platform_user_id,
+                name=name,
             )
             await session.commit()
             return user.id
 
-    async def cmd_start(self, message: types.Message):
+    async def cmd_start(self, message: types.Message, command: CommandObject | None = None):
+        """Старт /start — приветствие. Обрабатывает payload из deep link."""
+        payload = command.args if command else None
+
+        # Если пришли по deep link из канала с buy_<event_id>
+        if payload and payload.startswith("buy_"):
+            try:
+                event_id = UUID(payload[4:])  # убираем "buy_"
+                await self._do_buy_ticket(message, event_id)
+                return
+            except (ValueError, IndexError):
+                pass
+
         await self._get_user_id(message)
         text = (
             "🎫 <b>TicketBot</b>\n\n"
@@ -109,7 +127,8 @@ class TelegramBot(PlatformBot):
         )
         await message.answer(text, parse_mode="HTML")
 
-    async def cmd_events(self, message: types.Message):
+    async def cmd_events(self, message: types.Message, page: int = 0):
+        """Список мероприятий с пагинацией."""
         async with async_session_factory() as session:
             event_svc = EventService(session)
             events = await event_svc.list_upcoming()
@@ -118,18 +137,67 @@ class TelegramBot(PlatformBot):
             await message.answer("😔 Нет предстоящих мероприятий.")
             return
 
-        lines = []
-        for e in events:
+        await self._send_event_page(message.answer, events, page)
+
+    async def _send_event_page(self, send_method, events: list, page: int):
+        """Отправить страницу мероприятий с навигацией."""
+        total_pages = max(1, (len(events) + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * PAGE_SIZE
+        end = start + PAGE_SIZE
+        page_events = events[start:end]
+
+        lines = [f"🎫 <b>Мероприятия</b> (стр. {page + 1}/{total_pages}):\n"]
+        for e in page_events:
             date_str = e.date.strftime("%d.%m.%Y %H:%M")
             lines.append(
                 f"📌 <b>{e.title}</b>\n"
                 f"📅 {date_str}\n"
                 f"📍 {e.location or 'Не указано'}\n"
                 f"💰 {e.price:.0f}₽ | Осталось: {e.available_tickets}/{e.total_tickets}\n"
-                f"🎫 /event {e.id}\n"
             )
 
-        await message.answer("\n".join(lines), parse_mode="HTML")
+        # Клавиатура с навигацией
+        kb_rows = []
+
+        # Кнопки навигации по страницам
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"ev_page:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="ev_page:current"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"ev_page:{page + 1}"))
+        if nav_row:
+            kb_rows.append(nav_row)
+
+        # Кнопки деталей для событий на этой странице
+        for e in page_events:
+            kb_rows.append([
+                InlineKeyboardButton(
+                    text=f"🎫 {e.title[:30]}",
+                    callback_data=f"ev_detail:{e.id}",
+                )
+            ])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
+        await send_method("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+    async def _do_buy_ticket(self, message: types.Message, event_id: UUID):
+        """Купить билет (общая логика для /buy и deep link)."""
+        user_id = await self._get_user_id(message)
+        async with async_session_factory() as session:
+            ticket_svc = TicketService(session)
+            try:
+                ticket = await ticket_svc.buy_ticket(user_id, event_id)
+                await session.commit()
+                await message.answer(
+                    f"✅ Билет куплен!\n"
+                    f"Номер билета: <code>{ticket.id}</code>\n\n"
+                    f"Используйте /my_tickets для просмотра всех билетов.",
+                    parse_mode="HTML",
+                )
+            except ValueError as e:
+                await message.answer(f"❌ {e}")
 
     async def cmd_event(self, message: types.Message):
         args = message.text.split(maxsplit=1)
@@ -151,6 +219,10 @@ class TelegramBot(PlatformBot):
             await message.answer("Мероприятие не найдено.")
             return
 
+        await self._send_event_detail(message.answer, event)
+
+    async def _send_event_detail(self, send_method, event):
+        """Отправить детали мероприятия с inline-кнопками."""
         date_str = event.date.strftime("%d.%m.%Y %H:%M")
         text = (
             f"🎫 <b>{event.title}</b>\n\n"
@@ -166,11 +238,15 @@ class TelegramBot(PlatformBot):
                 [InlineKeyboardButton(
                     text="🎟 Купить билет",
                     callback_data=f"buy:{event.id}"
-                )]
+                )],
+                [InlineKeyboardButton(
+                    text="← К списку",
+                    callback_data="ev_page:0"
+                )],
             ]
         )
 
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        await send_method(text, parse_mode="HTML", reply_markup=kb)
 
     async def cmd_buy(self, message: types.Message):
         args = message.text.split(maxsplit=1)
@@ -184,21 +260,8 @@ class TelegramBot(PlatformBot):
             await message.answer("Неверный ID мероприятия.")
             return
 
-        user_id = await self._get_user_id(message)
-
-        async with async_session_factory() as session:
-            ticket_svc = TicketService(session)
-            try:
-                ticket = await ticket_svc.buy_ticket(user_id, event_id)
-                await session.commit()
-                await message.answer(
-                    f"✅ Билет куплен!\n"
-                    f"Номер билета: <code>{ticket.id}</code>\n\n"
-                    f"Используйте /my_tickets для просмотра всех билетов.",
-                    parse_mode="HTML",
-                )
-            except ValueError as e:
-                await message.answer(f"❌ {e}")
+        await self._get_user_id(message)
+        await self._do_buy_ticket(message, event_id)
 
     async def cmd_my_tickets(self, message: types.Message):
         user_id = await self._get_user_id(message)
@@ -211,7 +274,13 @@ class TelegramBot(PlatformBot):
             await message.answer("У вас нет билетов.")
             return
 
-        lines = []
+        await self._send_tickets(message.answer, tickets)
+
+    async def _send_tickets(self, send_method, tickets: list):
+        """Отправить список билетов с inline-кнопками отмены."""
+        lines = ["🎫 <b>Мои билеты:</b>\n"]
+        kb_rows = []
+
         for t in tickets:
             date_str = t["purchase_date"].strftime("%d.%m.%Y %H:%M")
             status_emoji = "✅" if t["status"] == "active" else "❌"
@@ -222,7 +291,21 @@ class TelegramBot(PlatformBot):
                 f"📌 Статус: {t['status']}\n"
             )
 
-        await message.answer("\n".join(lines), parse_mode="HTML")
+            if t["status"] == "active":
+                kb_rows.append([
+                    InlineKeyboardButton(
+                        text=f"↩️ Отменить: {t['event_title'][:25]}",
+                        callback_data=f"ticket_cancel:{t['id']}",
+                    )
+                ])
+
+        # Кнопка "К мероприятиям"
+        kb_rows.append([
+            InlineKeyboardButton(text="📋 К мероприятиям", callback_data="ev_page:0")
+        ])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
+        await send_method("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
     async def cmd_cancel(self, message: types.Message):
         args = message.text.split(maxsplit=1)
@@ -236,6 +319,10 @@ class TelegramBot(PlatformBot):
             await message.answer("Неверный ID билета.")
             return
 
+        await self._do_cancel_ticket(message.answer, ticket_id, message)
+
+    async def _do_cancel_ticket(self, send_method, ticket_id: UUID, message: types.Message):
+        """Отменить билет."""
         user_id = await self._get_user_id(message)
 
         async with async_session_factory() as session:
@@ -243,9 +330,9 @@ class TelegramBot(PlatformBot):
             try:
                 await ticket_svc.cancel_ticket(ticket_id, user_id)
                 await session.commit()
-                await message.answer("✅ Билет возвращён.")
+                await send_method("✅ Билет возвращён.")
             except ValueError as e:
-                await message.answer(f"❌ {e}")
+                await send_method(f"❌ {e}")
 
     # ═══════════════════════════════════════════════════════
     # АДМИН-ХЕНДЛЕРЫ
@@ -517,11 +604,11 @@ class TelegramBot(PlatformBot):
     # ─── Callback-запросы (инлайн-кнопки) ────────────────────────────────
 
     async def cmd_callback(self, callback: types.CallbackQuery, state: FSMContext):
-        """Handle all callback queries (admin panel + other)."""
+        """Handle all callback queries."""
         data = callback.data
 
+        # ─── Админ: подтвердить создание ────────────────
         if data == "admin:confirm_create":
-            # Create event from FSM data
             fsm_data = await state.get_data()
             from datetime import datetime
             event_date = datetime.fromisoformat(fsm_data["date"])
@@ -545,27 +632,88 @@ class TelegramBot(PlatformBot):
                 f"ID: <code>{event.id}</code>",
                 parse_mode="HTML",
             )
-            # Post announcement to channel
             await self.post_announcement(event.id)
+            return
 
-        elif data == "admin:cancel_create":
+        # ─── Админ: отмена создания ─────────────────────
+        if data == "admin:cancel_create":
             await state.clear()
             await callback.answer()
             await callback.message.edit_text("❌ Создание отменено.")
+            return
 
-        else:
-            await callback.answer("Команда не распознана", show_alert=True)
+        # ─── Навигация по страницам мероприятий ──────────
+        if data.startswith("ev_page:"):
+            if data == "ev_page:current":
+                await callback.answer()
+                return
+            page = int(data.split(":")[1])
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                events = await svc.list_upcoming()
+            if events:
+                await self._send_event_page(callback.message.edit_text, events, page)
+            await callback.answer()
+            return
 
-    # ═══════════════════════════════════════════════════════
-    # ХЕНДЛЕР WEB APP DATA (из Mini App)
-    # ═══════════════════════════════════════════════════════
+        # ─── Детали мероприятия ──────────────────────────
+        if data.startswith("ev_detail:"):
+            event_id = UUID(data.split(":", 1)[1])
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+            if event:
+                await self._send_event_detail(callback.message.edit_text, event)
+            else:
+                await callback.answer("Мероприятие не найдено", show_alert=True)
+            await callback.answer()
+            return
 
-    async def cmd_web_app_data(self, message: types.Message):
-        """Handle data sent from Mini App via sendData()."""
-        web_app_data = message.web_app_data
-        if web_app_data:
-            logger.info("WebApp data received: %s", web_app_data.data)
-            await message.answer("✅ Данные получены", show_alert=True)
+        # ─── Покупка билета ──────────────────────────────
+        if data.startswith("buy:"):
+            event_id = UUID(data.split(":", 1)[1])
+            user_id = await self._resolve_user_id(
+                str(callback.from_user.id),
+                callback.from_user.full_name or "",
+            )
+            async with async_session_factory() as session:
+                ticket_svc = TicketService(session)
+                try:
+                    ticket = await ticket_svc.buy_ticket(user_id, event_id)
+                    await session.commit()
+                    await callback.answer("✅ Билет куплен!", show_alert=True)
+                    await callback.message.edit_text(
+                        f"✅ Билет куплен!\n"
+                        f"Номер: <code>{ticket.id}</code>",
+                        parse_mode="HTML",
+                    )
+                except ValueError as e:
+                    await callback.answer(f"❌ {e}", show_alert=True)
+            return
+
+        # ─── Отмена билета ──────────────────────────────
+        if data.startswith("ticket_cancel:"):
+            ticket_id = UUID(data.split(":", 1)[1])
+            user_id = await self._resolve_user_id(
+                str(callback.from_user.id),
+                callback.from_user.full_name or "",
+            )
+            async with async_session_factory() as session:
+                ticket_svc = TicketService(session)
+                try:
+                    await ticket_svc.cancel_ticket(ticket_id, user_id)
+                    await session.commit()
+                    await callback.answer("✅ Билет возвращён!", show_alert=True)
+                    tickets = await ticket_svc.get_user_tickets(user_id)
+                    if tickets:
+                        await self._send_tickets(callback.message.edit_text, tickets)
+                    else:
+                        await callback.message.edit_text("✅ Билет возвращён.\nУ вас нет билетов.")
+                except ValueError as e:
+                    await callback.answer(f"❌ {e}", show_alert=True)
+            return
+
+        await callback.answer("Команда не распознана", show_alert=True)
 
     # ═══════════════════════════════════════════════════════
     # ХЕНДЛЕРЫ КАНАЛА (только просмотр)
