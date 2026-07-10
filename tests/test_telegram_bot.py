@@ -33,6 +33,8 @@ def mock_callback():
     """Создаёт mock callback запроса."""
     cb = AsyncMock()
     cb.data = ""
+    cb.from_user.id = 12345
+    cb.from_user.full_name = "Test User"
     cb.answer = AsyncMock()
     cb.message = AsyncMock()
     cb.message.edit_text = AsyncMock()
@@ -253,3 +255,127 @@ class TestChannelCommands:
 
         mock_message.answer.assert_awaited_once()
         assert "Укажите ID" in mock_message.answer.call_args[0][0]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Callback handlers
+# ═══════════════════════════════════════════════════════════════
+
+class TestCallbackHandlers:
+    async def test_callback_buy_ticket(self, telegram_bot, mock_callback):
+        """Callback покупки билета."""
+        event_id = uuid.uuid4()
+        mock_callback.data = f"buy:{event_id}"
+
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch(
+                "app.platforms.telegram.bot.TicketService.buy_ticket",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+        ):
+            await telegram_bot.cmd_callback(mock_callback, Mock())
+
+        mock_callback.answer.assert_awaited_once()
+
+    async def test_callback_ev_page(self, telegram_bot, mock_callback):
+        """Callback навигации по страницам мероприятий."""
+        mock_callback.data = "ev_page:0"
+
+        mock_event = Mock()
+        mock_event.id = uuid.uuid4()
+        mock_event.title = "Test Event"
+        mock_event.date.strftime = Mock(return_value="25.12.2026 19:00")
+        mock_event.location = "Moscow"
+        mock_event.price = 1000
+        mock_event.available_tickets = 50
+        mock_event.total_tickets = 100
+
+        with patch(
+            "app.platforms.telegram.bot.EventService.list_upcoming",
+            new_callable=AsyncMock,
+            return_value=[mock_event],
+        ):
+            await telegram_bot.cmd_callback(mock_callback, Mock())
+
+        mock_callback.answer.assert_awaited_once()
+
+    async def test_callback_ticket_cancel(self, telegram_bot, mock_callback):
+        """Callback отмены билета."""
+        ticket_id = uuid.uuid4()
+        mock_callback.data = f"ticket_cancel:{ticket_id}"
+
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch(
+                "app.platforms.telegram.bot.TicketService.cancel_ticket",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.platforms.telegram.bot.TicketService.get_user_tickets",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            await telegram_bot.cmd_callback(mock_callback, Mock())
+
+        mock_callback.answer.assert_awaited_once()
+
+    async def test_callback_unknown(self, telegram_bot, mock_callback):
+        """Callback с неизвестной командой."""
+        mock_callback.data = "unknown:command"
+        await telegram_bot.cmd_callback(mock_callback, Mock())
+
+        mock_callback.answer.assert_awaited_once_with(
+            "Команда не распознана", show_alert=True
+        )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Deep link tests
+# ═══════════════════════════════════════════════════════════════
+
+class TestDeepLink:
+    async def test_start_with_buy_payload(self, telegram_bot, mock_message):
+        """/start buy_<event_id> обрабатывается как покупка."""
+        event_id = uuid.uuid4()
+        from aiogram.filters import CommandObject
+        command = CommandObject(prefix="/", command="start", args=f"buy_{event_id}")
+
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch(
+                "app.platforms.telegram.bot.TicketService.buy_ticket",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+        ):
+            await telegram_bot.cmd_start(mock_message, command)
+
+        mock_message.answer.assert_awaited_once()
+        assert "Билет куплен" in mock_message.answer.call_args[0][0]
+
+    async def test_start_without_payload(self, telegram_bot, mock_message):
+        """/start без payload — обычное приветствие."""
+        with patch(
+            "app.platforms.telegram.bot.UserService.get_or_create",
+            new_callable=AsyncMock,
+            return_value=Mock(id=uuid.uuid4()),
+        ):
+            await telegram_bot.cmd_start(mock_message)
+
+        mock_message.answer.assert_awaited_once()
+        assert "TicketBot" in mock_message.answer.call_args[0][0]

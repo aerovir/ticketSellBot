@@ -131,3 +131,37 @@
 - **Причина (подтверждено: core/models.py:79-80, core/services.py:180-192):** `default=uuid.uuid4` в SQLAlchemy ORM — это column default, не заполняющий атрибут объекта до flush()
 - **Исправление:** `core/services.py:180` — явная генерация `id=uuid.uuid4()` при создании Ticket
 - **Связанные ошибки:** нет
+
+---
+
+## 013 — GitHub Actions: Unrecognized named-value 'secrets' в if: выражениях
+
+- **Дата:** 2026-07-10
+- **Статус:** ✅ Исправлено
+- **Описание:** Деплой падает на этапе парсинга workflow с ошибкой:
+  ```
+  (Line: 77, Col: 13): Unrecognized named-value: 'secrets'. Located at position 1
+  within expression: secrets.VK_TOKEN != ''
+  (Line: 88, Col: 13): Unrecognized named-value: 'secrets'. Located at position 1
+  within expression: secrets.MAX_TOKEN != ''
+  (Line: 189, Col: 13): Unrecognized named-value: 'secrets'. Located at position 1
+  within expression: secrets.VK_TOKEN != ''
+  ```
+  Шаги создания `.env.vk`, `.env.max` и запуска VK бота не выполняются, workflow завершается ошибкой до запуска контейнеров.
+- **Анализ:**
+  - **Гипотеза:** `${{ secrets.X }}` в `if:` не поддерживается GitHub Actions, т.к. `${{ }}` вычисляется на этапе парсинга, а `secrets` доступен только в runtime контексте.
+  - **Подтверждено (docs.github.com):** GitHub Actions документация явно указывает, что `secrets` нельзя использовать в `if:` условиях. Вместо этого секрет передаётся через `env:` блок, а в `if:` используется `env.VK_TOKEN != ''`.
+- **Исправление (подтверждено: .github/workflows/deploy.yml:77-79, 90-92, 193-195):**
+  Замена во всех трёх местах:
+  ```yaml
+  # Было:
+  if: ${{ secrets.VK_TOKEN != '' }}
+
+  # Стало:
+  env:
+    VK_TOKEN: ${{ secrets.VK_TOKEN }}
+  if: env.VK_TOKEN != ''
+  ```
+  Принцип: `${{ secrets.X }}` в `env:` резолвится в пустую строку, если секрет не задан. `env.X != ''` — корректное runtime-выражение.
+- **Коммит:** `3f9d205` — fix: secrets in GitHub Actions if: expressions
+- **Связанные ошибки:** нет
