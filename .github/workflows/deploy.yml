@@ -74,7 +74,9 @@ jobs:
           echo "✅ .env.telegram создан"
 
       - name: 📋 Создать .env.vk из секретов
-        if: ${{ secrets.VK_TOKEN != '' }}
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+        if: env.VK_TOKEN != ''
         run: |
           cat > .env.vk << 'ENVEOF'
           DATABASE_URL=postgresql+asyncpg://vk_user:${{ secrets.DB_PASSWORD_VK }}@db:5432/ticketbot
@@ -85,7 +87,9 @@ jobs:
           echo "✅ .env.vk создан"
 
       - name: 📋 Создать .env.max из секретов
-        if: ${{ secrets.MAX_TOKEN != '' }}
+        env:
+          MAX_TOKEN: ${{ secrets.MAX_TOKEN }}
+        if: env.MAX_TOKEN != ''
         run: |
           cat > .env.max << 'ENVEOF'
           DATABASE_URL=postgresql+asyncpg://max_user:${{ secrets.DB_PASSWORD_MAX }}@db:5432/ticketbot
@@ -186,7 +190,9 @@ jobs:
           echo "✅ Telegram бот запущен"
 
       - name: 🚀 Запустить VK бота (если есть токен)
-        if: ${{ secrets.VK_TOKEN != '' }}
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+        if: env.VK_TOKEN != ''
         run: |
           docker compose ${{ env.COMPOSE_FILES }} --profile all up -d vk
           echo "✅ VK бот запущен"
