@@ -3,7 +3,7 @@
 Entry point для MAX бота (заглушка).
 
 Использование:
-    python run_max.py
+    python -m bot.max
 """
 import asyncio
 import logging
@@ -29,10 +29,16 @@ async def main():
     from app.platforms.max.bot import MaxPlatformBot
 
     bot = MaxPlatformBot()
-    logger.info("MAX бот запущен")
-    await bot.run()
+    logger.info("✅ MAX бот запущен")
 
-    await close_db()
+    try:
+        await bot.run()
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал остановки...")
+    finally:
+        await bot.stop()
+        await close_db()
+        logger.info("MAX бот остановлен.")
 
 
 if __name__ == "__main__":

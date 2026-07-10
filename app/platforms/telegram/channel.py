@@ -11,7 +11,7 @@ import logging
 from uuid import UUID
 
 from aiogram import Bot
-from aiogram.types import FSInputFile, InputMediaPhoto
+from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -36,7 +36,7 @@ class ChannelManager:
         return bool(self.channel_id)
 
     async def post_event_announcement(self, event: Event):
-        """Отправляет анонс мероприятия в канал."""
+        """Отправляет анонс мероприятия в канал с inline-кнопками."""
         if not self.is_configured:
             logger.info("Канал не настроен, пропускаем анонс")
             return
@@ -48,10 +48,23 @@ class ChannelManager:
             f"📅 {date_str}\n"
             f"📍 {event.location or 'Не указано'}\n"
             f"💰 {event.price:.0f}₽\n"
-            f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}\n\n"
-            f"👇 Купить билет в личных сообщениях:\n"
-            f"@{self.bot_username or 'bot'} — напишите /buy {event.id}"
+            f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}"
         )
+
+        # Inline-кнопки: покупка в личку + детали
+        lines = []
+        if self.bot_username:
+            buy_url = f"https://t.me/{self.bot_username}?start=buy_{event.id}"
+            lines.append(InlineKeyboardButton(
+                text="🎟 Купить билет",
+                url=buy_url,
+            ))
+        lines.append(InlineKeyboardButton(
+            text="📋 Все мероприятия",
+            callback_data=f"ev_page:0",
+        ))
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[lines]) if lines else None
 
         try:
             await self.bot.send_message(
@@ -59,6 +72,7 @@ class ChannelManager:
                 text=text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_markup=kb,
             )
             logger.info("Анонс отправлен в канал %s: %s", self.channel_id, event.title)
         except Exception as e:

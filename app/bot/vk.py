@@ -3,7 +3,7 @@
 Entry point для VK бота.
 
 Использование:
-    python run_vk.py
+    python -m bot.vk
 """
 import asyncio
 import logging
@@ -29,10 +29,16 @@ async def main():
     from app.platforms.vk.bot import VKPlatformBot
 
     bot = VKPlatformBot()
-    logger.info("VK бот запущен")
-    await bot.run()
+    logger.info("✅ VK бот запущен")
 
-    await close_db()
+    try:
+        await bot.run()
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал остановки...")
+    finally:
+        await bot.stop()
+        await close_db()
+        logger.info("VK бот остановлен.")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 Entry point для Telegram бота.
 
 Использование:
-    python run_telegram.py
+    python -m bot.telegram
 """
 import asyncio
 import logging
@@ -29,10 +29,16 @@ async def main():
     from app.platforms.telegram.bot import TelegramBot
 
     bot = TelegramBot()
-    logger.info("Telegram бот запущен")
-    await bot.run()
+    logger.info("✅ Telegram бот запущен")
 
-    await close_db()
+    try:
+        await bot.run()
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал остановки...")
+    finally:
+        await bot.stop()
+        await close_db()
+        logger.info("Telegram бот остановлен.")
 
 
 if __name__ == "__main__":

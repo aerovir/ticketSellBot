@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import String, Integer, Float, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum
+from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,10 +40,10 @@ class User(Base):
     platform_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    tickets = relationship("Ticket", back_populates="user")
+    tickets = relationship("Ticket", back_populates="user", lazy="raise")
 
     def __repr__(self):
         return f"<User {self.platform}:{self.platform_user_id}>"
@@ -59,15 +59,15 @@ class Event(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    price: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), nullable=False, default=0.0)
     total_tickets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     available_tickets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    tickets = relationship("Ticket", back_populates="event")
+    tickets = relationship("Ticket", back_populates="event", lazy="raise")
 
     def __repr__(self):
         return f"<Event {self.title}>"
@@ -86,15 +86,15 @@ class Ticket(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
     purchase_date: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
     status: Mapped[TicketStatus] = mapped_column(
         SAEnum(TicketStatus), default=TicketStatus.active, nullable=False
     )
 
-    event = relationship("Event", back_populates="tickets")
-    user = relationship("User", back_populates="tickets")
-    payment = relationship("Payment", back_populates="ticket", uselist=False)
+    event = relationship("Event", back_populates="tickets", lazy="raise")
+    user = relationship("User", back_populates="tickets", lazy="raise")
+    payment = relationship("Payment", back_populates="ticket", uselist=False, lazy="raise")
 
     def __repr__(self):
         return f"<Ticket {self.id} — {self.event_id}>"
@@ -109,15 +109,15 @@ class Payment(Base):
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tickets.id"), nullable=False, unique=True
     )
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), nullable=False)
     status: Mapped[PaymentStatus] = mapped_column(
         SAEnum(PaymentStatus), default=PaymentStatus.pending, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    ticket = relationship("Ticket", back_populates="payment")
+    ticket = relationship("Ticket", back_populates="payment", lazy="raise")
 
     def __repr__(self):
         return f"<Payment {self.id} — {self.status.value}>"

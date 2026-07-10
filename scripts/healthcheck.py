@@ -2,14 +2,16 @@
 """
 healthcheck.py — Проверка работоспособности TicketBot.
 
+Проверяет контейнеры платформ (telegram, vk, max) и доступность БД.
+
 Использование:
-  python deploy/healthcheck.py                  # базовая проверка
-  python deploy/healthcheck.py --verbose        # подробно
-  python deploy/healthcheck.py --notify-tg      # уведомление в Telegram при проблемах
+  python scripts/healthcheck.py
+  python scripts/healthcheck.py --verbose
+  python scripts/healthcheck.py --platform telegram
 
 Коды возврата:
   0 — всё хорошо
-  1 — ошибка (бот не отвечает, БД недоступна)
+  1 — ошибка
 """
 
 import os
@@ -19,8 +21,9 @@ import argparse
 import subprocess
 from datetime import datetime, timezone
 
-# Добавляем корень проекта в путь
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+SERVICES = ["telegram", "vk", "max"]
 
 
 def ok(msg: str):
@@ -31,11 +34,12 @@ def fail(msg: str):
     print(f"  ❌ {msg}")
 
 
-# ─── 1. Docker-контейнеры ──────────────────────────────────────
+# ─── 1. Docker-контейнеры ──────────────────────────────
 
-def check_containers() -> bool:
-    """Проверить, что все контейнеры работают."""
-    print("🔍 Проверка контейнеров...")
+def check_containers(platform: str | None = None) -> bool:
+    """Проверить, что контейнеры работают."""
+    services = [platform] if platform else SERVICES
+    print(f"🔍 Проверка контейнеров: {', '.join(services)}...")
 
     try:
         result = subprocess.run(
@@ -47,16 +51,22 @@ def check_containers() -> bool:
             return False
 
         lines = [l.strip() for l in result.stdout.split("\n") if l.strip()]
-        if not lines:
-            fail("Нет запущенных контейнеров ticketbot")
-            return False
-
         all_ok = True
+        found = set()
+
         for line in lines:
-            if "Up" in line:
-                ok(line)
-            else:
-                fail(line)
+            for svc in services:
+                if svc in line:
+                    found.add(svc)
+                    if "Up" in line:
+                        ok(line)
+                    else:
+                        fail(line)
+                        all_ok = False
+
+        for svc in services:
+            if svc not in found:
+                fail(f"Контейнер ticketbot-{svc} не найден")
                 all_ok = False
 
         return all_ok
@@ -68,7 +78,7 @@ def check_containers() -> bool:
         return False
 
 
-# ─── 2. Подключение к БД ────────────────────────────────────────
+# ─── 2. Подключение к БД ────────────────────────────────
 
 async def check_database() -> bool:
     """Проверить подключение к PostgreSQL."""
@@ -84,7 +94,6 @@ async def check_database() -> bool:
             count = result.scalar() or 0
             ok(f"PostgreSQL доступен, мероприятий в БД: {count}")
 
-            # Проверка времени
             result = await session.execute(text("SELECT NOW()"))
             now = result.scalar()
             ok(f"Серверное время: {now}")
@@ -95,42 +104,44 @@ async def check_database() -> bool:
         return False
 
 
-# ─── 3. Логи на ошибки ──────────────────────────────────────────
+# ─── 3. Логи на ошибки ──────────────────────────────────
 
-def check_logs_for_errors() -> bool:
+def check_logs_for_errors(platform: str | None = None) -> bool:
     """Проверить последние логи на наличие ошибок."""
-    print("🔍 Проверка логов...")
+    services = [platform] if platform else SERVICES
+    print(f"🔍 Проверка логов: {', '.join(services)}...")
 
     try:
-        result = subprocess.run(
-            ["docker", "compose", "logs", "--tail", "50", "app"],
-            capture_output=True, text=True, timeout=10,
-        )
-        logs = result.stdout + result.stderr
+        all_ok = True
+        for svc in services:
+            result = subprocess.run(
+                ["docker", "compose", "logs", "--tail", "50", svc],
+                capture_output=True, text=True, timeout=10,
+            )
+            logs = result.stdout + result.stderr
 
-        # Ищем критические ошибки (не INFO/WARNING)
-        error_lines = []
-        for line in logs.split("\n"):
-            if "ERROR" in line or "Traceback" in line or "Error" in line:
-                if "Operation not permitted" not in line:  # игнорируем безобидные
-                    error_lines.append(line.strip())
+            error_lines = []
+            for line in logs.split("\n"):
+                if "ERROR" in line or "Traceback" in line or "Error" in line:
+                    if "Operation not permitted" not in line:
+                        error_lines.append(line.strip())
 
-        if error_lines:
-            for err_line in error_lines[:5]:
-                fail(err_line)
-            if len(error_lines) > 5:
-                fail(f"...и ещё {len(error_lines) - 5} ошибок")
-            return False
-        else:
-            ok("Критических ошибок в логах нет")
-            return True
+            if error_lines:
+                for err_line in error_lines[:3]:
+                    fail(f"[{svc}] {err_line}")
+                if len(error_lines) > 3:
+                    fail(f"[{svc}] ...и ещё {len(error_lines) - 3} ошибок")
+                all_ok = False
+            else:
+                ok(f"[{svc}] Критических ошибок нет")
 
+        return all_ok
     except Exception as e:
-        warn(f"Не удалось проверить логи: {e}")
-        return True  # не фатально
+        fail(f"Не удалось проверить логи: {e}")
+        return True
 
 
-# ─── 4. Отправка уведомления ────────────────────────────────────
+# ─── 4. Отправка уведомления ────────────────────────────
 
 async def notify_tg(token: str, chat_id: str, message: str):
     """Отправить уведомление в Telegram."""
@@ -144,12 +155,13 @@ async def notify_tg(token: str, chat_id: str, message: str):
         fail(f"Не удалось отправить уведомление: {e}")
 
 
-# ─── Main ───────────────────────────────────────────────────────
+# ─── Main ───────────────────────────────────────────────
 
 async def main():
     parser = argparse.ArgumentParser(description="Healthcheck для TicketBot")
     parser.add_argument("--verbose", "-v", action="store_true", help="Подробный вывод")
-    parser.add_argument("--notify-tg", metavar="CHAT_ID", help="Отправить уведомление в Telegram при проблемах")
+    parser.add_argument("--platform", choices=SERVICES, help="Проверить только одну платформу")
+    parser.add_argument("--notify-tg", metavar="CHAT_ID", help="Уведомление в Telegram при проблемах")
     args = parser.parse_args()
 
     print(f"\n{'═' * 40}")
@@ -159,22 +171,18 @@ async def main():
 
     checks = []
 
-    # Проверка контейнеров
-    containers_ok = check_containers()
+    containers_ok = check_containers(args.platform)
     checks.append(containers_ok)
     print()
 
-    # Проверка БД
     db_ok = await check_database()
     checks.append(db_ok)
     print()
 
-    # Проверка логов (только если verbose или проблемы)
-    logs_ok = check_logs_for_errors()
+    logs_ok = check_logs_for_errors(args.platform)
     checks.append(logs_ok)
     print()
 
-    # Итог
     print(f"{'─' * 40}")
     if all(checks):
         print(f"  🟢 ВСЁ ХОРОШО")
@@ -183,7 +191,6 @@ async def main():
         failed = sum(1 for c in checks if not c)
         print(f"  🔴 {failed} проверок провалено")
 
-        # Уведомление в Telegram при проблемах
         if args.notify_tg:
             tg_token = os.getenv("TELEGRAM_TOKEN", "")
             if tg_token:
@@ -195,8 +202,6 @@ async def main():
                     f"База данных: {'✅' if db_ok else '❌'}"
                 )
                 await notify_tg(tg_token, args.notify_tg, msg)
-            else:
-                fail("TELEGRAM_TOKEN не указан для уведомлений")
 
         sys.exit(1)
 

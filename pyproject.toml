@@ -12,12 +12,15 @@ dependencies = [
     "aiogram>=3.0",
     "vkbottle>=4.10.0",
     "alembic>=1.13",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
 ]
 
 [tool.setuptools.packages.find]
@@ -27,3 +30,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+timeout = 30
+markers = [
+    "integration: тесты, требующие PostgreSQL",
+]
