@@ -1,4 +1,4 @@
-.PHONY: help up up-beget down logs seed ps clean deploy deploy-beget
+.PHONY: help up up-all down logs ps seed deploy deploy-beget
 
 help: ## Показать эту справку
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -6,34 +6,40 @@ help: ## Показать эту справку
 
 # ─── Базовые команды ──────────────────────────────────
 
-up: ## Запустить бота + БД (универсальный)
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml up -d
+up: ## Запустить Telegram бота + БД (дефолтный профиль)
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml up -d telegram
+
+up-all: ## Запустить всех ботов + БД
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml --profile all up -d
 
 down: ## Остановить все сервисы
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml down
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml --profile all down
 
-restart: ## Перезапустить бота
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml restart app
+restart: ## Перезапустить Telegram бота
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml restart telegram
 
-logs: ## Посмотреть логи бота
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml logs -f app
+logs: ## Посмотреть логи Telegram бота
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml logs -f telegram
 
 ps: ## Статус контейнеров
 	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml ps
 
 # ─── Beget ────────────────────────────────────────────
 
-up-beget: ## Запустить на Beget (с оптимизацией под 1-2 GB RAM)
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d
+up-beget: ## Запустить на Beget Telegram + БД
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d telegram
+
+up-beget-all: ## Запустить всех ботов на Beget
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml --profile all up -d
 
 down-beget: ## Остановить всё на Beget
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml down
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml --profile all down
 
-logs-beget: ## Логи на Beget
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml logs -f app
+logs-beget: ## Логи Telegram на Beget
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml logs -f telegram
 
-restart-beget: ## Перезапустить бота на Beget
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml restart app
+restart-beget: ## Перезапустить Telegram на Beget
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml restart telegram
 
 seed: ## Залить тестовые мероприятия
 	docker compose -f ../docker-compose.yml run --rm seed
@@ -43,22 +49,30 @@ clean-beget: ## Остановить и удалить всё (включая Б
 
 # ─── Деплой ──────────────────────────────────────────
 
-deploy: ## Полный деплой: БД → миграции → seed → запуск
+deploy: ## Полный деплой: БД → init-db → seed → Telegram
 	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml up -d db
 	@echo "Ожидание БД..."
 	@sleep 5
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm app python -c \
-		"import asyncio; from app.core.database import init_db; asyncio.run(init_db())"
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm seed
-	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml up -d app
-	@echo "✅ Деплой завершён"
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm \
+		-e DB_PASSWORD_TG="${DB_PASSWORD_TG}" \
+		-e DB_PASSWORD_VK="${DB_PASSWORD_VK}" \
+		-e DB_PASSWORD_MAX="${DB_PASSWORD_MAX}" \
+		db bash /app/scripts/init-db-roles.sh 2>/dev/null || true
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm \
+		app python -m bot.seed 2>/dev/null || true
+	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml up -d telegram
+	@echo "✅ Деплой Telegram завершён"
 
 deploy-beget: ## Полный деплой на Beget
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d db
 	@echo "Ожидание БД..."
 	@sleep 5
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm app python -c \
-		"import asyncio; from app.core.database import init_db; asyncio.run(init_db())"
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm seed
-	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d app
-	@echo "✅ Деплой на Beget завершён"
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm \
+		-e DB_PASSWORD_TG="${DB_PASSWORD_TG}" \
+		-e DB_PASSWORD_VK="${DB_PASSWORD_VK}" \
+		-e DB_PASSWORD_MAX="${DB_PASSWORD_MAX}" \
+		db bash /app/scripts/init-db-roles.sh 2>/dev/null || true
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm \
+		app python -m bot.seed 2>/dev/null || true
+	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d telegram
+	@echo "✅ Деплой Telegram на Beget завершён"

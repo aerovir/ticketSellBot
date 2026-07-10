@@ -10,6 +10,8 @@ MAX (max.ru) — российский мессенджер от VK Group.
 и будет работать после получения токена от @MasterBot.
 """
 
+from __future__ import annotations
+
 from uuid import UUID
 from typing import Optional
 

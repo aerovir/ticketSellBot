@@ -4,24 +4,39 @@
 
 **Платформы:** Telegram ✅ (работает), VK ⏸️ (код готов, отключён), MAX ⏸️ (заглушка).
 
+Каждая платформа работает в **отдельном процессе/контейнере** со своими PostgreSQL-credentials.
+
 ---
 
 ## Быстрый старт
 
 ```bash
-# 1. Настройка .env
-cp .env.example .env
+# 1. Копировать env для нужной платформы
+cp .env.telegram .env
 # заполнить TELEGRAM_TOKEN от @BotFather
 
-# 2. Запуск через Docker (все сразу)
+# 2. Запуск через Docker (Telegram + БД)
 docker compose up -d
 
-# 3. Или только Telegram:
-docker compose --profile standalone up -d telegram
+# 3. Все платформы:
+docker compose --profile all up -d
 
 # 4. Накатить тестовые данные:
 docker compose run --rm seed
 ```
+
+### Раздельные env-файлы
+
+| Файл | Для какой платформы |
+|------|--------------------|
+| `.env.telegram` | Telegram (токен, канал, админы) |
+| `.env.vk` | VK (токен, ID группы) |
+| `.env.max` | MAX (токен) |
+
+Каждый файл содержит отдельный `DATABASE_URL` с уникальным пользователем БД:
+`tg_user`, `vk_user`, `max_user`.
+
+Создание ролей: `bash scripts/init-db-roles.sh`
 
 ---
 
@@ -41,7 +56,7 @@ docker compose run --rm seed
    ```
    @BotFather → /mybots → Bot → Bot Settings → Group Privacy → Turn off
    ```
-4. Указать `TELEGRAM_CHANNEL_ID` в секретах GitHub (например `@my_channel`)
+4. Указать `TELEGRAM_CHANNEL_ID` в `.env.telegram` (например `@my_channel`)
 5. При деплое бот будет постить анонсы в канал автоматически
 
 ### Команды по месту использования
@@ -98,11 +113,15 @@ docker compose run --rm seed
 │   │   ├── base.py     # Abstract base class PlatformBot
 │   │   ├── telegram/   # aiogram 3.x — хендлеры + клавиатуры
 │   │   │   ├── bot.py
-│   │   │   └── channel.py
+│   │   │   ├── channel.py
+│   │   │   └── README.md
 │   │   ├── vk/         # vkbottle 4.x — хендлеры
+│   │   │   ├── bot.py
+│   │   │   └── README.md
 │   │   └── max/        # max-bot-api-client-py (заглушка)
+│   │       ├── bot.py
+│   │       └── README.md
 │   └── bot/            # Entry points (python -m bot.xxx)
-│       ├── launcher.py # Запуск всех ботов
 │       ├── telegram.py # Только Telegram
 │       ├── vk.py       # Только VK
 │       ├── max.py      # Только MAX (заглушка)
@@ -110,30 +129,41 @@ docker compose run --rm seed
 │
 ├── scripts/            # Вспомогательные скрипты
 │   ├── healthcheck.py
-│   └── cron-healthcheck.py
+│   ├── cron-healthcheck.py
+│   └── init-db-roles.sh  # ← создание PostgreSQL-ролей
 │
 ├── tests/              # Тесты (pytest)
+│   ├── conftest.py
+│   ├── test_database.py
+│   ├── test_services.py
+│   ├── test_telegram_bot.py
+│   ├── test_vk_bot.py
+│   └── test_max_bot.py
+│
 ├── deploy/             # Деплой и DevOps
 ├── docs/               # Документация
 ├── migrations/         # Alembic миграции
 │
-├── pyproject.toml      # Зависимости и метаданные проекта
+├── pyproject.toml      # Зависимости
 ├── Dockerfile
 ├── docker-compose.yml
-└── alembic.ini
+├── .env.telegram       # Credentials для Telegram
+├── .env.vk             # Credentials для VK
+└── .env.max            # Credentials для MAX
 ```
 
 ### Принцип разделения
 
-Каждая платформа — **независимый entry point**:
-- `python -m bot.telegram` — запустит только Telegram
-- `python -m bot.vk` — запустит только VK
-- `python -m bot.max` — запустит только MAX
-- `python -m bot.launcher` — лаунчер для всех платформ
+Каждая платформа — **независимый entry point** и независимый Docker-контейнер:
 
-Общий `python -m bot.launcher` пытается запустить все платформы, для которых есть токены.
+```
+docker compose up -d              → Telegram + БД
+docker compose --profile all up -d → + VK + MAX
+```
 
-Каждый entry point можно запустить в отдельном Docker контейнере (через profiles).
+- Общий `bot.launcher` удалён — каждый entry point самодостаточен
+- Каждый entry point знает только свой токен и свои credentials к БД
+- Ошибка одной платформы не влияет на другие
 
 ---
 
@@ -147,22 +177,27 @@ docker compose run --rm seed
 - Workflow: `.github/workflows/deploy.yml`
 - Автоматический деплой при пуше в `main`
 
-### Secrets (Settings → Secrets and variables → Actions)
+### Secrets
 
 | Secret | Описание |
 |--------|---------|
-| `TELEGRAM_TOKEN` | Токен Telegram бота от @BotFather |
-| `TELEGRAM_CHANNEL_ID` | @username канала для анонсов (опционально) |
+| `TELEGRAM_TOKEN` | Токен Telegram бота |
+| `TELEGRAM_CHANNEL_ID` | @username канала |
 | `VK_TOKEN` | Токен VK сообщества |
 | `VK_GROUP_ID` | ID VK группы |
 | `MAX_TOKEN` | Токен MAX бота |
+| `DB_PASSWORD_TG` | Пароль для tg_user |
+| `DB_PASSWORD_VK` | Пароль для vk_user |
+| `DB_PASSWORD_MAX` | Пароль для max_user |
 
 ### Команды
 
 ```bash
-make -C deploy up-beget      # запустить всех ботов
-make -C deploy logs-beget    # смотреть логи
-make -C deploy down-beget    # остановить
+make -C deploy up-beget           # Telegram на Beget
+make -C deploy up-beget-all       # Все боты на Beget
+make -C deploy logs-beget         # Логи Telegram
+make -C deploy down-beget         # Остановить всё
+make -C deploy seed               # Тестовые данные
 ```
 
 ---
@@ -215,7 +250,7 @@ make -C deploy down-beget    # остановить
 - **Дата** — когда добавлена задача
 - **Связанные коммиты** — ссылки на изменения
 
-#### 3. Принцип работы с проектом
+#### 4. Принцип работы с проектом
 - При обнаружении ошибки → сначала записать в `docs/errors.md`, потом чинить
 - При постановке новой задачи → записать в `docs/tasks.md`
 - После исправления → обновить `docs/errors.md` (статус), добавить ссылку на коммит
@@ -241,22 +276,31 @@ make -C deploy down-beget    # остановить
 ### Локальный запуск
 
 ```bash
-# Локально
+# Виртуальное окружение
 python -m venv venv
 source venv/bin/activate
 pip install -e .
 
-# Запустить только Telegram (PYTHONPATH=/app автоматически)
+# Запустить Telegram бота (использует .env.telegram)
 export PYTHONPATH=/app
+cp .env.telegram .env
 python -m bot.telegram
 
-# Накатить тестовые мероприятия
-python -m bot.seed
+# Или через env-переменные напрямую:
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ticketbot \
+TELEGRAM_TOKEN=xxx \
+python -m bot.telegram
+
+# Тесты (нужна БД ticketbot_test)
+docker compose up -d db
+pytest tests/
 ```
 
 ### Добавление новой платформы
 
 1. Создать `platforms/new/bot.py` с классом, унаследованным от `PlatformBot`
-2. Создать `run_new.py` по шаблону `run_telegram.py`
-3. Добавить сервис в `docker-compose.yml`
-4. Если нужно — добавить блок в `main.py`
+2. Создать `bot/new.py` entry point
+3. Добавить сервис в `docker-compose.yml` (profile: all)
+4. Создать `.env.new` с отдельной ролью в БД
+5. Добавить тесты в `tests/test_new_bot.py`
+6. Добавить `platforms/new/README.md`

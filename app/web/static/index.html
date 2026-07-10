@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TicketBot</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+    <div id="app">
+
+        <!-- Toolbar -->
+        <div class="toolbar" id="toolbar">
+            <button class="toolbar-btn" id="backBtn" onclick="goBack()">← Назад</button>
+            <span class="toolbar-title" id="toolbarTitle">TicketBot</span>
+            <button class="toolbar-btn" id="myTicketsBtn" onclick="showMyTickets()">🎫</button>
+        </div>
+
+        <!-- Loading overlay -->
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+            <p>Загрузка...</p>
+        </div>
+
+        <!-- Error toast -->
+        <div class="toast" id="toast"></div>
+
+        <!-- ═══ Page: Events List ═══ -->
+        <div class="page active" id="page-events">
+            <div class="page-content" id="eventsContent">
+                <!-- Rendered by JS -->
+            </div>
+        </div>
+
+        <!-- ═══ Page: Event Detail ═══ -->
+        <div class="page" id="page-event">
+            <div class="page-content" id="eventContent">
+                <!-- Rendered by JS -->
+            </div>
+        </div>
+
+        <!-- ═══ Page: Confirm ═══ -->
+        <div class="page" id="page-confirm">
+            <div class="page-content" id="confirmContent">
+                <!-- Rendered by JS -->
+            </div>
+        </div>
+
+        <!-- ═══ Page: Success ═══ -->
+        <div class="page" id="page-success">
+            <div class="page-content success-content">
+                <div class="success-icon">✅</div>
+                <h2>Билет куплен!</h2>
+                <p class="ticket-id-label">Номер билета:</p>
+                <code class="ticket-id" id="successTicketId" onclick="copyTicketId()">—</code>
+                <p class="hint" id="successHint">Нажмите на номер, чтобы скопировать</p>
+                <button class="btn btn-primary" onclick="showMyTickets()">🎫 Мои билеты</button>
+                <button class="btn btn-secondary" onclick="showEvents()">← К списку</button>
+            </div>
+        </div>
+
+        <!-- ═══ Page: My Tickets ═══ -->
+        <div class="page" id="page-tickets">
+            <div class="page-content" id="ticketsContent">
+                <!-- Rendered by JS -->
+            </div>
+        </div>
+
+        <!-- ═══ Page: Error ═══ -->
+        <div class="page" id="page-error">
+            <div class="page-content error-content">
+                <div class="error-icon">⚠️</div>
+                <h2>Что-то пошло не так</h2>
+                <p id="errorMessage">Произошла ошибка. Попробуйте снова.</p>
+                <button class="btn btn-primary" onclick="retryLastAction()">🔄 Повторить</button>
+                <button class="btn btn-secondary" onclick="showEvents()">← К списку</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

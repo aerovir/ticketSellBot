@@ -199,6 +199,67 @@ class TicketService:
         await self.session.flush()
         return ticket
 
+    async def buy_ticket_webapp(self, user_id: uuid.UUID, event_id: uuid.UUID) -> dict:
+        """Purchase a ticket through the Mini App.
+
+        Same validation as buy_ticket(), but creates Payment with
+        status=pending (for future YooKassa integration) and returns
+        a dict for the API response.
+        """
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            raise ValueError("Мероприятие не найдено")
+        if not event.is_active:
+            raise ValueError("Мероприятие неактивно")
+        if event.date < datetime.now(timezone.utc):
+            raise ValueError("Мероприятие уже прошло")
+        if event.available_tickets <= 0:
+            raise ValueError("Билеты закончились")
+
+        # Check if user already has an active ticket for this event
+        existing_stmt = select(Ticket).where(
+            and_(
+                Ticket.user_id == user_id,
+                Ticket.event_id == event_id,
+                Ticket.status == TicketStatus.active,
+            )
+        )
+        existing = await self.session.execute(existing_stmt)
+        if existing.scalar_one_or_none() is not None:
+            raise ValueError("У вас уже есть активный билет на это мероприятие")
+
+        # Create ticket
+        ticket = Ticket(
+            id=uuid.uuid4(),
+            event_id=event_id,
+            user_id=user_id,
+            status=TicketStatus.active,
+        )
+        self.session.add(ticket)
+
+        # Decrease available tickets
+        event.available_tickets -= 1
+
+        # Create payment stub with pending status (Mini App flow)
+        payment = Payment(
+            ticket_id=ticket.id,
+            amount=event.price,
+            status=PaymentStatus.pending,
+        )
+        self.session.add(payment)
+
+        await self.session.flush()
+
+        return {
+            "ticket_id": str(ticket.id),
+            "event_title": event.title,
+            "event_date": event.date.isoformat(),
+            "amount": float(event.price),
+            "payment_id": str(payment.id),
+            "payment_status": payment.status.value,
+            "purchase_date": ticket.purchase_date.isoformat(),
+        }
+
     async def cancel_ticket(self, ticket_id: uuid.UUID, user_id: uuid.UUID) -> Ticket:
         """Cancel a ticket (refund)."""
         ticket = await self.session.get(Ticket, ticket_id)
