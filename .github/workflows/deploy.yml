@@ -2,7 +2,7 @@ name: Deploy TicketBot
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:  # ручной запуск
 
 env:
@@ -56,7 +56,7 @@ jobs:
   deploy:
     runs-on: self-hosted
     needs: [test]
-    if: success() && github.ref == 'refs/heads/main'
+    if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
 
     steps:
       - name: 📥 Получить код
