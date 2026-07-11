@@ -24,11 +24,21 @@ router = APIRouter()
 
 
 @router.get("/events")
-async def list_events(auth_data: dict = Depends(validate_init_data)):
-    """Get list of upcoming events."""
+async def list_events(
+    auth_data: dict = Depends(validate_init_data),
+    channel_id: str | None = None,
+):
+    """Get list of upcoming events, optionally filtered by channel."""
     async with async_session_factory() as session:
         svc = EventService(session)
-        events = await svc.list_upcoming()
+        if channel_id:
+            try:
+                cid = UUID(channel_id)
+            except ValueError:
+                cid = None
+            events = await svc.list_upcoming(channel_id=cid)
+        else:
+            events = await svc.list_upcoming()
 
     return [
         {

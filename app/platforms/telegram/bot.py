@@ -10,8 +10,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
 from app.core.database import async_session_factory
-from app.core.models import PlatformType
-from app.core.services import UserService, EventService, TicketService
+from app.core.models import PlatformType, Channel
+from app.core.services import UserService, EventService, TicketService, ChannelService
 from app.platforms.base import PlatformBot
 from app.platforms.telegram.channel import ChannelManager
 
@@ -58,6 +58,11 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.admin_activate, Command("activate"))
         self.dp.message.register(self.admin_stats, Command("stats"))
         self.dp.message.register(self.admin_repost_events, Command("repost_events"))
+        self.dp.message.register(self.admin_subscribe, Command("subscribe"))
+        self.dp.message.register(self.admin_my_channels, Command("my_channels"))
+
+        # ─── Обновления участников канала (my_chat_member) ──
+        self.dp.my_chat_member.register(self.on_chat_member_update)
 
         # ─── FSM: шаги создания мероприятия ────────────
         self.dp.message.register(self.fsm_title, CreateEvent.title)
@@ -117,8 +122,8 @@ class TelegramBot(PlatformBot):
         text = (
             "🎫 <b>TicketBot</b>\n\n"
             "Я помогаю покупать билеты на мероприятия.\n\n"
-            "Подпишитесь на наш канал, чтобы получать анонсы:\n"
-            f"{self._channel_link()}\n\n"
+            "Подпишитесь на канал, где публикуются анонсы, "
+            "и покупайте билеты через inline-кнопки.\n\n"
             "Доступные команды:\n"
             "/events — список мероприятий\n"
             "/event &lt;id&gt; — детали мероприятия\n"
@@ -340,11 +345,21 @@ class TelegramBot(PlatformBot):
     # ═══════════════════════════════════════════════════════
 
     def _is_admin(self, user_id: int) -> bool:
-        """Check if a Telegram user is in the admin list."""
+        """Check if a Telegram user is in the super admin list."""
         if not settings.admin_telegram_ids:
             return False
         admin_ids = [x.strip() for x in settings.admin_telegram_ids.split(",") if x.strip()]
         return str(user_id) in admin_ids
+
+    async def _get_admin_channel(self, user_id: int) -> Channel | None:
+        """Get the channel managed by this Telegram user with an active subscription."""
+        async with async_session_factory() as session:
+            channel_svc = ChannelService(session)
+            channels = await channel_svc.get_channels_by_admin(str(user_id))
+            for channel in channels:
+                if await channel_svc.is_subscription_valid(channel.id):
+                    return channel
+        return None
 
     async def admin_menu(self, message: types.Message):
         """Show admin panel menu."""
@@ -358,7 +373,9 @@ class TelegramBot(PlatformBot):
             "/stats &lt;id&gt; — статистика продаж\n"
             "/deactivate &lt;id&gt; — отключить мероприятие\n"
             "/activate &lt;id&gt; — включить мероприятие\n"
-            "/repost_events — перепостить анонсы в канал"
+            "/repost_events — перепостить анонсы в канал\n"
+            "/my_channels — мои каналы и подписка\n"
+            "/subscribe &lt;user_id&gt; &lt;days&gt; — активировать подписку (super-admin)"
         )
         await message.answer(text, parse_mode="HTML")
 
@@ -369,6 +386,15 @@ class TelegramBot(PlatformBot):
         if not self._is_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
+
+        # Get admin's channel
+        channel = await self._get_admin_channel(message.from_user.id)
+        if not channel:
+            await message.answer("❌ У вас нет канала с активной подпиской.\n\nОбратитесь к администратору для оформления подписки.")
+            return
+
+        # Store channel_id in FSM data
+        await state.update_data(channel_id=channel.id)
         await state.set_state(CreateEvent.title)
         await message.answer(
             "📝 Введите <b>название</b> мероприятия:",
@@ -496,13 +522,19 @@ class TelegramBot(PlatformBot):
     # ─── /events_all ─────────────────────────────────────────────────────
 
     async def admin_events_all(self, message: types.Message):
-        """Show ALL events (admin view)."""
+        """Show ALL events for the admin's channel."""
         if not self._is_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
+
+        channel = await self._get_admin_channel(message.from_user.id)
+        if not channel:
+            await message.answer("❌ У вас нет канала с активной подпиской.")
+            return
+
         async with async_session_factory() as session:
             svc = EventService(session)
-            events = await svc.list_all()
+            events = await svc.list_all(channel_id=channel.id)
 
         if not events:
             await message.answer("Нет мероприятий.")
@@ -531,6 +563,12 @@ class TelegramBot(PlatformBot):
         if not self._is_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
+
+        channel = await self._get_admin_channel(message.from_user.id)
+        if not channel:
+            await message.answer("❌ У вас нет канала с активной подпиской.")
+            return
+
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
             cmd = "activate" if activate else "deactivate"
@@ -544,12 +582,13 @@ class TelegramBot(PlatformBot):
 
         async with async_session_factory() as session:
             svc = EventService(session)
+            # Verify event belongs to admin's channel
+            event = await svc.get_by_id(event_id, channel_id=channel.id)
+            if event is None:
+                await message.answer("Мероприятие не найдено в вашем канале.")
+                return
             event = await svc.set_active(event_id, activate)
             await session.commit()
-
-        if event is None:
-            await message.answer("Мероприятие не найдено.")
-            return
 
         verb = "включено" if activate else "отключено"
         await message.answer(f"✅ Мероприятие «{event.title}» {verb}.")
@@ -567,6 +606,12 @@ class TelegramBot(PlatformBot):
         if not self._is_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
+
+        channel = await self._get_admin_channel(message.from_user.id)
+        if not channel:
+            await message.answer("❌ У вас нет канала с активной подпиской.")
+            return
+
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
             await message.answer("Укажите ID мероприятия: /stats &lt;id&gt;")
@@ -580,15 +625,14 @@ class TelegramBot(PlatformBot):
         async with async_session_factory() as session:
             svc = EventService(session)
             try:
+                event = await svc.get_by_id(event_id, channel_id=channel.id)
+                if event is None:
+                    await message.answer("Мероприятие не найдено в вашем канале.")
+                    return
                 stats = await svc.get_event_stats(event_id)
-                event = await svc.get_by_id(event_id)
             except ValueError as e:
                 await message.answer(f"❌ {e}")
                 return
-
-        if event is None:
-            await message.answer("Мероприятие не найдено.")
-            return
 
         active = stats["sold"] - stats["refunded"]
         text = (
@@ -606,17 +650,19 @@ class TelegramBot(PlatformBot):
     # ─── /repost_events ──────────────────────────────────────────────────
 
     async def admin_repost_events(self, message: types.Message):
-        """Repost all active event announcements to the channel."""
+        """Repost all active event announcements to the admin's channel."""
         if not self._is_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
-        if not self.channel.is_configured:
-            await message.answer("❌ Канал не настроен.")
+
+        channel = await self._get_admin_channel(message.from_user.id)
+        if not channel:
+            await message.answer("❌ У вас нет канала с активной подпиской.")
             return
 
         async with async_session_factory() as session:
             svc = EventService(session)
-            events = await svc.list_upcoming()
+            events = await svc.list_upcoming(channel_id=channel.id)
 
         if not events:
             await message.answer("Нет активных мероприятий для анонса.")
@@ -625,7 +671,7 @@ class TelegramBot(PlatformBot):
         posted = 0
         for event in events:
             try:
-                await self.channel.post_event_announcement(event)
+                await self.channel.post_event_announcement(event, channel.telegram_channel_id)
                 posted += 1
             except Exception as e:
                 logger.error("Ошибка репоста %s: %s", event.id, e)
@@ -634,6 +680,192 @@ class TelegramBot(PlatformBot):
             f"✅ Анонсы перепощены в канал: {posted}/{len(events)}",
             parse_mode="HTML",
         )
+
+    # ─── /subscribe (super-admin only) ────────────────────────────────────
+
+    async def admin_subscribe(self, message: types.Message):
+        """Activate a subscription for a user. Usage: /subscribe <telegram_user_id> <days>"""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+
+        args = message.text.split(maxsplit=2)
+        if len(args) < 3:
+            await message.answer("Использование: /subscribe &lt;telegram_user_id&gt; &lt;days&gt;")
+            return
+
+        try:
+            target_user_id = args[1].strip()
+            days = int(args[2].strip())
+            if days <= 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Укажите ID пользователя и количество дней (число > 0).")
+            return
+
+        # Find or create the user in our DB
+        async with async_session_factory() as session:
+            user_svc = UserService(session)
+            try:
+                user = await user_svc.get_or_create(
+                    platform=PlatformType.telegram,
+                    platform_user_id=target_user_id,
+                )
+
+                # Get or create a channel for this user
+                channel_svc = ChannelService(session)
+                channels = await channel_svc.get_channels_by_admin(target_user_id)
+
+                if channels:
+                    # Update existing channel's subscription
+                    channel = await channel_svc.activate_subscription(channels[0].id, days)
+                    channel_name = channel.title or channel.telegram_channel_id
+                    text = (
+                        f"✅ Подписка активирована для канала {channel_name}!\n"
+                        f"Срок: {days} дней (до {channel.subscription_until.strftime('%d.%m.%Y')})"
+                    )
+                else:
+                    # Create a placeholder channel — admin will add bot later
+                    channel = await channel_svc.create(
+                        telegram_channel_id=f"pending_{target_user_id}",
+                        admin_telegram_user_id=target_user_id,
+                        title="(ожидает добавления бота)",
+                    )
+                    channel = await channel_svc.activate_subscription(channel.id, days)
+                    text = (
+                        f"✅ Подписка активирована для пользователя {target_user_id}!\n"
+                        f"Срок: {days} дней.\n"
+                        f"ℹ️ Пользователь должен добавить бота в канал для начала работы."
+                    )
+
+                await session.commit()
+
+                # Notify the target user
+                try:
+                    await self.bot.send_message(
+                        chat_id=int(target_user_id),
+                        text=(
+                            "🎉 <b>Подписка на TicketBot активирована!</b>\n\n"
+                            "1. Добавьте бота в ваш Telegram канал как администратора\n"
+                            "2. Напишите /start чтобы начать\n"
+                            "3. Используйте /create_event для создания мероприятий\n\n"
+                            f"Подписка действует до {channel.subscription_until.strftime('%d.%m.%Y')}"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    text += "\n\n⚠️ Не удалось уведомить пользователя (возможно, не начинал диалог)."
+
+                await message.answer(text, parse_mode="HTML")
+
+            except Exception as e:
+                await session.rollback()
+                await message.answer(f"❌ Ошибка: {e}")
+
+    # ─── /my_channels ─────────────────────────────────────────────────────
+
+    async def admin_my_channels(self, message: types.Message):
+        """Show the admin's channels and subscription status."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+
+        async with async_session_factory() as session:
+            channel_svc = ChannelService(session)
+            channels = await channel_svc.get_channels_by_admin(str(message.from_user.id))
+
+        if not channels:
+            await message.answer("У вас нет зарегистрированных каналов.")
+            return
+
+        lines = ["📢 <b>Ваши каналы:</b>\n"]
+        for ch in channels:
+            status = "🟢 Активна" if ch.is_subscription_active else "🔴 Неактивна"
+            until = ""
+            if ch.subscription_until:
+                until = f" до {ch.subscription_until.strftime('%d.%m.%Y')}"
+            lines.append(
+                f"📌 {ch.title or ch.telegram_channel_id}\n"
+                f"   {status}{until}\n"
+            )
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    # ═══════════════════════════════════════════════════════
+    # ХЕНДЛЕРЫ СОБЫТИЙ КАНАЛА
+    # ═══════════════════════════════════════════════════════
+
+    async def on_chat_member_update(self, chat_member: types.ChatMemberUpdated):
+        """Detect when bot is added to or removed from a channel."""
+        # We only care about channels
+        if chat_member.chat.type != "channel":
+            return
+
+        chat = chat_member.chat
+        adder_id = str(chat_member.from_user.id)
+
+        # Bot was added to a channel
+        if chat_member.new_chat_member.status == "member":
+            logger.info("Бот добавлен в канал %s пользователем %s", chat.id, adder_id)
+
+            async with async_session_factory() as session:
+                channel_svc = ChannelService(session)
+                channel = await channel_svc.get_by_telegram_id(str(chat.id))
+
+                if channel:
+                    # Channel already exists — check subscription
+                    if await channel_svc.is_subscription_valid(channel.id):
+                        # Update the telegram ID if it was a placeholder
+                        if channel.telegram_channel_id.startswith("pending_"):
+                            channel.telegram_channel_id = str(chat.id)
+                            channel.title = chat.title
+                            await session.commit()
+
+                        await self.bot.send_message(
+                            chat_id=chat.id,
+                            text=(
+                                "✅ <b>Подписка активна!</b>\n\n"
+                                "Бот готов к работе. Используйте /create_event "
+                                "в личных сообщениях с ботом для создания мероприятий."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    else:
+                        await self.bot.send_message(
+                            chat_id=chat.id,
+                            text=(
+                                "❌ <b>Подписка неактивна.</b>\n\n"
+                                "Обратитесь к администратору для оплаты подписки."
+                            ),
+                            parse_mode="HTML",
+                        )
+                else:
+                    # First time — create channel record
+                    channel = await channel_svc.create(
+                        telegram_channel_id=str(chat.id),
+                        admin_telegram_user_id=adder_id,
+                        title=chat.title,
+                    )
+                    await session.commit()
+
+                    # Notify the adder in DM
+                    try:
+                        await self.bot.send_message(
+                            chat_id=chat_member.from_user.id,
+                            text=(
+                                f"📢 Спасибо, что добавили бота в канал «{chat.title}»!\n\n"
+                                "Для активации подписки обратитесь к администратору.\n"
+                                "После активации вы сможете управлять мероприятиями "
+                                "через команды в личных сообщениях с ботом."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        logger.warning("Не удалось уведомить %s о добавлении в канал", adder_id)
+
+        # Bot was removed from a channel
+        elif chat_member.new_chat_member.status in ("left", "kicked"):
+            logger.info("Бот удалён из канала %s", chat.id)
 
     # ─── Callback-запросы (инлайн-кнопки) ────────────────────────────────
 
@@ -672,6 +904,7 @@ class TelegramBot(PlatformBot):
                     location=fsm_data.get("location"),
                     price=fsm_data["price"],
                     total_tickets=fsm_data["tickets"],
+                    channel_id=fsm_data["channel_id"],
                 )
                 await session.commit()
 
@@ -770,10 +1003,17 @@ class TelegramBot(PlatformBot):
     # ═══════════════════════════════════════════════════════
 
     async def channel_cmd_events(self, channel_post: types.Message):
-        """/events в канале — выводит список прямо в канал."""
+        """/events в канале — выводит список мероприятий этого канала."""
+        source_chat_id = str(channel_post.chat.id) if channel_post.chat else None
+
         async with async_session_factory() as session:
+            channel_svc = ChannelService(session)
+            channel = None
+            if source_chat_id:
+                channel = await channel_svc.get_by_telegram_id(source_chat_id)
+
             event_svc = EventService(session)
-            events = await event_svc.list_upcoming()
+            events = await event_svc.list_upcoming(channel_id=channel.id if channel else None)
 
         if not events:
             await channel_post.answer("😔 Нет предстоящих мероприятий.")
@@ -894,10 +1134,18 @@ class TelegramBot(PlatformBot):
             )
 
     async def _handle_channel_events(self, callback: types.CallbackQuery):
-        """Показать список мероприятий — в ЛС или подсказка."""
+        """Показать список мероприятий канала — в ЛС или подсказка."""
+        # Determine channel context from the message's chat
+        source_chat_id = str(callback.message.chat.id) if callback.message else None
+
         async with async_session_factory() as session:
+            channel_svc = ChannelService(session)
+            channel = None
+            if source_chat_id:
+                channel = await channel_svc.get_by_telegram_id(source_chat_id)
+
             event_svc = EventService(session)
-            events = await event_svc.list_upcoming()
+            events = await event_svc.list_upcoming(channel_id=channel.id if channel else None)
 
         if not events:
             await callback.answer("😔 Нет предстоящих мероприятий.", show_alert=True)
@@ -923,21 +1171,16 @@ class TelegramBot(PlatformBot):
     # ═══════════════════════════════════════════════════════
 
     async def post_announcement(self, event_id: UUID):
-        """Отправить анонс мероприятия в канал. Вызывается из seed/admin."""
+        """Отправить анонс мероприятия в его канал. Вызывается из seed/admin."""
         async with async_session_factory() as session:
+            from app.core.services import ChannelService
             event_svc = EventService(session)
             event = await event_svc.get_by_id(event_id)
-            if event:
-                await self.channel.post_event_announcement(event)
-
-    def _channel_link(self) -> str:
-        """Возвращает ссылку на канал или заглушку."""
-        cid = settings.telegram_channel_id
-        if not cid:
-            return ""
-        if cid.startswith("@"):
-            return f"👉 {cid}"
-        return f"👉 <a href='https://t.me/{cid}'>Канал</a>"
+            if event and event.channel_id:
+                channel_svc = ChannelService(session)
+                channel = await channel_svc.get_by_id(event.channel_id)
+                if channel:
+                    await self.channel.post_event_announcement(event, channel.telegram_channel_id)
 
     # ═══════════════════════════════════════════════════════
     # ЗАПУСК / ОСТАНОВКА
@@ -956,7 +1199,7 @@ class TelegramBot(PlatformBot):
                 self.channel.bot_username = me.username
                 await self.dp.start_polling(
                     self.bot,
-                    allowed_updates=["message", "channel_post", "callback_query"],
+                    allowed_updates=["message", "channel_post", "callback_query", "my_chat_member"],
                 )
                 return
             except Exception as e:

@@ -28,6 +28,27 @@ class PlatformType(str, enum.Enum):
     max = "max"
 
 
+class Channel(Base):
+    __tablename__ = "channels"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    telegram_channel_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    admin_telegram_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_subscription_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    subscription_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    events = relationship("Event", back_populates="channel", lazy="raise")
+
+    def __repr__(self):
+        return f"<Channel {self.telegram_channel_id}>"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -55,6 +76,9 @@ class Event(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -68,6 +92,7 @@ class Event(Base):
     )
 
     tickets = relationship("Ticket", back_populates="event", lazy="raise")
+    channel = relationship("Channel", back_populates="events", lazy="raise")
 
     def __repr__(self):
         return f"<Event {self.title}>"
