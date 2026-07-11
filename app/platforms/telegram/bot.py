@@ -57,6 +57,7 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.admin_deactivate, Command("deactivate"))
         self.dp.message.register(self.admin_activate, Command("activate"))
         self.dp.message.register(self.admin_stats, Command("stats"))
+        self.dp.message.register(self.admin_repost_events, Command("repost_events"))
 
         # ─── FSM: шаги создания мероприятия ────────────
         self.dp.message.register(self.fsm_title, CreateEvent.title)
@@ -356,7 +357,8 @@ class TelegramBot(PlatformBot):
             "/events_all — все мероприятия\n"
             "/stats &lt;id&gt; — статистика продаж\n"
             "/deactivate &lt;id&gt; — отключить мероприятие\n"
-            "/activate &lt;id&gt; — включить мероприятие"
+            "/activate &lt;id&gt; — включить мероприятие\n"
+            "/repost_events — перепостить анонсы в канал"
         )
         await message.answer(text, parse_mode="HTML")
 
@@ -600,6 +602,38 @@ class TelegramBot(PlatformBot):
             f"🟢 {'Активно' if event.is_active else 'Отключено'}"
         )
         await message.answer(text, parse_mode="HTML")
+
+    # ─── /repost_events ──────────────────────────────────────────────────
+
+    async def admin_repost_events(self, message: types.Message):
+        """Repost all active event announcements to the channel."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+        if not self.channel.is_configured:
+            await message.answer("❌ Канал не настроен.")
+            return
+
+        async with async_session_factory() as session:
+            svc = EventService(session)
+            events = await svc.list_upcoming()
+
+        if not events:
+            await message.answer("Нет активных мероприятий для анонса.")
+            return
+
+        posted = 0
+        for event in events:
+            try:
+                await self.channel.post_event_announcement(event)
+                posted += 1
+            except Exception as e:
+                logger.error("Ошибка репоста %s: %s", event.id, e)
+
+        await message.answer(
+            f"✅ Анонсы перепощены в канал: {posted}/{len(events)}",
+            parse_mode="HTML",
+        )
 
     # ─── Callback-запросы (инлайн-кнопки) ────────────────────────────────
 
