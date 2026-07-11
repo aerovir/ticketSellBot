@@ -185,23 +185,32 @@ jobs:
           EOSQL
           echo "✅ Схема синхронизирована"
 
-      - name: 🐘 Выдать права на таблицы
+      - name: 🗄️ Права на таблицы и очистка тестовых данных
         run: |
-          docker compose ${{ env.COMPOSE_FILES }} exec -T db psql -U postgres -d ticketbot -c "
+          docker compose ${{ env.COMPOSE_FILES }} exec -T db psql -U postgres -d ticketbot <<-EOSQL
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO tg_user;
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO vk_user;
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO max_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO tg_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO vk_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO max_user;
-          "
-          echo "✅ Права на таблицы выданы"
 
-      - name: 🌱 Накатить тестовые мероприятия
-        run: |
-          docker compose ${{ env.COMPOSE_FILES }} run --rm \
-            -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@db:5432/ticketbot" \
-            seed 2>&1 || echo "⚠️ Seed пропущен (возможно уже есть данные)"
+            -- Удалить тестовые seed-мероприятия (созданные seed.py)
+            DELETE FROM payments WHERE ticket_id IN (
+              SELECT t.id FROM tickets t JOIN events e ON t.event_id = e.id
+              WHERE e.title LIKE 'Концерт ''Рок-хиты''%' OR e.title LIKE 'Stand-up%' OR e.title LIKE 'Театральная%'
+                 OR e.title LIKE 'Фестиваль%' OR e.title LIKE 'Мастер-класс%' OR e.title LIKE 'Спектакль%'
+            );
+            DELETE FROM tickets WHERE event_id IN (
+              SELECT id FROM events
+              WHERE title LIKE 'Концерт ''Рок-хиты''%' OR title LIKE 'Stand-up%' OR title LIKE 'Театральная%'
+                 OR title LIKE 'Фестиваль%' OR title LIKE 'Мастер-класс%' OR title LIKE 'Спектакль%'
+            );
+            DELETE FROM events
+              WHERE title LIKE 'Концерт ''Рок-хиты''%' OR title LIKE 'Stand-up%' OR title LIKE 'Театральная%'
+                 OR title LIKE 'Фестиваль%' OR title LIKE 'Мастер-класс%' OR title LIKE 'Спектакль%';
+          EOSQL
+          echo "✅ Права выданы, тестовые данные очищены"
 
       - name: 🚀 Запустить Telegram бота
         run: |

@@ -359,6 +359,17 @@ class TelegramBot(PlatformBot):
             for channel in channels:
                 if await channel_svc.is_subscription_valid(channel.id):
                     return channel
+
+            # Fallback: admin has no channels but legacy channel exists with
+            # active subscription — adopt them as the admin of that channel.
+            # This handles migration from pre-multi-tenant setup.
+            legacy = await channel_svc.get_by_telegram_id("__legacy__")
+            if legacy and await channel_svc.is_subscription_valid(legacy.id):
+                legacy.admin_telegram_user_id = str(user_id)
+                await session.commit()
+                logger.info("Легаси-канал привязан к админу %s", user_id)
+                return legacy
+
         return None
 
     async def admin_menu(self, message: types.Message):
@@ -375,7 +386,7 @@ class TelegramBot(PlatformBot):
             "/activate &lt;id&gt; — включить мероприятие\n"
             "/repost_events — перепостить анонсы в канал\n"
             "/my_channels — мои каналы и подписка\n"
-            "/subscribe &lt;user_id&gt; &lt;days&gt; — активировать подписку (super-admin)"
+            "/subscribe &lt;channel_id&gt; &lt;days&gt; — активировать подписку для канала (super-admin)"
         )
         await message.answer(text, parse_mode="HTML")
 
@@ -684,77 +695,58 @@ class TelegramBot(PlatformBot):
     # ─── /subscribe (super-admin only) ────────────────────────────────────
 
     async def admin_subscribe(self, message: types.Message):
-        """Activate a subscription for a user. Usage: /subscribe <telegram_user_id> <days>"""
+        """Activate a subscription for a channel. Usage: /subscribe <channel_id> <days>"""
         if not self._is_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
         args = message.text.split(maxsplit=2)
         if len(args) < 3:
-            await message.answer("Использование: /subscribe &lt;telegram_user_id&gt; &lt;days&gt;")
+            await message.answer(
+                "Использование: /subscribe &lt;channel_id&gt; &lt;days&gt;\n\n"
+                "channel_id — @username канала или его числовой ID\n"
+                "Пример: /subscribe @my_channel 30"
+            )
             return
 
         try:
-            target_user_id = args[1].strip()
+            channel_telegram_id = args[1].strip()
             days = int(args[2].strip())
             if days <= 0:
                 raise ValueError
         except ValueError:
-            await message.answer("❌ Укажите ID пользователя и количество дней (число > 0).")
+            await message.answer("❌ Укажите ID канала и количество дней (число > 0).")
             return
 
-        # Find or create the user in our DB
         async with async_session_factory() as session:
-            user_svc = UserService(session)
             try:
-                user = await user_svc.get_or_create(
-                    platform=PlatformType.telegram,
-                    platform_user_id=target_user_id,
-                )
-
-                # Get or create a channel for this user
                 channel_svc = ChannelService(session)
-                channels = await channel_svc.get_channels_by_admin(target_user_id)
+                channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
 
-                if channels:
+                if channel:
                     # Update existing channel's subscription
-                    channel = await channel_svc.activate_subscription(channels[0].id, days)
+                    channel = await channel_svc.activate_subscription(channel.id, days)
                     channel_name = channel.title or channel.telegram_channel_id
+                    await session.commit()
                     text = (
                         f"✅ Подписка активирована для канала {channel_name}!\n"
                         f"Срок: {days} дней (до {channel.subscription_until.strftime('%d.%m.%Y')})"
                     )
                 else:
-                    # Create a placeholder channel — admin will add bot later
+                    # Create a new channel record with subscription
                     channel = await channel_svc.create(
-                        telegram_channel_id=f"pending_{target_user_id}",
-                        admin_telegram_user_id=target_user_id,
-                        title="(ожидает добавления бота)",
+                        telegram_channel_id=channel_telegram_id,
+                        admin_telegram_user_id=str(message.from_user.id),
+                        title=f"Канал {channel_telegram_id}",
                     )
                     channel = await channel_svc.activate_subscription(channel.id, days)
+                    await session.commit()
                     text = (
-                        f"✅ Подписка активирована для пользователя {target_user_id}!\n"
+                        f"✅ Подписка активирована для канала {channel_telegram_id}!\n"
                         f"Срок: {days} дней.\n"
-                        f"ℹ️ Пользователь должен добавить бота в канал для начала работы."
+                        f"ℹ️ Владелец канала должен добавить бота в канал для начала работы.\n"
+                        f"   После добавления бот привяжет канал к пользователю."
                     )
-
-                await session.commit()
-
-                # Notify the target user
-                try:
-                    await self.bot.send_message(
-                        chat_id=int(target_user_id),
-                        text=(
-                            "🎉 <b>Подписка на TicketBot активирована!</b>\n\n"
-                            "1. Добавьте бота в ваш Telegram канал как администратора\n"
-                            "2. Напишите /start чтобы начать\n"
-                            "3. Используйте /create_event для создания мероприятий\n\n"
-                            f"Подписка действует до {channel.subscription_until.strftime('%d.%m.%Y')}"
-                        ),
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    text += "\n\n⚠️ Не удалось уведомить пользователя (возможно, не начинал диалог)."
 
                 await message.answer(text, parse_mode="HTML")
 
@@ -815,11 +807,12 @@ class TelegramBot(PlatformBot):
                 if channel:
                     # Channel already exists — check subscription
                     if await channel_svc.is_subscription_valid(channel.id):
-                        # Update the telegram ID if it was a placeholder
-                        if channel.telegram_channel_id.startswith("pending_"):
+                        # Update admin and channel info if needed
+                        if channel.telegram_channel_id.startswith("pending_") or channel.telegram_channel_id == "__legacy__":
                             channel.telegram_channel_id = str(chat.id)
-                            channel.title = chat.title
-                            await session.commit()
+                        channel.admin_telegram_user_id = adder_id
+                        channel.title = chat.title
+                        await session.commit()
 
                         await self.bot.send_message(
                             chat_id=chat.id,
