@@ -891,37 +891,60 @@ class TelegramBot(PlatformBot):
 
         # ─── Админ: подтвердить создание ────────────────
         if data == "admin:confirm_create":
+            # Сначала подтверждаем callback, чтобы пользователь
+            # сразу увидел обратную связь
+            await callback.answer()
+
             fsm_data = await state.get_data()
+            # Проверяем, что state не потерян (например, после рестарта бота)
+            if not fsm_data or "date" not in fsm_data:
+                await callback.message.edit_text(
+                    "❌ Сессия создания мероприятия истекла. Начните заново: /create_event"
+                )
+                await state.clear()
+                return
+
             from datetime import datetime
             event_date = datetime.fromisoformat(fsm_data["date"])
 
-            async with async_session_factory() as session:
-                svc = EventService(session)
-                event = await svc.create(
-                    title=fsm_data["title"],
-                    description=fsm_data.get("description"),
-                    date=event_date,
-                    location=fsm_data.get("location"),
-                    price=fsm_data["price"],
-                    total_tickets=fsm_data["tickets"],
-                    channel_id=fsm_data["channel_id"],
+            try:
+                async with async_session_factory() as session:
+                    svc = EventService(session)
+                    event = await svc.create(
+                        title=fsm_data["title"],
+                        description=fsm_data.get("description"),
+                        date=event_date,
+                        location=fsm_data.get("location"),
+                        price=fsm_data["price"],
+                        total_tickets=fsm_data["tickets"],
+                        channel_id=fsm_data["channel_id"],
+                    )
+                    await session.commit()
+            except Exception as e:
+                await callback.message.edit_text(
+                    f"❌ Ошибка при создании мероприятия: {e}"
                 )
-                await session.commit()
+                await state.clear()
+                return
 
             await state.clear()
-            await callback.answer()
             await callback.message.edit_text(
                 f"✅ Мероприятие «{event.title}» создано!\n"
                 f"ID: <code>{event.id}</code>",
                 parse_mode="HTML",
             )
-            await self.post_announcement(event.id)
+            # Анонс отправляем после всего — если упадёт, пользователь
+            # уже получил подтверждение
+            try:
+                await self.post_announcement(event.id)
+            except Exception as e:
+                logger.error("Ошибка отправки анонса для %s: %s", event.id, e)
             return
 
         # ─── Админ: отмена создания ─────────────────────
         if data == "admin:cancel_create":
-            await state.clear()
             await callback.answer()
+            await state.clear()
             await callback.message.edit_text("❌ Создание отменено.")
             return
 
