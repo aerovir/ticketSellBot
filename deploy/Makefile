@@ -59,7 +59,7 @@ deploy: ## Полный деплой: БД → init-db → seed → Telegram
 		-e DB_PASSWORD_MAX="${DB_PASSWORD_MAX}" \
 		db bash /app/scripts/init-db-roles.sh 2>/dev/null || true
 	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml run --rm \
-		app python -m bot.seed 2>/dev/null || true
+		seed 2>/dev/null || true
 	docker compose -f ../docker-compose.yml -f docker-compose.prod.yml up -d telegram
 	@echo "✅ Деплой Telegram завершён"
 
@@ -73,6 +73,6 @@ deploy-beget: ## Полный деплой на Beget
 		-e DB_PASSWORD_MAX="${DB_PASSWORD_MAX}" \
 		db bash /app/scripts/init-db-roles.sh 2>/dev/null || true
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml run --rm \
-		app python -m bot.seed 2>/dev/null || true
+		seed 2>/dev/null || true
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d telegram
 	@echo "✅ Деплой Telegram на Beget завершён"

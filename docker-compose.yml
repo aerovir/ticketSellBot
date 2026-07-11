@@ -28,7 +28,7 @@ services:
       db:
         condition: service_healthy
     env_file: .env.telegram
-    command: ["python", "-m", "bot.telegram"]
+    command: ["python", "-m", "app.bot.telegram"]
     labels:
       description: "TicketBot — Telegram"
 
@@ -41,7 +41,7 @@ services:
       db:
         condition: service_healthy
     env_file: .env.vk
-    command: ["python", "-m", "bot.vk"]
+    command: ["python", "-m", "app.bot.vk"]
     profiles:
       - all
     labels:
@@ -56,7 +56,7 @@ services:
       db:
         condition: service_healthy
     env_file: .env.max
-    command: ["python", "-m", "bot.max"]
+    command: ["python", "-m", "app.bot.max"]
     profiles:
       - all
     labels:
@@ -72,7 +72,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ticketbot
       TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
-    command: ["python", "-m", "bot.seed"]
+    command: ["python", "-m", "app.bot.seed"]
     profiles:
       - seed
 
@@ -85,7 +85,7 @@ services:
       db:
         condition: service_healthy
     env_file: .env.telegram
-    command: ["python", "-m", "bot.web"]
+    command: ["python", "-m", "app.bot.web"]
     ports:
       - "8080:8080"
     profiles:
