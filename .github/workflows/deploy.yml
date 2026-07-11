@@ -154,32 +154,36 @@ jobs:
           "
           echo "✅ Роли PostgreSQL созданы"
 
-      - name: 🗄️ Накатить миграции (alembic upgrade head)
+      - name: 🗄️ Накатить миграции
         run: |
+          # Ставим alembic stamp на head (создаёт alembic_version если нет)
           docker compose ${{ env.COMPOSE_FILES }} run --rm \
             -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@db:5432/ticketbot" \
             --entrypoint python \
             telegram -c "
-          import os, sys
           from alembic.config import Config
           from alembic import command
           cfg = Config('alembic.ini')
           cfg.set_main_option('sqlalchemy.url', 'postgresql+asyncpg://postgres:postgres@db:5432/ticketbot')
-          try:
-              command.upgrade(cfg, 'head')
-              print('✅ Миграции накатаны')
-          except Exception as e:
-              # Tables already exist (from init_db) but alembic tracking is missing.
-              # Stamp current head (schema already matches) and retry.
-              if 'already exists' in str(e).lower():
-                  print('⚠️  Таблицы уже существуют, штампуем head...')
-                  command.stamp(cfg, 'head')
-                  command.upgrade(cfg, 'head')
-                  print('✅ Миграции накатаны (существующая БД)')
-              else:
-                  print(f'❌ Ошибка миграции: {e}')
-                  sys.exit(1)
+          command.stamp(cfg, 'head')
+          print('✅ Миграции заштампованы')
           " 2>&1
+
+      - name: 🗄️ Синхронизировать схему БД
+        run: |
+          # init_db() не добавляет колонки в существующие таблицы.
+          # Применяем изменения идемпотентно через IF NOT EXISTS.
+          docker compose ${{ env.COMPOSE_FILES }} exec -T db psql -U postgres -d ticketbot <<-EOSQL
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS channel_id UUID REFERENCES channels(id);
+
+            INSERT INTO channels (id, telegram_channel_id, title, admin_telegram_user_id, is_subscription_active)
+            SELECT gen_random_uuid(), '__legacy__', 'Legacy Default Channel', '0', true
+            WHERE NOT EXISTS (SELECT 1 FROM channels WHERE telegram_channel_id = '__legacy__');
+
+            UPDATE events SET channel_id = (SELECT id FROM channels WHERE telegram_channel_id = '__legacy__')
+            WHERE channel_id IS NULL;
+          EOSQL
+          echo "✅ Схема синхронизирована"
 
       - name: 🐘 Выдать права на таблицы
         run: |
