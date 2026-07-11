@@ -160,14 +160,25 @@ jobs:
             -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@db:5432/ticketbot" \
             --entrypoint python \
             telegram -c "
-          import os
-          os.environ['DATABASE_URL'] = 'postgresql+asyncpg://postgres:postgres@db:5432/ticketbot'
+          import os, sys
           from alembic.config import Config
           from alembic import command
           cfg = Config('alembic.ini')
-          cfg.set_main_option('sqlalchemy.url', os.environ['DATABASE_URL'])
-          command.upgrade(cfg, 'head')
-          print('✅ Миграции накатаны');
+          cfg.set_main_option('sqlalchemy.url', 'postgresql+asyncpg://postgres:postgres@db:5432/ticketbot')
+          try:
+              command.upgrade(cfg, 'head')
+              print('✅ Миграции накатаны')
+          except Exception as e:
+              # Existing DB has tables (from init_db) but no alembic stamp —
+              # stamp at 0001 (current schema matches 0001), then upgrade to head
+              if 'already exists' in str(e):
+                  print('⚠️  Таблицы уже существуют, штампуем 0001...')
+                  command.stamp(cfg, '0001')
+                  command.upgrade(cfg, 'head')
+                  print('✅ Миграции накатаны (существующая БД)')
+              else:
+                  print(f'❌ Ошибка миграции: {e}')
+                  sys.exit(1)
           " 2>&1
 
       - name: 🐘 Выдать права на таблицы
