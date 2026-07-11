@@ -207,5 +207,36 @@
   - Создание ролей (psql heredoc)
   - Выдача прав на таблицы (psql -c)
   - Проверка работоспособности (ps, logs)
+- **Коммит:** `96384b8` — fix: add COMPOSE_FILES to all docker compose commands in deploy
+- **Связанные ошибки:** нет
+
+---
+
+## 016 — ModuleNotFoundError: No module named 'bot' (неверный Python-модуль в docker-compose)
+
+- **Дата:** 2026-07-11
+- **Статус:** ✅ Исправлено
+- **Описание:** При деплое контейнер telegram падает с циклическим перезапуском:
+  ```
+  /usr/local/bin/python: Error while finding module specification for 'bot.telegram'
+  (ModuleNotFoundError: No module named 'bot')
+  ```
+  Контейнер уходит в `Restarting (1)` и не поднимается.
+- **Анализ:**
+  - **Подтверждено (`Dockerfile:6`, `docker-compose.yml:30`, `docker-compose.yml:44`, `docker-compose.yml:58`, `docker-compose.yml:68`, `docker-compose.yml:78`):**
+    - В Dockerfile: `WORKDIR=/app`, `PYTHONPATH=/app`
+    - Код проекта копируется в `/app`, реальная структура: `/app/app/bot/telegram.py` — то есть пакет `app.bot.telegram`
+    - Команды в docker-compose.yml: `python -m bot.telegram` — поиск идёт по пути `/app/bot/telegram.py` (не существует)
+    - Ранее, когда `bot/` лежал в корне репозитория, команда `python -m bot.telegram` работала. После реструктуризации (перенос `bot/` под `app/`) docker-compose.yml не обновлён.
+  - Причина: несоответствие между PYTHONPATH и фактическим расположением модулей после реструктуризации.
+- **Исправление (подтверждено: `docker-compose.yml:30,44,58,68,78`):**
+  Все команды `python -m bot.xxx` заменены на `python -m app.bot.xxx`:
+  ```yaml
+  # Было:
+  command: ["python", "-m", "bot.telegram"]
+  # Стало:
+  command: ["python", "-m", "app.bot.telegram"]
+  ```
+  Изменены сервисы: `telegram`, `vk`, `max`, `seed`, `web`.
 - **Коммит:** (текущий)
 - **Связанные ошибки:** нет
