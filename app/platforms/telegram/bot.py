@@ -31,6 +31,11 @@ class CreateEvent(StatesGroup):
     confirm = State()
 
 
+class BroadcastFSM(StatesGroup):
+    """FSM для отправки рассылки во все каналы."""
+    text = State()
+
+
 class TelegramBot(PlatformBot):
     def __init__(self):
         if not settings.telegram_token:
@@ -50,7 +55,7 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.cmd_my_tickets, Command("my_tickets"))
         self.dp.message.register(self.cmd_cancel, Command("cancel"))
 
-        # ─── Админ-команды ─────────────────────────────
+        # ─── Админ-команды (текстовые) ────────────────
         self.dp.message.register(self.admin_menu, Command("admin"))
         self.dp.message.register(self.admin_create_event, Command("create_event"))
         self.dp.message.register(self.admin_events_all, Command("events_all"))
@@ -61,6 +66,20 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.admin_subscribe, Command("subscribe"))
         self.dp.message.register(self.admin_unsubscribe, Command("unsubscribe"))
         self.dp.message.register(self.admin_my_channels, Command("my_channels"))
+
+        # ─── Супер-админ команды (текстовые) ─────────
+        self.dp.message.register(self.sa_stats_all, Command("stats_all"))
+        self.dp.message.register(self.sa_list_channels, Command("list_channels"))
+        self.dp.message.register(self.sa_channel_info, Command("channel_info"))
+        self.dp.message.register(self.sa_user_info, Command("user_info"))
+        self.dp.message.register(self.sa_admin_cancel, Command("admin_cancel"))
+        self.dp.message.register(self.sa_broadcast, Command("broadcast"))
+        self.dp.message.register(self.sa_health, Command("health"))
+        self.dp.message.register(self.sa_check_expired, Command("check_expired"))
+        self.dp.message.register(self.sa_change_admin, Command("change_admin"))
+
+        # ─── Обработчик текстового ввода для broadcast ──
+        self.dp.message.register(self._handle_broadcast_input, StateFilter(BroadcastFSM.text))
 
         # ─── Обновления участников канала (my_chat_member) ──
         self.dp.my_chat_member.register(self.on_chat_member_update)
@@ -76,6 +95,7 @@ class TelegramBot(PlatformBot):
 
         # Отмена во время FSM
         self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(CreateEvent))
+        self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(BroadcastFSM))
 
         # ─── Callback-запросы (инлайн-кнопки) ──────────
         self.dp.callback_query.register(self.cmd_callback)
@@ -363,7 +383,6 @@ class TelegramBot(PlatformBot):
 
             # Fallback: admin has no channels but legacy channel exists with
             # active subscription — adopt them as the admin of that channel.
-            # This handles migration from pre-multi-tenant setup.
             legacy = await channel_svc.get_by_telegram_id("__legacy__")
             if legacy and await channel_svc.is_subscription_valid(legacy.id):
                 legacy.admin_telegram_user_id = str(user_id)
@@ -373,24 +392,416 @@ class TelegramBot(PlatformBot):
 
         return None
 
+    async def _is_channel_admin(self, user_id: int) -> bool:
+        """Check if user has at least one channel with active subscription."""
+        if self._is_admin(user_id):
+            return True
+        channel = await self._get_admin_channel(user_id)
+        return channel is not None
+
+    def _admin_menu_kb(self, is_super: bool) -> InlineKeyboardMarkup:
+        """Build admin menu keyboard. Super-admin sees all buttons."""
+        rows = []
+
+        # --- Статистика ---
+        stats_row = [
+            InlineKeyboardButton(text="📊 Общая статистика", callback_data="admin_menu:stats_all"),
+            InlineKeyboardButton(text="🔍 Проверить подписки", callback_data="admin_menu:check_expired"),
+        ]
+        rows.append(stats_row)
+        rows.append([
+            InlineKeyboardButton(text="📋 Список каналов", callback_data="admin_menu:list_channels"),
+        ])
+
+        if is_super:
+            rows.append([
+                InlineKeyboardButton(text="ℹ️ Инфо о канале", callback_data="admin_menu:channel_info"),
+                InlineKeyboardButton(text="👥 Инфо о пользователе", callback_data="admin_menu:user_info"),
+            ])
+            # --- Управление подписками ---
+            rows.append([
+                InlineKeyboardButton(text="🟢 Подписать", callback_data="admin_menu:subscribe"),
+                InlineKeyboardButton(text="🔴 Отписать", callback_data="admin_menu:unsubscribe"),
+            ])
+            rows.append([
+                InlineKeyboardButton(text="🔄 Сменить админа", callback_data="admin_menu:change_admin"),
+            ])
+            # --- Действия ---
+            rows.append([
+                InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_menu:broadcast"),
+                InlineKeyboardButton(text="🩺 Здоровье", callback_data="admin_menu:health"),
+            ])
+            rows.append([
+                InlineKeyboardButton(text="✅ Отменить билет", callback_data="admin_menu:admin_cancel"),
+            ])
+
+        # --- Общие для всех админов ---
+        rows.append([
+            InlineKeyboardButton(text="🎫 Создать мероприятие", callback_data="admin_menu:create_event"),
+            InlineKeyboardButton(text="📋 Мои мероприятия", callback_data="admin_menu:events_all"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="🔄 Репост анонсов", callback_data="admin_menu:repost_events"),
+            InlineKeyboardButton(text="📢 Мои каналы", callback_data="admin_menu:my_channels"),
+        ])
+
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     async def admin_menu(self, message: types.Message):
-        """Show admin panel menu."""
+        """Show admin panel with inline buttons."""
+        user_id = message.from_user.id
+        is_super = self._is_admin(user_id)
+
+        if not is_super:
+            ch = await self._get_admin_channel(user_id)
+            if not ch:
+                await message.answer("У вас нет доступа к панели администратора.")
+                return
+
+        title = "🎫 <b>Панель управления</b>\n\n"
+        if is_super:
+            title += "<i>Полный доступ (супер-админ)</i>"
+        else:
+            title += "<i>Управление вашим каналом</i>"
+
+        kb = self._admin_menu_kb(is_super)
+        await message.answer(title, parse_mode="HTML", reply_markup=kb)
+
+    # ═══════════════════════════════════════════════════════
+    # СУПЕР-АДМИН КОМАНДЫ
+    # ═══════════════════════════════════════════════════════
+
+    async def sa_stats_all(self, message: types.Message):
+        """Global statistics: channels, events, tickets, users."""
         if not self._is_admin(message.from_user.id):
-            await message.answer("У вас нет доступа к панели администратора.")
+            await message.answer("У вас нет доступа.")
             return
+
+        async with async_session_factory() as session:
+            from sqlalchemy import select, func
+
+            # Users count
+            result = await session.execute(select(func.count()).select_from(User))
+            users_count = result.scalar() or 0
+
+            # Channels count
+            result = await session.execute(select(func.count()).select_from(Channel))
+            ch_count = result.scalar() or 0
+
+            # Active subscriptions
+            result = await session.execute(
+                select(func.count()).select_from(Channel).where(Channel.is_subscription_active == True)
+            )
+            active_subs = result.scalar() or 0
+
+            # Events count
+            result = await session.execute(select(func.count()).select_from(Event))
+            events_count = result.scalar() or 0
+
+            # Upcoming events
+            result = await session.execute(
+                select(func.count()).select_from(Event).where(Event.date >= datetime.now(timezone.utc))
+            )
+            upcoming = result.scalar() or 0
+
+            # Active tickets
+            result = await session.execute(
+                select(func.count()).select_from(Ticket).where(Ticket.status == TicketStatus.active)
+            )
+            tickets_active = result.scalar() or 0
+
+            # Total revenue (from completed payments)
+            result = await session.execute(
+                select(func.coalesce(func.sum(Payment.amount), 0))
+                .where(Payment.status == PaymentStatus.completed)
+            )
+            revenue = float(result.scalar() or 0)
+
         text = (
-            "🎫 <b>Панель администратора</b>\n\n"
-            "/create_event — создать мероприятие\n"
-            "/events_all — все мероприятия\n"
-            "/stats &lt;id&gt; — статистика продаж\n"
-            "/deactivate &lt;id&gt; — отключить мероприятие\n"
-            "/activate &lt;id&gt; — включить мероприятие\n"
-            "/repost_events — перепостить анонсы в канал\n"
-            "/my_channels — мои каналы и подписка\n"
-            "/subscribe &lt;channel_id&gt; &lt;days&gt; — активировать подписку (super-admin)\n"
-            "/unsubscribe &lt;channel_id&gt; — отключить подписку (super-admin)"
+            "📊 <b>Общая статистика</b>\n\n"
+            f"👥 Пользователей: {users_count}\n"
+            f"📢 Каналов: {ch_count} (активных подписок: {active_subs})\n"
+            f"🎫 Мероприятий: {events_count} (предстоящих: {upcoming})\n"
+            f"🎟 Активных билетов: {tickets_active}\n"
+            f"💰 Выручка: {revenue:.0f}₽"
         )
         await message.answer(text, parse_mode="HTML")
+
+    async def sa_list_channels(self, message: types.Message):
+        """List all channels with subscription status."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        async with async_session_factory() as session:
+            from sqlalchemy import select, func
+            result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
+            channels = list(result.scalars().all())
+
+        if not channels:
+            await message.answer("Нет зарегистрированных каналов.")
+            return
+
+        lines = ["📋 <b>Все каналы:</b>\n"]
+        for ch in channels:
+            status = "🟢" if ch.is_subscription_active else "🔴"
+            admin_display = ch.admin_telegram_user_id[:8] + "..." if len(ch.admin_telegram_user_id) > 8 else ch.admin_telegram_user_id
+            lines.append(
+                f"{status} {ch.title or ch.telegram_channel_id}\n"
+                f"   Админ: {admin_display}\n"
+                f"   Подписка: {'до ' + ch.subscription_until.strftime('%d.%m.%Y') if ch.subscription_until else 'нет'}\n"
+            )
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    async def sa_channel_info(self, message: types.Message):
+        """Show channel details. Usage: /channel_info <channel_id>"""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer("Укажите ID канала: /channel_info &lt;channel_id&gt;")
+            return
+
+        channel_telegram_id = args[1].strip()
+        async with async_session_factory() as session:
+            channel_svc = ChannelService(session)
+            channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
+
+            if not channel:
+                await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
+                return
+
+            # Events count for this channel
+            from sqlalchemy import select, func
+            result = await session.execute(
+                select(func.count()).select_from(Event).where(Event.channel_id == channel.id)
+            )
+            events_count = result.scalar() or 0
+
+            result = await session.execute(
+                select(func.count()).select_from(Event)
+                .where(Event.channel_id == channel.id, Event.date >= datetime.now(timezone.utc))
+            )
+            upcoming = result.scalar() or 0
+
+            # Tickets sold for this channel's events
+            result = await session.execute(
+                select(func.count()).select_from(Ticket)
+                .join(Event, Ticket.event_id == Event.id)
+                .where(Event.channel_id == channel.id, Ticket.status == TicketStatus.active)
+            )
+            tickets_sold = result.scalar() or 0
+
+        sub_status = "🟢 Активна" if channel.is_subscription_active else "🔴 Неактивна"
+        sub_until = f" до {channel.subscription_until.strftime('%d.%m.%Y')}" if channel.subscription_until else ""
+        text = (
+            f"ℹ️ <b>Канал: {channel.title or channel.telegram_channel_id}</b>\n\n"
+            f"🆔 {channel.telegram_channel_id}\n"
+            f"👤 Админ: <code>{channel.admin_telegram_user_id}</code>\n"
+            f"📊 {sub_status}{sub_until}\n"
+            f"🎫 Мероприятий: {events_count} (предстоящих: {upcoming})\n"
+            f"🎟 Продано билетов: {tickets_sold}"
+        )
+        await message.answer(text, parse_mode="HTML")
+
+    async def sa_user_info(self, message: types.Message):
+        """Show user info. Usage: /user_info <telegram_user_id>"""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer("Укажите Telegram ID: /user_info &lt;user_id&gt;")
+            return
+
+        user_tg_id = args[1].strip()
+        async with async_session_factory() as session:
+            from sqlalchemy import select, func
+            user_svc = UserService(session)
+            try:
+                user = await user_svc.get_or_create(PlatformType.telegram, user_tg_id)
+            except Exception:
+                user = None
+
+            channel_svc = ChannelService(session)
+            channels = await channel_svc.get_channels_by_admin(user_tg_id)
+
+            text = f"👤 <b>Пользователь: {user_tg_id}</b>\n\n"
+            if user:
+                text += f"Имя: {user.name or '—'}\n"
+                text += f"Внутренний ID: <code>{user.id}</code>\n"
+
+            if channels:
+                text += f"\n📢 <b>Каналы ({len(channels)}):</b>\n"
+                for ch in channels:
+                    status = "🟢" if ch.is_subscription_active else "🔴"
+                    text += f"{status} {ch.title or ch.telegram_channel_id}\n"
+            else:
+                text += "\n📢 Нет зарегистрированных каналов."
+
+        await message.answer(text, parse_mode="HTML")
+
+    async def sa_admin_cancel(self, message: types.Message):
+        """Admin cancel any ticket. Usage: /admin_cancel <ticket_id>"""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer("Укажите ID билета: /admin_cancel &lt;ticket_id&gt;")
+            return
+
+        try:
+            ticket_id = UUID(args[1])
+        except ValueError:
+            await message.answer("Неверный ID билета.")
+            return
+
+        async with async_session_factory() as session:
+            ticket_svc = TicketService(session)
+            try:
+                ticket = await ticket_svc.admin_cancel_ticket(ticket_id)
+                await session.commit()
+                await message.answer(f"✅ Билет <code>{ticket_id}</code> возвращён.", parse_mode="HTML")
+            except ValueError as e:
+                await message.answer(f"❌ {e}")
+
+    async def sa_broadcast(self, message: types.Message, state: FSMContext):
+        """Broadcast a message to all bot users via their DMs."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        await state.set_state(BroadcastFSM.text)
+        await message.answer(
+            "📢 <b>Рассылка</b>\n\n"
+            "Отправьте сообщение, которое будет разослано во все каналы.\n"
+            "Или отправьте /cancel для отмены.",
+            parse_mode="HTML",
+        )
+
+    async def _handle_broadcast_input(self, message: types.Message, state: FSMContext):
+        """Handle broadcast text input."""
+        text = message.text
+        if text.strip().lower() == "/cancel":
+            await state.clear()
+            await message.answer("❌ Рассылка отменена.")
+            return
+
+        if not text.strip():
+            await message.answer("❌ Сообщение не может быть пустым.")
+            return
+
+        await state.clear()
+
+        # Send to all channels
+        async with async_session_factory() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(Channel).where(Channel.is_subscription_active == True))
+            channels = list(result.scalars().all())
+
+        if not channels:
+            await message.answer("Нет активных каналов для рассылки.")
+            return
+
+        sent = 0
+        for ch in channels:
+            try:
+                await self.bot.send_message(
+                    chat_id=ch.telegram_channel_id,
+                    text=f"📢 <b>Сообщение администрации</b>\n\n{text}",
+                    parse_mode="HTML",
+                )
+                sent += 1
+            except Exception as e:
+                logger.error("Ошибка рассылки в %s: %s", ch.telegram_channel_id, e)
+
+        await message.answer(f"✅ Сообщение отправлено в {sent}/{len(channels)} каналов.")
+
+    async def sa_health(self, message: types.Message):
+        """Check bot health status."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        text = (
+            "🩺 <b>Здоровье бота</b>\n\n"
+            "🤖 Статус: ✅ Работает\n"
+            f"👤 Username: @{self._bot_username or 'неизвестно'}\n\n"
+        )
+        try:
+            async with async_session_factory() as session:
+                from sqlalchemy import text as sqltext
+                await session.execute(sqltext("SELECT 1"))
+                text += "🗄 База данных: ✅ Подключена\n"
+        except Exception as e:
+            text += f"🗄 База данных: ❌ Ошибка: {e}\n"
+
+        text += "\nДоступные команды: /admin"
+
+        await message.answer(text, parse_mode="HTML")
+
+    async def sa_check_expired(self, message: types.Message):
+        """Check and deactivate expired subscriptions."""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        async with async_session_factory() as session:
+            channel_svc = ChannelService(session)
+            from sqlalchemy import select
+            result = await session.execute(
+                select(Channel).where(Channel.is_subscription_active == True)
+            )
+            channels = list(result.scalars().all())
+
+            deactivated = 0
+            for ch in channels:
+                if not await channel_svc.is_subscription_valid(ch.id):
+                    deactivated += 1
+
+            await session.commit()
+
+        await message.answer(
+            f"🔍 Проверка завершена.\n"
+            f"📢 Всего каналов: {len(channels)}\n"
+            f"🔄 Отключено просроченных: {deactivated}",
+        )
+
+    async def sa_change_admin(self, message: types.Message):
+        """Change channel admin. Usage: /change_admin <channel_id> <new_user_id>"""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа.")
+            return
+
+        args = message.text.split(maxsplit=2)
+        if len(args) < 3:
+            await message.answer("Использование: /change_admin &lt;channel_id&gt; &lt;new_user_id&gt;")
+            return
+
+        channel_telegram_id = args[1].strip()
+        new_admin_id = args[2].strip()
+
+        async with async_session_factory() as session:
+            channel_svc = ChannelService(session)
+            channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
+            if not channel:
+                await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
+                return
+
+            old_admin = channel.admin_telegram_user_id
+            channel.admin_telegram_user_id = new_admin_id
+            await session.commit()
+
+            await message.answer(
+                f"✅ Админ канала {channel.title or channel.telegram_channel_id} изменён:\n"
+                f"{old_admin} → {new_admin_id}"
+            )
 
     # ─── FSM: Создание мероприятия ──────────────────────────────────────
 
@@ -982,6 +1393,63 @@ class TelegramBot(PlatformBot):
             await callback.answer()
             await state.clear()
             await callback.message.edit_text("❌ Создание отменено.")
+            return
+
+        # ─── Админ-меню: навигация по кнопкам ───────────
+        if data.startswith("admin_menu:"):
+            await callback.answer()
+            action = data.split(":", 1)[1]
+
+            if action == "back":
+                is_super = self._is_admin(callback.from_user.id)
+                kb = self._admin_menu_kb(is_super)
+                title = "🎫 <b>Панель управления</b>\n\n<i>Выберите действие:</i>"
+                await callback.message.edit_text(title, parse_mode="HTML", reply_markup=kb)
+                return
+
+            user_id = callback.from_user.id
+            is_super = self._is_admin(user_id)
+
+            if not is_super:
+                ch = await self._get_admin_channel(user_id)
+                if not ch:
+                    await callback.message.edit_text("У вас нет доступа.")
+                    return
+
+            # Actions that require super-admin
+            super_only = {
+                "stats_all", "check_expired", "list_channels",
+                "channel_info", "user_info", "subscribe", "unsubscribe",
+                "change_admin", "broadcast", "health", "admin_cancel",
+            }
+            if action in super_only and not is_super:
+                await callback.message.edit_text("❌ У вас нет доступа к этому разделу.")
+                return
+
+            # Map actions to instruction messages
+            commands_info = {
+                "stats_all": "📊 Используйте: /stats_all",
+                "check_expired": "🔍 Используйте: /check_expired",
+                "list_channels": "📋 Используйте: /list_channels",
+                "channel_info": "ℹ️ Используйте: /channel_info @channel",
+                "user_info": "👥 Используйте: /user_info &lt;user_id&gt;",
+                "subscribe": "🟢 Используйте: /subscribe @channel &lt;days&gt;",
+                "unsubscribe": "🔴 Используйте: /unsubscribe @channel",
+                "change_admin": "🔄 Используйте: /change_admin @channel &lt;new_admin_id&gt;",
+                "broadcast": "📢 Используйте: /broadcast",
+                "health": "🩺 Используйте: /health",
+                "admin_cancel": "✅ Используйте: /admin_cancel &lt;ticket_id&gt;",
+                "create_event": "🎫 Используйте: /create_event\n\nПошаговое создание мероприятия.",
+                "events_all": "📋 Используйте: /events_all\n\nМероприятия вашего канала.",
+                "repost_events": "🔄 Используйте: /repost_events\n\nПерепост анонсов в канал.",
+                "my_channels": "📢 Используйте: /my_channels\n\nВаши каналы и подписка.",
+            }
+
+            msg = commands_info.get(action, "Команда не найдена.")
+            back_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="admin_menu:back")],
+            ])
+            await callback.message.edit_text(msg, parse_mode="HTML", reply_markup=back_kb)
             return
 
         # ─── Навигация по страницам мероприятий ──────────
