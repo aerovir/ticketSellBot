@@ -184,5 +184,28 @@
   - Ошибка говорит "httpx2", но имеется в виду пакет `httpx` версии 2.x (современный). `fastapi.testclient` требует `httpx>=0.28`.
 - **Исправление (подтверждено: pyproject.toml:24):**
   Добавлена строка `"httpx>=0.28"` в `dev`-зависимости.
+- **Коммит:** `7bb4543` — fix: add httpx to dev dependencies for FastAPI TestClient
+- **Связанные ошибки:** нет
+
+---
+
+## 015 — Deploy: service "app" has neither an image nor a build context (docker compose exec без COMPOSE_FILES)
+
+- **Дата:** 2026-07-10
+- **Статус:** ✅ Исправлено
+- **Описание:** Деплой падает на шаге «Создать роли PostgreSQL» с ошибкой:
+  ```
+  service "app" has neither an image nor a build context specified: invalid compose project
+  ```
+  Лог показывает, что команда `docker compose exec -T db bash -c "..."` запущена без флагов `-f`.
+- **Анализ:**
+  - **Гипотеза:** `docker compose exec` без `${{ env.COMPOSE_FILES }}` пытается перепарсить compose-файлы. На self-hosted runner находит неполный compose-проект (например, файл `compose.yaml` вне репозитория) и падает.
+  - **Подтверждено (`deploy.yml:128, 171, 118, 203, 205, 208`):** Все `docker compose exec`, `ps`, `logs` команды используют только дефолтный `docker-compose.yml` без Beget-override. При этом проект создан с `-f docker-compose.yml -f deploy/docker-compose.beget.yml`.
+- **Исправление (подтверждено: .github/workflows/deploy.yml):**
+  Добавлен `${{ env.COMPOSE_FILES }}` (`-f docker-compose.yml -f deploy/docker-compose.beget.yml`) во все `docker compose` команды:
+  - Ожидание PostgreSQL (pg_isready)
+  - Создание ролей (psql heredoc)
+  - Выдача прав на таблицы (psql -c)
+  - Проверка работоспособности (ps, logs)
 - **Коммит:** (текущий)
 - **Связанные ошибки:** нет

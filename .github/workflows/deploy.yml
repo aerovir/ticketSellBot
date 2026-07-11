@@ -115,7 +115,7 @@ jobs:
       - name: ⏳ Ожидание PostgreSQL
         run: |
           for i in $(seq 1 30); do
-            if docker compose exec -T db pg_isready -U postgres -d ticketbot &>/dev/null; then
+            if docker compose ${{ env.COMPOSE_FILES }} exec -T db pg_isready -U postgres -d ticketbot &>/dev/null; then
               echo "✅ PostgreSQL готов!"
               break
             fi
@@ -125,7 +125,7 @@ jobs:
 
       - name: 🗄️ Создать роли PostgreSQL
         run: |
-          docker compose exec -T db bash -c "
+          docker compose ${{ env.COMPOSE_FILES }} exec -T db bash -c "
           psql -U postgres -d ticketbot <<-EOSQL
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'tg_user') THEN
@@ -168,7 +168,7 @@ jobs:
 
       - name: 🐘 Выдать права на таблицы
         run: |
-          docker compose exec -T db psql -U postgres -d ticketbot -c "
+          docker compose ${{ env.COMPOSE_FILES }} exec -T db psql -U postgres -d ticketbot -c "
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO tg_user;
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO vk_user;
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO max_user;
@@ -200,11 +200,11 @@ jobs:
       - name: 🩺 Проверка работоспособности
         run: |
           sleep 5
-          if docker compose ps | grep -q "telegram.*Up"; then
+          if docker compose ${{ env.COMPOSE_FILES }} ps | grep -q "telegram.*Up"; then
             echo "✅ Telegram бот работает!"
-            docker compose logs --tail 10 telegram
+            docker compose ${{ env.COMPOSE_FILES }} logs --tail 10 telegram
           else
             echo "❌ Telegram бот не запустился!"
-            docker compose logs telegram
+            docker compose ${{ env.COMPOSE_FILES }} logs telegram
             exit 1
           fi
