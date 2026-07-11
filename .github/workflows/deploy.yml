@@ -199,12 +199,22 @@ jobs:
 
       - name: 🩺 Проверка работоспособности
         run: |
-          sleep 5
-          if docker compose ${{ env.COMPOSE_FILES }} ps | grep -q "telegram.*Up"; then
-            echo "✅ Telegram бот работает!"
-            docker compose ${{ env.COMPOSE_FILES }} logs --tail 10 telegram
-          else
-            echo "❌ Telegram бот не запустился!"
-            docker compose ${{ env.COMPOSE_FILES }} logs telegram
-            exit 1
-          fi
+          echo "⏳ Ожидание запуска Telegram бота (до 45с)..."
+          for i in $(seq 1 15); do
+            sleep 3
+            STATUS=$(docker compose ${{ env.COMPOSE_FILES }} ps --format '{{.Service}}\t{{.Status}}' 2>/dev/null | grep "^telegram" | head -1)
+            if echo "$STATUS" | grep -qiE "up\b"; then
+              echo "✅ Telegram бот работает! Статус: $STATUS"
+              docker compose ${{ env.COMPOSE_FILES }} logs --tail 5 telegram
+              exit 0
+            fi
+            echo "  попытка $i/15 — статус: $STATUS"
+          done
+          echo "❌ Telegram бот не запустился за отведённое время."
+          echo ""
+          echo "--- docker compose ps ---"
+          docker compose ${{ env.COMPOSE_FILES }} ps
+          echo ""
+          echo "--- логи контейнера ---"
+          docker compose ${{ env.COMPOSE_FILES }} logs --tail 50 telegram
+          exit 1
