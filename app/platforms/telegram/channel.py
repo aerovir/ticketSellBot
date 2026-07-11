@@ -11,8 +11,7 @@ import logging
 from uuid import UUID
 
 from aiogram import Bot
-from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton
-from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.config import settings
 from app.core.database import async_session_factory
@@ -51,20 +50,16 @@ class ChannelManager:
             f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}"
         )
 
-        # Inline-кнопки: покупка в личку + детали
-        lines = []
-        if self.bot_username:
-            buy_url = f"https://t.me/{self.bot_username}?start=buy_{event.id}"
-            lines.append(InlineKeyboardButton(
-                text="🎟 Купить билет",
-                url=buy_url,
-            ))
-        lines.append(InlineKeyboardButton(
-            text="📋 Все мероприятия",
-            callback_data=f"ev_page:0",
-        ))
-
-        kb = InlineKeyboardMarkup(inline_keyboard=[lines]) if lines else None
+        # Inline-кнопки: всё в канале через callback_data
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎟 Купить", callback_data=f"channel_buy:{event.id}"),
+                InlineKeyboardButton(text="🎫 Мои билеты", callback_data="channel_my_tickets"),
+            ],
+            [
+                InlineKeyboardButton(text="📋 Все мероприятия", callback_data="channel_events"),
+            ],
+        ])
 
         try:
             await self.bot.send_message(

@@ -607,6 +607,22 @@ class TelegramBot(PlatformBot):
         """Handle all callback queries."""
         data = callback.data
 
+        # ─── Канал: покупка билета (из анонса) ──────────
+        if data.startswith("channel_buy:"):
+            event_id = UUID(data.split(":", 1)[1])
+            await self._handle_channel_buy(callback, event_id)
+            return
+
+        # ─── Канал: мои билеты ─────────────────────────
+        if data == "channel_my_tickets":
+            await self._handle_channel_my_tickets(callback)
+            return
+
+        # ─── Канал: все мероприятия ────────────────────
+        if data == "channel_events":
+            await self._handle_channel_events(callback)
+            return
+
         # ─── Админ: подтвердить создание ────────────────
         if data == "admin:confirm_create":
             fsm_data = await state.get_data()
@@ -776,6 +792,97 @@ class TelegramBot(PlatformBot):
         )
 
         await channel_post.answer(text, parse_mode="HTML")
+
+    # ═══════════════════════════════════════════════════════
+    # ХЕНДЛЕРЫ ДЛЯ КАНАЛА (callback-кнопки в анонсах)
+    # ═══════════════════════════════════════════════════════
+
+    async def _handle_channel_buy(self, callback: types.CallbackQuery, event_id: UUID):
+        """Покупка билета из канала — по кнопке в анонсе."""
+        try:
+            user_id = await self._resolve_user_id(
+                str(callback.from_user.id),
+                callback.from_user.full_name or "",
+            )
+        except Exception:
+            await callback.answer(
+                "ℹ️ Напишите @username бота /start, чтобы начать покупку билетов.",
+                show_alert=True,
+            )
+            return
+
+        async with async_session_factory() as session:
+            ticket_svc = TicketService(session)
+            try:
+                ticket = await ticket_svc.buy_ticket(user_id, event_id)
+                await session.commit()
+                await callback.answer(
+                    f"✅ Билет куплен! Номер: {ticket.id}",
+                    show_alert=True,
+                )
+            except ValueError as e:
+                await callback.answer(f"❌ {e}", show_alert=True)
+
+    async def _handle_channel_my_tickets(self, callback: types.CallbackQuery):
+        """Показать билеты пользователя — в ЛС или подсказка."""
+        try:
+            user_id = await self._resolve_user_id(
+                str(callback.from_user.id),
+                callback.from_user.full_name or "",
+            )
+        except Exception:
+            await callback.answer(
+                "ℹ️ Напишите @username бота /start, чтобы увидеть билеты.",
+                show_alert=True,
+            )
+            return
+
+        async with async_session_factory() as session:
+            ticket_svc = TicketService(session)
+            tickets = await ticket_svc.get_user_tickets(user_id)
+
+        if not tickets:
+            await callback.answer("У вас нет билетов.", show_alert=True)
+            return
+
+        try:
+            await self._send_tickets(
+                lambda text, **kw: self.bot.send_message(
+                    chat_id=callback.from_user.id, text=text, **kw,
+                ),
+                tickets,
+            )
+            await callback.answer("📨 Список билетов отправлен в личные сообщения.", show_alert=False)
+        except Exception:
+            await callback.answer(
+                "ℹ️ Напишите @username бота /start, чтобы увидеть билеты.",
+                show_alert=True,
+            )
+
+    async def _handle_channel_events(self, callback: types.CallbackQuery):
+        """Показать список мероприятий — в ЛС или подсказка."""
+        async with async_session_factory() as session:
+            event_svc = EventService(session)
+            events = await event_svc.list_upcoming()
+
+        if not events:
+            await callback.answer("😔 Нет предстоящих мероприятий.", show_alert=True)
+            return
+
+        try:
+            await self._send_event_page(
+                lambda text, **kw: self.bot.send_message(
+                    chat_id=callback.from_user.id, text=text, **kw,
+                ),
+                events,
+                page=0,
+            )
+            await callback.answer("📨 Список мероприятий отправлен в личные сообщения.", show_alert=False)
+        except Exception:
+            await callback.answer(
+                "ℹ️ Напишите @username бота /start, чтобы увидеть мероприятия.",
+                show_alert=True,
+            )
 
     # ═══════════════════════════════════════════════════════
     # ПУБЛИЧНЫЕ МЕТОДЫ
