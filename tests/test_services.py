@@ -55,7 +55,7 @@ class TestUserService:
 # ═══════════════════════════════════════════════════════════════
 
 class TestEventService:
-    async def test_create_event(self, db_session, event_svc):
+    async def test_create_event(self, db_session, event_svc, sample_channel):
         """Создание мероприятия."""
         future = datetime.now(timezone.utc) + timedelta(days=10)
         event = await event_svc.create(
@@ -65,6 +65,7 @@ class TestEventService:
             location="Москва",
             price=2000.0,
             total_tickets=50,
+            channel_id=sample_channel.id,
         )
         assert event.title == "Концерт"
         assert event.available_tickets == 50
@@ -174,13 +175,14 @@ class TestTicketService:
         assert payment.amount == sample_event.price
         assert payment.status == PaymentStatus.completed
 
-    async def test_buy_ticket_sold_out(self, db_session, ticket_svc, sample_user, event_svc):
+    async def test_buy_ticket_sold_out(self, db_session, ticket_svc, sample_user, event_svc, sample_channel):
         """Покупка при отсутствии билетов."""
         # Создаём мероприятие с 0 билетов
         future = datetime.now(timezone.utc) + timedelta(days=10)
         event = await event_svc.create(
             title="Sold Out", description=None, date=future, price=0,
             total_tickets=0, location="Msk",
+            channel_id=sample_channel.id,
         )
         await db_session.commit()
 
@@ -226,12 +228,13 @@ class TestTicketService:
         # Check that available_tickets decreased
         assert result["ticket_id"] != ""
 
-    async def test_buy_ticket_webapp_sold_out(self, db_session, ticket_svc, sample_user, event_svc):
+    async def test_buy_ticket_webapp_sold_out(self, db_session, ticket_svc, sample_user, event_svc, sample_channel):
         """Покупка через Mini App при отсутствии билетов."""
         future = datetime.now(timezone.utc) + timedelta(days=10)
         event = await event_svc.create(
             title="Sold Out WA", description=None, date=future, price=0,
             total_tickets=0, location="Msk",
+            channel_id=sample_channel.id,
         )
         await db_session.commit()
 

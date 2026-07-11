@@ -198,10 +198,16 @@ class TestAdminCommands:
     async def test_deactivate_no_id(self, telegram_bot, mock_message):
         """/deactivate без ID."""
         mock_message.text = "/deactivate"
-        with patch(
-            "app.platforms.telegram.bot.settings.admin_telegram_ids",
-            "12345",
+        with (
+            patch(
+                "app.platforms.telegram.bot.settings.admin_telegram_ids",
+                "12345",
+            ),
+            patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock) as mock_get_channel,
         ):
+            mock_channel = Mock()
+            mock_channel.id = uuid.uuid4()
+            mock_get_channel.return_value = mock_channel
             await telegram_bot.admin_deactivate(mock_message)
 
         mock_message.answer.assert_awaited_once()
@@ -210,10 +216,16 @@ class TestAdminCommands:
     async def test_activate_no_id(self, telegram_bot, mock_message):
         """/activate без ID."""
         mock_message.text = "/activate"
-        with patch(
-            "app.platforms.telegram.bot.settings.admin_telegram_ids",
-            "12345",
+        with (
+            patch(
+                "app.platforms.telegram.bot.settings.admin_telegram_ids",
+                "12345",
+            ),
+            patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock) as mock_get_channel,
         ):
+            mock_channel = Mock()
+            mock_channel.id = uuid.uuid4()
+            mock_get_channel.return_value = mock_channel
             await telegram_bot.admin_activate(mock_message)
 
         mock_message.answer.assert_awaited_once()
@@ -222,10 +234,16 @@ class TestAdminCommands:
     async def test_stats_no_id(self, telegram_bot, mock_message):
         """/stats без ID."""
         mock_message.text = "/stats"
-        with patch(
-            "app.platforms.telegram.bot.settings.admin_telegram_ids",
-            "12345",
+        with (
+            patch(
+                "app.platforms.telegram.bot.settings.admin_telegram_ids",
+                "12345",
+            ),
+            patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock) as mock_get_channel,
         ):
+            mock_channel = Mock()
+            mock_channel.id = uuid.uuid4()
+            mock_get_channel.return_value = mock_channel
             await telegram_bot.admin_stats(mock_message)
 
         mock_message.answer.assert_awaited_once()
@@ -239,10 +257,17 @@ class TestAdminCommands:
 class TestChannelCommands:
     async def test_channel_events_empty(self, telegram_bot, mock_message):
         """/events в канале без мероприятий."""
-        with patch(
-            "app.platforms.telegram.bot.EventService.list_upcoming",
-            new_callable=AsyncMock,
-            return_value=[],
+        with (
+            patch(
+                "app.platforms.telegram.bot.EventService.list_upcoming",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "app.platforms.telegram.bot.ChannelService.get_by_telegram_id",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             await telegram_bot.channel_cmd_events(mock_message)
 

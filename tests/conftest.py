@@ -24,9 +24,9 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
-from app.core.models import Base, User, Event, Ticket
+from app.core.models import Base, User, Event, Ticket, Channel
 from app.core.models import PlatformType
-from app.core.services import UserService, EventService, TicketService
+from app.core.services import UserService, EventService, TicketService, ChannelService
 
 
 # ─── Настройка тестовой БД ─────────────────────────────────────
@@ -99,6 +99,18 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 # ─── Фабрики моделей ────────────────────────────────────────────
 
 @pytest_asyncio.fixture
+async def sample_channel(db_session: AsyncSession) -> Channel:
+    """Создаёт тестовый канал."""
+    svc = ChannelService(db_session)
+    channel = await svc.create(
+        telegram_channel_id="test_channel_1",
+        admin_telegram_user_id="test_12345",
+        title="Test Channel",
+    )
+    return channel
+
+
+@pytest_asyncio.fixture
 async def sample_user(db_session: AsyncSession) -> User:
     """Создаёт тестового пользователя."""
     svc = UserService(db_session)
@@ -111,7 +123,7 @@ async def sample_user(db_session: AsyncSession) -> User:
 
 
 @pytest_asyncio.fixture
-async def sample_event(db_session: AsyncSession) -> Event:
+async def sample_event(db_session: AsyncSession, sample_channel: Channel) -> Event:
     """Создаёт тестовое мероприятие."""
     svc = EventService(db_session)
     event = await svc.create(
@@ -121,12 +133,13 @@ async def sample_event(db_session: AsyncSession) -> Event:
         location="Москва",
         price=1000.0,
         total_tickets=100,
+        channel_id=sample_channel.id,
     )
     return event
 
 
 @pytest_asyncio.fixture
-async def sample_past_event(db_session: AsyncSession) -> Event:
+async def sample_past_event(db_session: AsyncSession, sample_channel: Channel) -> Event:
     """Создаёт прошедшее мероприятие."""
     svc = EventService(db_session)
     event = await svc.create(
@@ -136,6 +149,7 @@ async def sample_past_event(db_session: AsyncSession) -> Event:
         location="Москва",
         price=500.0,
         total_tickets=10,
+        channel_id=sample_channel.id,
     )
     return event
 
