@@ -59,6 +59,7 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.admin_stats, Command("stats"))
         self.dp.message.register(self.admin_repost_events, Command("repost_events"))
         self.dp.message.register(self.admin_subscribe, Command("subscribe"))
+        self.dp.message.register(self.admin_unsubscribe, Command("unsubscribe"))
         self.dp.message.register(self.admin_my_channels, Command("my_channels"))
 
         # ─── Обновления участников канала (my_chat_member) ──
@@ -386,7 +387,8 @@ class TelegramBot(PlatformBot):
             "/activate &lt;id&gt; — включить мероприятие\n"
             "/repost_events — перепостить анонсы в канал\n"
             "/my_channels — мои каналы и подписка\n"
-            "/subscribe &lt;channel_id&gt; &lt;days&gt; — активировать подписку для канала (super-admin)"
+            "/subscribe &lt;channel_id&gt; &lt;days&gt; — активировать подписку (super-admin)\n"
+            "/unsubscribe &lt;channel_id&gt; — отключить подписку (super-admin)"
         )
         await message.answer(text, parse_mode="HTML")
 
@@ -749,6 +751,47 @@ class TelegramBot(PlatformBot):
                     )
 
                 await message.answer(text, parse_mode="HTML")
+
+            except Exception as e:
+                await session.rollback()
+                await message.answer(f"❌ Ошибка: {e}")
+
+    # ─── /unsubscribe (super-admin only) ──────────────────────────────────
+
+    async def admin_unsubscribe(self, message: types.Message):
+        """Deactivate a subscription for a channel. Usage: /unsubscribe <channel_id>"""
+        if not self._is_admin(message.from_user.id):
+            await message.answer("У вас нет доступа к панели администратора.")
+            return
+
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer(
+                "Использование: /unsubscribe &lt;channel_id&gt;\n\n"
+                "channel_id — @username канала или его числовой ID\n"
+                "Пример: /unsubscribe @my_channel"
+            )
+            return
+
+        channel_telegram_id = args[1].strip()
+
+        async with async_session_factory() as session:
+            try:
+                channel_svc = ChannelService(session)
+                channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
+
+                if channel is None:
+                    await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
+                    return
+
+                await channel_svc.deactivate_subscription(channel.id)
+                await session.commit()
+
+                channel_name = channel.title or channel.telegram_channel_id
+                await message.answer(
+                    f"✅ Подписка отключена для канала {channel_name}.\n"
+                    f"Бот останется в канале, но новые мероприятия создавать нельзя."
+                )
 
             except Exception as e:
                 await session.rollback()
