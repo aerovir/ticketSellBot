@@ -240,3 +240,23 @@
   Изменены сервисы: `telegram`, `vk`, `max`, `seed`, `web`.
 - **Коммит:** (текущий)
 - **Связанные ошибки:** нет
+
+---
+
+## 017 — ADMIN_TELEGRAM_IDS пустой в контейнере (переопределяется compose override)
+
+- **Дата:** 2026-07-11
+- **Статус:** ✅ Исправлено
+- **Описание:** В контейнере `ticketbot-telegram` переменная `ADMIN_TELEGRAM_IDS` пустая, хотя в GitHub Secrets значение задано, и `.env.telegram` создаётся из секрета. Админ-команды (`/repost_events`, `/admin`) отвечают «У вас нет доступа к панели администратора».
+- **Анализ:**
+  - **Подтверждено (`deploy/docker-compose.beget.yml:38-39`):** В beget override для сервиса `telegram` указан блок:
+    ```yaml
+    environment:
+      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
+    ```
+  - Docker Compose при merge даёт приоритет `environment` над `env_file`. Значение из `.env.telegram` затирается.
+  - Переменная `${ADMIN_TELEGRAM_IDS}` не задана в shell окружении раннера → раскрывается в пустую строку.
+- **Исправление (подтверждено: `deploy/docker-compose.beget.yml:38-39`):**
+  Удалён блок `environment` у сервиса `telegram` в beget override. Значение `ADMIN_TELEGRAM_IDS` теперь берётся из `.env.telegram`, который создаётся на шаге деплоя из GitHub Secret.
+- **Коммит:** (текущий)
+- **Связанные ошибки:** нет
