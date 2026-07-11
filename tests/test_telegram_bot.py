@@ -164,7 +164,8 @@ class TestAdminCommands:
     async def test_admin_menu_unauthorized(self, telegram_bot, mock_message):
         """Обычный пользователь не может открыть админку."""
         mock_message.from_user.id = 99999  # не админ
-        await telegram_bot.admin_menu(mock_message)
+        with patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=None):
+            await telegram_bot.admin_menu(mock_message)
 
         mock_message.answer.assert_awaited_once_with(
             "У вас нет доступа к панели администратора."
