@@ -171,7 +171,7 @@ class TestAdminCommands:
         )
 
     async def test_admin_menu_authorized(self, telegram_bot, mock_message):
-        """Администратор видит меню."""
+        """Администратор видит меню с кнопками."""
         with patch(
             "app.platforms.telegram.bot.settings.admin_telegram_ids",
             "12345",
@@ -181,8 +181,10 @@ class TestAdminCommands:
 
         mock_message.answer.assert_awaited_once()
         text = mock_message.answer.call_args[0][0]
-        assert "Панель администратора" in text
-        assert "/create_event" in text
+        assert "Панель управления" in text
+        # Check that reply_markup exists
+        kwargs = mock_message.answer.call_args[1]
+        assert "reply_markup" in kwargs
 
     async def test_admin_create_event_unauthorized(self, telegram_bot, mock_message):
         """Обычный пользователь не может создать мероприятие."""
