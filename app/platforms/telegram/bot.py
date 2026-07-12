@@ -8,6 +8,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from sqlalchemy import select, func
+
 from app.config import settings
 from app.core.database import async_session_factory
 from app.core.models import PlatformType, Channel
@@ -1433,7 +1435,6 @@ class TelegramBot(PlatformBot):
 
             if action == "stats_all":
                 async with async_session_factory() as session:
-                    from sqlalchemy import select, func
                     users_c = (await session.execute(select(func.count()).select_from(User))).scalar() or 0
                     ch_c = (await session.execute(select(func.count()).select_from(Channel))).scalar() or 0
                     active_subs = (await session.execute(
