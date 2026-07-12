@@ -1426,30 +1426,199 @@ class TelegramBot(PlatformBot):
                 await callback.message.edit_text("❌ У вас нет доступа к этому разделу.")
                 return
 
-            # Map actions to instruction messages
-            commands_info = {
-                "stats_all": "📊 Используйте: /stats_all",
-                "check_expired": "🔍 Используйте: /check_expired",
-                "list_channels": "📋 Используйте: /list_channels",
-                "channel_info": "ℹ️ Используйте: /channel_info @channel",
-                "user_info": "👥 Используйте: /user_info &lt;user_id&gt;",
-                "subscribe": "🟢 Используйте: /subscribe @channel &lt;days&gt;",
-                "unsubscribe": "🔴 Используйте: /unsubscribe @channel",
-                "change_admin": "🔄 Используйте: /change_admin @channel &lt;new_admin_id&gt;",
-                "broadcast": "📢 Используйте: /broadcast",
-                "health": "🩺 Используйте: /health",
-                "admin_cancel": "✅ Используйте: /admin_cancel &lt;ticket_id&gt;",
-                "create_event": "🎫 Используйте: /create_event\n\nПошаговое создание мероприятия.",
-                "events_all": "📋 Используйте: /events_all\n\nМероприятия вашего канала.",
-                "repost_events": "🔄 Используйте: /repost_events\n\nПерепост анонсов в канал.",
-                "my_channels": "📢 Используйте: /my_channels\n\nВаши каналы и подписка.",
-            }
-
-            msg = commands_info.get(action, "Команда не найдена.")
             back_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="admin_menu:back")],
             ])
-            await callback.message.edit_text(msg, parse_mode="HTML", reply_markup=back_kb)
+            edit = callback.message.edit_text
+
+            if action == "stats_all":
+                async with async_session_factory() as session:
+                    from sqlalchemy import select, func
+                    users_c = (await session.execute(select(func.count()).select_from(User))).scalar() or 0
+                    ch_c = (await session.execute(select(func.count()).select_from(Channel))).scalar() or 0
+                    active_subs = (await session.execute(
+                        select(func.count()).select_from(Channel).where(Channel.is_subscription_active == True)
+                    )).scalar() or 0
+                    ev_c = (await session.execute(select(func.count()).select_from(Event))).scalar() or 0
+                    upcoming = (await session.execute(
+                        select(func.count()).select_from(Event).where(Event.date >= datetime.now(timezone.utc))
+                    )).scalar() or 0
+                    tickets_active = (await session.execute(
+                        select(func.count()).select_from(Ticket).where(Ticket.status == TicketStatus.active)
+                    )).scalar() or 0
+                    revenue = float((await session.execute(
+                        select(func.coalesce(func.sum(Payment.amount), 0))
+                        .where(Payment.status == PaymentStatus.completed)
+                    )).scalar() or 0)
+                await edit(
+                    "📊 <b>Общая статистика</b>\n\n"
+                    f"👥 Пользователей: {users_c}\n"
+                    f"📢 Каналов: {ch_c} (активных подписок: {active_subs})\n"
+                    f"🎫 Мероприятий: {ev_c} (предстоящих: {upcoming})\n"
+                    f"🎟 Активных билетов: {tickets_active}\n"
+                    f"💰 Выручка: {revenue:.0f}₽",
+                    parse_mode="HTML", reply_markup=back_kb,
+                )
+                return
+
+            if action == "check_expired":
+                async with async_session_factory() as session:
+                    channel_svc = ChannelService(session)
+                    result = await session.execute(
+                        select(Channel).where(Channel.is_subscription_active == True)
+                    )
+                    channels = list(result.scalars().all())
+                    deactivated = 0
+                    for ch in channels:
+                        if not await channel_svc.is_subscription_valid(ch.id):
+                            deactivated += 1
+                    await session.commit()
+                await edit(
+                    f"🔍 Проверка завершена.\n"
+                    f"📢 Всего каналов: {len(channels)}\n"
+                    f"🔄 Отключено просроченных: {deactivated}",
+                    reply_markup=back_kb,
+                )
+                return
+
+            if action == "list_channels":
+                async with async_session_factory() as session:
+                    result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
+                    channels = list(result.scalars().all())
+                if not channels:
+                    await edit("Нет зарегистрированных каналов.", reply_markup=back_kb)
+                    return
+                lines = ["📋 <b>Все каналы:</b>\n"]
+                for ch in channels:
+                    status = "🟢" if ch.is_subscription_active else "🔴"
+                    admin_display = ch.admin_telegram_user_id[:8] + "..." if len(ch.admin_telegram_user_id) > 8 else ch.admin_telegram_user_id
+                    lines.append(
+                        f"{status} {ch.title or ch.telegram_channel_id}\n"
+                        f"   Админ: {admin_display}\n"
+                        f"   Подписка: {'до ' + ch.subscription_until.strftime('%d.%m.%Y') if ch.subscription_until else 'нет'}\n"
+                    )
+                await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
+                return
+
+            if action == "health":
+                text = (
+                    "🩺 <b>Здоровье бота</b>\n\n"
+                    "🤖 Статус: ✅ Работает\n"
+                    f"👤 Username: @{self._bot_username or 'неизвестно'}\n\n"
+                )
+                try:
+                    async with async_session_factory() as session:
+                        from sqlalchemy import text as sqltext
+                        await session.execute(sqltext("SELECT 1"))
+                    text += "🗄 База данных: ✅ Подключена\n"
+                except Exception:
+                    text += "🗄 База данных: ❌ Ошибка\n"
+                await edit(text, parse_mode="HTML", reply_markup=back_kb)
+                return
+
+            if action == "events_all":
+                ch = await self._get_admin_channel(user_id)
+                if not ch:
+                    await edit("❌ У вас нет канала с активной подпиской.", reply_markup=back_kb)
+                    return
+                async with async_session_factory() as session:
+                    svc = EventService(session)
+                    events = await svc.list_all(channel_id=ch.id)
+                if not events:
+                    await edit("Нет мероприятий.", reply_markup=back_kb)
+                    return
+                lines = ["🎫 <b>Все мероприятия:</b>\n"]
+                for e in events:
+                    status = "🟢" if e.is_active else "🔴"
+                    date_str = e.date.strftime("%d.%m.%Y %H:%M")
+                    lines.append(
+                        f"{status} <b>{e.title}</b>\n"
+                        f"📅 {date_str}\n"
+                        f"🎟 {e.available_tickets}/{e.total_tickets}\n"
+                    )
+                await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
+                return
+
+            if action == "repost_events":
+                ch = await self._get_admin_channel(user_id)
+                if not ch:
+                    await edit("❌ У вас нет канала с активной подпиской.", reply_markup=back_kb)
+                    return
+                async with async_session_factory() as session:
+                    svc = EventService(session)
+                    events = await svc.list_upcoming(channel_id=ch.id)
+                if not events:
+                    await edit("Нет активных мероприятий для анонса.", reply_markup=back_kb)
+                    return
+                posted = 0
+                for ev in events:
+                    try:
+                        await self.channel.post_event_announcement(ev, ch.telegram_channel_id)
+                        posted += 1
+                    except Exception as e:
+                        logger.error("Ошибка репоста %s: %s", ev.id, e)
+                await edit(f"✅ Анонсы перепощены в канал: {posted}/{len(events)}", reply_markup=back_kb)
+                return
+
+            if action == "my_channels":
+                async with async_session_factory() as session:
+                    channel_svc = ChannelService(session)
+                    channels = await channel_svc.get_channels_by_admin(str(user_id))
+                if not channels:
+                    await edit("У вас нет зарегистрированных каналов.", reply_markup=back_kb)
+                    return
+                lines = ["📢 <b>Ваши каналы:</b>\n"]
+                for ch in channels:
+                    status = "🟢 Активна" if ch.is_subscription_active else "🔴 Неактивна"
+                    until = ""
+                    if ch.subscription_until:
+                        until = f" до {ch.subscription_until.strftime('%d.%m.%Y')}"
+                    lines.append(
+                        f"📌 {ch.title or ch.telegram_channel_id}\n"
+                        f"   {status}{until}\n"
+                    )
+                await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
+                return
+
+            # ─── FSM: create_event ────────────────────────────────────
+            if action == "create_event":
+                ch = await self._get_admin_channel(user_id)
+                if not ch:
+                    await edit("❌ У вас нет канала с активной подпиской.", reply_markup=back_kb)
+                    return
+                await state.update_data(channel_id=ch.id)
+                await state.set_state(CreateEvent.title)
+                await callback.message.answer(
+                    "📝 Введите <b>название</b> мероприятия:",
+                    parse_mode="HTML",
+                )
+                return
+
+            # ─── FSM: broadcast ──────────────────────────────────────
+            if action == "broadcast":
+                await state.set_state(BroadcastFSM.text)
+                await callback.message.answer(
+                    "📢 <b>Рассылка</b>\n\n"
+                    "Отправьте сообщение, которое будет разослано во все каналы.\n"
+                    "Или отправьте /cancel для отмены.",
+                    parse_mode="HTML",
+                )
+                return
+
+            # ─── Input-required actions (show prompt) ─────────────────
+            prompts = {
+                "channel_info": "ℹ️ <b>Информация о канале</b>\n\nУкажите @username или ID канала:\n<code>/channel_info @channel</code>",
+                "user_info": "👥 <b>Информация о пользователе</b>\n\nУкажите Telegram ID пользователя:\n<code>/user_info 123456789</code>",
+                "subscribe": "🟢 <b>Подписка (активация)</b>\n\nУкажите @username канала и количество дней:\n<code>/subscribe @channel 30</code>",
+                "unsubscribe": "🔴 <b>Подписка (отключение)</b>\n\nУкажите @username канала:\n<code>/unsubscribe @channel</code>",
+                "change_admin": "🔄 <b>Смена администратора канала</b>\n\nУкажите @username канала и новый Telegram ID:\n<code>/change_admin @channel 123456789</code>",
+                "admin_cancel": "✅ <b>Отмена билета (админ)</b>\n\nУкажите ID билета:\n<code>/admin_cancel &lt;ticket_id&gt;</code>",
+            }
+            if action in prompts:
+                await edit(prompts[action], parse_mode="HTML", reply_markup=back_kb)
+                return
+
+            await callback.answer("Неизвестная команда", show_alert=True)
             return
 
         # ─── Навигация по страницам мероприятий ──────────

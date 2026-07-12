@@ -70,3 +70,4 @@
 | 45 | Удалён TELEGRAM_CHANNEL_ID из конфига и .env | ✅ done | 2026-07-11 | `acc7953` |
 | 46 | Канал: my_chat_member хендлер (обнаружение добавления бота) | ✅ done | 2026-07-11 | `acc7953` |
 | 47 | Fix: GRANT USAGE → GRANT USAGE, CREATE ON SCHEMA public для платформенных ролей БД | ✅ done | 2026-07-12 | `2a8c29b` |
+| 48 | Fix: admin_menu кнопки выполняют действие вместо показа команды | ✅ done | 2026-07-12 | (текущий) |
