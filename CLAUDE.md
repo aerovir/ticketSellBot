@@ -75,11 +75,13 @@ docker compose run --rm seed
 | `/events` | Список предстоящих мероприятий (только этого канала) |
 | `/event <id>` | Детали мероприятия |
 
-#### 💬 В личных сообщениях (только для админов)
+#### 💬 В личных сообщениях
+
+##### Для админов канала
 | Команда | Описание |
 |---------|----------|
 | `/start` | Приветствие |
-| `/admin` | Меню администратора |
+| `/admin` | 🎛 Меню администратора (inline-кнопки) |
 | `/create_event` | Пошаговое создание мероприятия |
 | `/events_all` | Все мероприятия (вкл. неактивные/прошедшие) |
 | `/stats <id>` | Статистика продаж |
@@ -87,14 +89,37 @@ docker compose run --rm seed
 | `/activate <id>` | Включить мероприятие |
 | `/repost_events` | Перепостить анонсы в канал |
 | `/my_channels` | Мои каналы и статус подписки |
-| `/subscribe <user_id> <days>` | Активировать подписку (super-admin) |
+
+##### Для super-admin (ADMIN_TELEGRAM_IDS)
+| Команда | Описание |
+|---------|----------|
+| `/admin` | 🎛 Расширенное меню (все кнопки для super-admin + каналов) |
+| `/subscribe <channel_id> <days>` | Активировать подписку каналу |
+| `/unsubscribe <channel_id>` | Отключить подписку канала |
+| `/stats_all` | Статистика по всем мероприятиям |
+| `/list_channels` | Список всех каналов и статус подписки |
+| `/channel_info <channel_id>` | Информация о канале |
+| `/user_info <user_id>` | Информация о пользователе |
+| `/admin_cancel <ticket_id>` | Отмена любого билета (админское действие) |
+| `/broadcast <text>` | Рассылка всем пользователям |
+| `/health` | Статус бота (uptime, БД, кол-во каналов/мероприятий) |
+| `/check_expired` | Проверить и деактивировать просроченные подписки |
+| `/change_admin <channel_id> <new_admin_id>` | Сменить админа канала |
+
+##### 🎛 Кнопки админ-меню
+
+Админ-меню теперь строится через inline-кнопки в зависимости от роли:
+
+**Super-admin видит:** Создать мероприятие, Мои каналы, Все мероприятия, Статистика, Статистика (все), Список каналов, Инфо о канале, Инфо о пользователе, Рассылка, Здоровье, Проверить подписки, Отмена билета, Сменить админа
+
+**Channel admin видит:** Создать мероприятие, Мои каналы, Все мероприятия, Статистика
 
 ### Подписка (multi-tenant)
 
 Бот работает по модели **подписки** — каждый канал изолирован:
 
 1. **Оплата** — админ канала оплачивает подписку (out of band)
-2. **Активация** — super-admin вводит `/subscribe <telegram_user_id> <days>`
+2. **Активация** — super-admin вводит `/subscribe <channel_id> <days>`
 3. **Добавление** — админ добавляет бота в свой канал
 4. **Работа** — админ создаёт свои мероприятия, пользователи канала покупают билеты
 
@@ -102,11 +127,16 @@ docker compose run --rm seed
 
 Обычным пользователям на админ-команды → «У вас нет доступа к панели администратора.»
 
-### Secrets (дополнительно)
+**Важно:** `/subscribe` принимает **telegram_channel_id** (строковый ID канала, например `@channel_username` или числовой ID), а не ID пользователя. Один админ может владеть несколькими каналами.
 
-| Secret | Описание |
-|--------|---------|
-| `ADMIN_TELEGRAM_IDS` | Telegram ID супер-администраторов через запятую (управляют подписками) |
+### Super-admin (ADMIN_TELEGRAM_IDS)
+
+Super-admin указывается через переменную `ADMIN_TELEGRAM_IDS` (Telegram ID через запятую). Имеет полный доступ:
+- Управление подписками (активация, отключение, смена админа)
+- Мониторинг (статистика, здоровье бота, список каналов)
+- Глобальные действия (рассылка, отмена любого билета)
+
+Super-admin **не привязан к каналу** — может управлять любым каналом без ограничений.
 
 ---
 
@@ -116,9 +146,9 @@ docker compose run --rm seed
 ├── app/                # Весь Python-код (пакет, PYTHONPATH=/app)
 │   ├── config.py       # pydantic-settings из .env
 │   ├── core/           # Бизнес-логика (общая для всех платформ)
-│   │   ├── models.py   # SQLAlchemy: User, Event, Ticket, Payment
+│   │   ├── models.py   # SQLAlchemy: User, Event, Ticket, Payment, Channel
 │   │   ├── database.py # Асинхронный движок + фабрика сессий
-│   │   ├── services.py # UserService, EventService, TicketService
+│   │   ├── services.py # UserService, EventService, TicketService, ChannelService
 │   │   └── schemas.py  # Pydantic схемы
 │   ├── platforms/      # Адаптеры платформ
 │   │   ├── base.py     # Abstract base class PlatformBot
@@ -193,13 +223,13 @@ docker compose --profile all up -d → + VK + MAX
 | Secret | Описание |
 |--------|---------|
 | `TELEGRAM_TOKEN` | Токен Telegram бота |
-| `TELEGRAM_CHANNEL_ID` | @username канала |
 | `VK_TOKEN` | Токен VK сообщества |
 | `VK_GROUP_ID` | ID VK группы |
 | `MAX_TOKEN` | Токен MAX бота |
 | `DB_PASSWORD_TG` | Пароль для tg_user |
 | `DB_PASSWORD_VK` | Пароль для vk_user |
 | `DB_PASSWORD_MAX` | Пароль для max_user |
+| `ADMIN_TELEGRAM_IDS` | Telegram ID супер-администраторов через запятую |
 
 ### Команды
 

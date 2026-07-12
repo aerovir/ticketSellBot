@@ -52,3 +52,20 @@
 | 27 | Docker Compose: Telegram как дефолт, VK/MAX в profile: all | ✅ done | 2026-07-09 | — |
 | 28 | Тесты: database, services, TG/VK/MAX bot handlers | ✅ done | 2026-07-09 | — |
 | 29 | Документация: README для каждой платформы | ✅ done | 2026-07-09 | — |
+| 30 | Multi-tenant: модель Channel, изоляция мероприятий по каналам | ✅ done | 2026-07-11 | `acc7953` |
+| 31 | Multi-tenant: миграция 0002 (channels + channel_id в events) | ✅ done | 2026-07-11 | `acc7953` |
+| 32 | Multi-tenant: ChannelService (подписки, каналы админа) | ✅ done | 2026-07-11 | `acc7953` |
+| 33 | Подписка: /subscribe <channel_id> <days> для super-admin | ✅ done | 2026-07-11 | `913b104` |
+| 34 | Подписка: /unsubscribe <channel_id> для super-admin | ✅ done | 2026-07-11 | `e937599` |
+| 35 | Подписка: проверка `is_subscription_valid()` при каждом действии | ✅ done | 2026-07-11 | `acc7953` |
+| 36 | Админ-меню: inline-кнопки вместо текстовых команд | ✅ done | 2026-07-11 | `3f6e66f` |
+| 37 | Админ-меню: ролевое разделение (super-admin vs channel admin) | ✅ done | 2026-07-11 | `3f6e66f` |
+| 38 | Super-admin команды: /stats_all, /list_channels, /channel_info, /user_info, /admin_cancel, /broadcast, /health | ✅ done | 2026-07-11 | `3f6e66f` |
+| 39 | Super-admin: /check_expired, /change_admin | ✅ done | 2026-07-11 | `3f6e66f` |
+| 40 | FSM: исправлен порядок callback.answer() в create_event (кнопка подтвердить) | ✅ done | 2026-07-11 | `a7f15ff` |
+| 41 | Deploy: миграция через alembic stamp + ALTER TABLE ADD COLUMN IF NOT EXISTS | ✅ done | 2026-07-11 | `bed6e60`, `b5eb13a`, `1449908`, `a7d6e6a` |
+| 42 | Deploy: очистка тестовых seed-данных при деплое | ✅ done | 2026-07-11 | `913b104` |
+| 43 | Legacy канал: автопривязка к первому админу (_get_admin_channel fallback) | ✅ done | 2026-07-11 | `913b104` |
+| 44 | Тесты: обновлены для multi-tenant (fixture sample_channel, channel_id) | ✅ done | 2026-07-11 | `f886a16`, `f8846be`, `18e56ed` |
+| 45 | Удалён TELEGRAM_CHANNEL_ID из конфига и .env | ✅ done | 2026-07-11 | `acc7953` |
+| 46 | Канал: my_chat_member хендлер (обнаружение добавления бота) | ✅ done | 2026-07-11 | `acc7953` |

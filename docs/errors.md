@@ -258,5 +258,111 @@
   - Переменная `${ADMIN_TELEGRAM_IDS}` не задана в shell окружении раннера → раскрывается в пустую строку.
 - **Исправление (подтверждено: `deploy/docker-compose.beget.yml:38-39`):**
   Удалён блок `environment` у сервиса `telegram` в beget override. Значение `ADMIN_TELEGRAM_IDS` теперь берётся из `.env.telegram`, который создаётся на шаге деплоя из GitHub Secret.
-- **Коммит:** (текущий)
+- **Коммит:** `03113f3`
+- **Связанные ошибки:** нет
+
+---
+
+## 018 — Alembic миграция падает на CI: "table channels already exists" / "column channel_id does not exist"
+
+- **Дата:** 2026-07-11
+- **Статус:** ✅ Исправлено
+- **Описание:** Деплой на CI проходит через несколько итераций ошибок:
+  1. `init_db()` создаёт таблицы → alembic stamp head → миграция 0002 пытается создать таблицы повторно → `relation "channels" already exists`
+  2. После замены `init_db()` на alembic — ошибка `column channel_id of relation "events" does not exist`, потому что init_db() не добавляет колонки в существующие таблицы (только DROP ALL → CREATE ALL, но данные уже есть)
+- **Анализ:**
+  - **Подтверждено:** init_db() вызывает `Base.metadata.create_all`, она **создаёт только новые таблицы**, но **не добавляет колонки** в существующие.
+  - Alembic migration 0002 корректно описывает изменения, но при наличии данных `drop_all → create_all` недопустим.
+- **Исправление (подтверждено: `.github/workflows/deploy.yml:157-186`):**
+  Три шага в деплое:
+  1. `alembic stamp head` — проставляет версию в существующей БД (без миграции)
+  2. `ALTER TABLE ADD COLUMN IF NOT EXISTS` — идемпотентное добавление колонок
+  3. `INSERT INTO channels ... WHERE NOT EXISTS` — создание legacy канала
+  4. `UPDATE events SET channel_id = ... WHERE channel_id IS NULL` — бэкфилл
+  Итоговая версия — stamp head + идемпотентный SQL через psql.
+- **Коммиты:** `bed6e60`, `1449908`, `b5eb13a`, `a7d6e6a`
+- **Связанные ошибки:** нет
+
+---
+
+## 019 — "кнопка подтвердить не активна" в create_event FSM
+
+- **Дата:** 2026-07-11
+- **Статус:** ✅ Исправлено
+- **Описание:** При создании мероприятия через FSM, на шаге подтверждения кнопка "✅ Подтвердить" не активна (disabled). Пользователь не может завершить создание мероприятия.
+- **Анализ:**
+  - **Подтверждено (`app/platforms/telegram/bot.py`, хендлер `admin:confirm_create`):**
+    - `callback.answer()` вызывалась **после** всех DB-операций (создание Event + запись в БД)
+    - Telegram требует `callback.answer()` в течение 30 секунд. Если не вызвана — кнопка "висит" в состоянии ожидания
+    - При ошибке БД или долгом запросе Telegram не получает answer → деактивирует кнопку
+  - Дополнительно: не было проверки state перед выполнением (если пользователь не в FSM)
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py`):**
+  1. `callback.answer()` перенесён в самое начало хендлера
+  2. Добавлен try-except с отправкой сообщения об ошибке
+  3. Добавлена валидация state (если нет данных в FSM — отправить alert)
+- **Коммит:** `a7f15ff`
+- **Связанные ошибки:** нет
+
+---
+
+## 020 — Legacy канал: admin_telegram_user_id='0' приводит к пустому меню админа
+
+- **Дата:** 2026-07-11
+- **Статус:** ✅ Исправлено
+- **Описание:** После деплоя multi-tenant в каналах пропали inline-кнопки. Команда `/admin` показывала «Панель управления» с кнопками, но все админ-команды возвращали ошибку. Пользователи в канале вообще не видели кнопок.
+- **Анализ:**
+  - **Подтверждено (`app/platforms/telegram/bot.py`, метод `_get_admin_channel()`):**
+    - Метод ищет канал по `admin_telegram_user_id == str(user_id)`
+    - Legacy канал создаётся с `admin_telegram_user_id = '0'`
+    - Ни один реальный пользователь не имеет Telegram ID = 0
+    - → `_get_admin_channel()` возвращает None → админ не может управлять каналом
+  - Дополнительно: канальные кнопки (`channel_buy`, `channel_events`) требуют контекст канала, который определялся через `_get_admin_channel()` — не работал.
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py`):**
+  Добавлен fallback в `_get_admin_channel()`:
+  1. Если канал с `admin_telegram_user_id = '0'` существует — автоматически привязать к текущему админу
+  2. Обновить `admin_telegram_user_id` на реальный ID пользователя
+  3. Записать изменения в БД
+  4. Вернуть канал админу
+- **Коммит:** `913b104`
+- **Связанные ошибки:** нет
+
+---
+
+## 021 — CI test_admin_menu_unauthorized падает: _get_admin_channel требует БД
+
+- **Дата:** 2026-07-11
+- **Статус:** ✅ Исправлено
+- **Описание:** На CI тест `test_admin_menu_unauthorized` падает с ошибкой, потому что `admin_menu()` теперь вызывает `_get_admin_channel()`, который требует подключения к БД и сервисов.
+- **Анализ:**
+  - **Подтверждено (`tests/test_telegram_bot.py:164-171`):**
+    - После перехода на button-based меню, `admin_menu()` вызывает `_get_admin_channel()` даже для неавторизованного пользователя (проверка на super-admin происходит раньше, но channel admin path тоже вызывает метод)
+    - Тест использует mock-объекты без подключения к БД
+    - `_get_admin_channel()` не замокан → падает
+- **Исправление (подтверждено: `tests/test_telegram_bot.py:167`):**
+  Добавлен `patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=None)`:
+  ```python
+  with patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=None):
+      await telegram_bot.admin_menu(mock_message)
+  ```
+- **Коммит:** `18e56ed`
+- **Связанные ошибки:** нет
+
+---
+
+## 022 — CI test_admin_menu_authorized: текст меню изменился на кнопочный
+
+- **Дата:** 2026-07-11
+- **Статус:** ✅ Исправлено
+- **Описание:** На CI тест `test_admin_menu_authorized` падает, потому что проверяет текст "Панель администратора", но после перехода на button-based меню текст изменился на "Панель управления".
+- **Анализ:**
+  - **Подтверждено (`tests/test_telegram_bot.py:174-188`):**
+    - Тест проверяет `assert "Панель администратора" in text`
+    - В новой реализации `admin_menu()` отправляет "Панель управления" с inline-кнопками
+- **Исправление (подтверждено: `tests/test_telegram_bot.py:185`):**
+  Изменена проверка текста:
+  ```python
+  assert "Панель управления" in text
+  ```
+  Добавлена проверка наличия `reply_markup` в kwargs.
+- **Коммит:** `f8846be`
 - **Связанные ошибки:** нет
