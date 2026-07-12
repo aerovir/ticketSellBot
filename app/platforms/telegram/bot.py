@@ -12,7 +12,10 @@ from sqlalchemy import select, func
 
 from app.config import settings
 from app.core.database import async_session_factory
-from app.core.models import PlatformType, Channel
+from app.core.models import (
+    PlatformType, Channel, User, Event, Ticket, Payment,
+    TicketStatus, PaymentStatus,
+)
 from app.core.services import UserService, EventService, TicketService, ChannelService
 from app.platforms.base import PlatformBot
 from app.platforms.telegram.channel import ChannelManager
@@ -35,6 +38,11 @@ class CreateEvent(StatesGroup):
 
 class BroadcastFSM(StatesGroup):
     """FSM для отправки рассылки во все каналы."""
+    text = State()
+
+
+class AwaitingAdminInput(StatesGroup):
+    """FSM для ввода параметра после нажатия кнопки админ-меню."""
     text = State()
 
 
@@ -83,6 +91,9 @@ class TelegramBot(PlatformBot):
         # ─── Обработчик текстового ввода для broadcast ──
         self.dp.message.register(self._handle_broadcast_input, StateFilter(BroadcastFSM.text))
 
+        # ─── Обработчик ввода параметра для кнопок админ-меню ──
+        self.dp.message.register(self._handle_admin_input, StateFilter(AwaitingAdminInput.text))
+
         # ─── Обновления участников канала (my_chat_member) ──
         self.dp.my_chat_member.register(self.on_chat_member_update)
 
@@ -98,6 +109,7 @@ class TelegramBot(PlatformBot):
         # Отмена во время FSM
         self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(CreateEvent))
         self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(BroadcastFSM))
+        self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(AwaitingAdminInput))
 
         # ─── Callback-запросы (инлайн-кнопки) ──────────
         self.dp.callback_query.register(self.cmd_callback)
@@ -725,7 +737,220 @@ class TelegramBot(PlatformBot):
 
         await message.answer(f"✅ Сообщение отправлено в {sent}/{len(channels)} каналов.")
 
+    async def _handle_admin_input(self, message: types.Message, state: FSMContext):
+        """Handle text input for admin menu buttons that need a parameter."""
+        data = await state.get_data()
+        action = data.get("admin_action")
+
+        if not action:
+            await state.clear()
+            await message.answer("❌ Действие не найдено. Используйте /admin для входа в меню.")
+            return
+
+        # Cancel
+        if message.text.strip().lower() == "/cancel":
+            await state.clear()
+            await message.answer("❌ Действие отменено.")
+            return
+
+        user_input = message.text.strip()
+
+        if action == "channel_info":
+            if not self._is_admin(message.from_user.id):
+                await message.answer("У вас нет доступа.")
+                await state.clear()
+                return
+            async with async_session_factory() as session:
+                channel_svc = ChannelService(session)
+                channel = await channel_svc.get_by_telegram_id(user_input)
+                if not channel:
+                    await message.answer(f"❌ Канал {user_input} не найден.")
+                    await state.clear()
+                    return
+                events_count = (await session.execute(
+                    select(func.count()).select_from(Event).where(Event.channel_id == channel.id)
+                )).scalar() or 0
+                from datetime import datetime, timezone
+                upcoming = (await session.execute(
+                    select(func.count()).select_from(Event)
+                    .where(Event.channel_id == channel.id, Event.date >= datetime.now(timezone.utc))
+                )).scalar() or 0
+                tickets_sold = (await session.execute(
+                    select(func.count()).select_from(Ticket)
+                    .join(Event, Ticket.event_id == Event.id)
+                    .where(Event.channel_id == channel.id, Ticket.status == TicketStatus.active)
+                )).scalar() or 0
+            sub_status = "🟢 Активна" if channel.is_subscription_active else "🔴 Неактивна"
+            sub_until = f" до {channel.subscription_until.strftime('%d.%m.%Y')}" if channel.subscription_until else ""
+            text = (
+                f"ℹ️ <b>Канал: {channel.title or channel.telegram_channel_id}</b>\n\n"
+                f"🆔 {channel.telegram_channel_id}\n"
+                f"👤 Админ: <code>{channel.admin_telegram_user_id}</code>\n"
+                f"📊 {sub_status}{sub_until}\n"
+                f"🎫 Мероприятий: {events_count} (предстоящих: {upcoming})\n"
+                f"🎟 Продано билетов: {tickets_sold}"
+            )
+            await message.answer(text, parse_mode="HTML")
+            await state.clear()
+            return
+
+        if action == "user_info":
+            if not self._is_admin(message.from_user.id):
+                await message.answer("У вас нет доступа.")
+                await state.clear()
+                return
+            async with async_session_factory() as session:
+                user_svc = UserService(session)
+                try:
+                    user = await user_svc.get_or_create(PlatformType.telegram, user_input)
+                except Exception:
+                    user = None
+                channel_svc = ChannelService(session)
+                channels = await channel_svc.get_channels_by_admin(user_input)
+                text = f"👤 <b>Пользователь: {user_input}</b>\n\n"
+                if user:
+                    text += f"Имя: {user.name or '—'}\n"
+                    text += f"Внутренний ID: <code>{user.id}</code>\n"
+                if channels:
+                    text += f"\n📢 <b>Каналы ({len(channels)}):</b>\n"
+                    for ch in channels:
+                        status = "🟢" if ch.is_subscription_active else "🔴"
+                        text += f"{status} {ch.title or ch.telegram_channel_id}\n"
+                else:
+                    text += "\n📢 Нет зарегистрированных каналов."
+            await message.answer(text, parse_mode="HTML")
+            await state.clear()
+            return
+
+        if action == "subscribe":
+            if not self._is_admin(message.from_user.id):
+                await message.answer("У вас нет доступа.")
+                await state.clear()
+                return
+            parts = user_input.split()
+            if len(parts) < 2:
+                await message.answer("❌ Укажите @username канала и количество дней через пробел.\nПример: <code>@my_channel 30</code>", parse_mode="HTML")
+                return
+            try:
+                channel_telegram_id = parts[0].strip()
+                days = int(parts[1].strip())
+                if days <= 0:
+                    raise ValueError
+            except ValueError:
+                await message.answer("❌ Укажите ID канала и количество дней (число > 0).")
+                return
+            async with async_session_factory() as session:
+                try:
+                    channel_svc = ChannelService(session)
+                    channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
+                    if channel:
+                        channel = await channel_svc.activate_subscription(channel.id, days)
+                        channel_name = channel.title or channel.telegram_channel_id
+                        await session.commit()
+                        text = (
+                            f"✅ Подписка активирована для канала {channel_name}!\n"
+                            f"Срок: {days} дней (до {channel.subscription_until.strftime('%d.%m.%Y')})"
+                        )
+                    else:
+                        channel = await channel_svc.create(
+                            telegram_channel_id=channel_telegram_id,
+                            admin_telegram_user_id=str(message.from_user.id),
+                            title=f"Канал {channel_telegram_id}",
+                        )
+                        channel = await channel_svc.activate_subscription(channel.id, days)
+                        await session.commit()
+                        text = (
+                            f"✅ Подписка активирована для канала {channel_telegram_id}!\n"
+                            f"Срок: {days} дней.\n"
+                            f"ℹ️ Владелец канала должен добавить бота в канал для начала работы."
+                        )
+                    await message.answer(text, parse_mode="HTML")
+                except Exception as e:
+                    await session.rollback()
+                    await message.answer(f"❌ Ошибка: {e}")
+            await state.clear()
+            return
+
+        if action == "unsubscribe":
+            if not self._is_admin(message.from_user.id):
+                await message.answer("У вас нет доступа.")
+                await state.clear()
+                return
+            async with async_session_factory() as session:
+                try:
+                    channel_svc = ChannelService(session)
+                    channel = await channel_svc.get_by_telegram_id(user_input)
+                    if channel is None:
+                        await message.answer(f"❌ Канал {user_input} не найден.")
+                        await state.clear()
+                        return
+                    await channel_svc.deactivate_subscription(channel.id)
+                    await session.commit()
+                    channel_name = channel.title or channel.telegram_channel_id
+                    await message.answer(
+                        f"✅ Подписка отключена для канала {channel_name}.\n"
+                        f"Бот останется в канале, но новые мероприятия создавать нельзя."
+                    )
+                except Exception as e:
+                    await session.rollback()
+                    await message.answer(f"❌ Ошибка: {e}")
+            await state.clear()
+            return
+
+        if action == "change_admin":
+            if not self._is_admin(message.from_user.id):
+                await message.answer("У вас нет доступа.")
+                await state.clear()
+                return
+            parts = user_input.split()
+            if len(parts) < 2:
+                await message.answer("❌ Укажите @username канала и новый Telegram ID через пробел.\nПример: <code>@my_channel 123456789</code>", parse_mode="HTML")
+                return
+            channel_telegram_id = parts[0].strip()
+            new_admin_id = parts[1].strip()
+            async with async_session_factory() as session:
+                channel_svc = ChannelService(session)
+                channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
+                if not channel:
+                    await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
+                    await state.clear()
+                    return
+                old_admin = channel.admin_telegram_user_id
+                channel.admin_telegram_user_id = new_admin_id
+                await session.commit()
+                await message.answer(
+                    f"✅ Админ канала {channel.title or channel.telegram_channel_id} изменён:\n"
+                    f"{old_admin} → {new_admin_id}"
+                )
+            await state.clear()
+            return
+
+        if action == "admin_cancel":
+            if not self._is_admin(message.from_user.id):
+                await message.answer("У вас нет доступа.")
+                await state.clear()
+                return
+            try:
+                ticket_id = UUID(user_input)
+            except ValueError:
+                await message.answer("❌ Неверный ID билета. Введите UUID билета.")
+                return
+            async with async_session_factory() as session:
+                ticket_svc = TicketService(session)
+                try:
+                    ticket = await ticket_svc.admin_cancel_ticket(ticket_id)
+                    await session.commit()
+                    await message.answer(f"✅ Билет <code>{ticket_id}</code> возвращён.", parse_mode="HTML")
+                except ValueError as e:
+                    await message.answer(f"❌ {e}")
+            await state.clear()
+            return
+
+        await message.answer("❌ Неизвестное действие.")
+        await state.clear()
+
     async def sa_health(self, message: types.Message):
+        """Check bot health status."""
         """Check bot health status."""
         if not self._is_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
@@ -1606,17 +1831,19 @@ class TelegramBot(PlatformBot):
                 )
                 return
 
-            # ─── Input-required actions (show prompt) ─────────────────
-            prompts = {
-                "channel_info": "ℹ️ <b>Информация о канале</b>\n\nУкажите @username или ID канала:\n<code>/channel_info @channel</code>",
-                "user_info": "👥 <b>Информация о пользователе</b>\n\nУкажите Telegram ID пользователя:\n<code>/user_info 123456789</code>",
-                "subscribe": "🟢 <b>Подписка (активация)</b>\n\nУкажите @username канала и количество дней:\n<code>/subscribe @channel 30</code>",
-                "unsubscribe": "🔴 <b>Подписка (отключение)</b>\n\nУкажите @username канала:\n<code>/unsubscribe @channel</code>",
-                "change_admin": "🔄 <b>Смена администратора канала</b>\n\nУкажите @username канала и новый Telegram ID:\n<code>/change_admin @channel 123456789</code>",
-                "admin_cancel": "✅ <b>Отмена билета (админ)</b>\n\nУкажите ID билета:\n<code>/admin_cancel &lt;ticket_id&gt;</code>",
+            # ─── FSM для кнопок, требующих ввод параметра ──────
+            input_actions = {
+                "channel_info": "ℹ️ <b>Информация о канале</b>\n\nВведите @username или ID канала:",
+                "user_info": "👥 <b>Информация о пользователе</b>\n\nВведите Telegram ID пользователя:",
+                "subscribe": "🟢 <b>Подписка (активация)</b>\n\nВведите @username канала и количество дней через пробел:\nПример: <code>@my_channel 30</code>",
+                "unsubscribe": "🔴 <b>Подписка (отключение)</b>\n\nВведите @username канала:",
+                "change_admin": "🔄 <b>Смена администратора канала</b>\n\nВведите @username канала и новый Telegram ID через пробел:\nПример: <code>@my_channel 123456789</code>",
+                "admin_cancel": "✅ <b>Отмена билета (админ)</b>\n\nВведите ID билета:",
             }
-            if action in prompts:
-                await edit(prompts[action], parse_mode="HTML", reply_markup=back_kb)
+            if action in input_actions:
+                await state.update_data(admin_action=action)
+                await state.set_state(AwaitingAdminInput.text)
+                await callback.message.answer(input_actions[action], parse_mode="HTML")
                 return
 
             await callback.answer("Неизвестная команда", show_alert=True)
