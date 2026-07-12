@@ -132,7 +132,7 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO tg_user;
-            GRANT USAGE ON SCHEMA public TO tg_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO tg_user;
 
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'vk_user') THEN
@@ -140,7 +140,7 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO vk_user;
-            GRANT USAGE ON SCHEMA public TO vk_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO vk_user;
 
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'max_user') THEN
@@ -148,7 +148,7 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO max_user;
-            GRANT USAGE ON SCHEMA public TO max_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO max_user;
             SELECT rolname FROM pg_catalog.pg_roles WHERE rolname IN ('tg_user', 'vk_user', 'max_user');
           EOSQL
           "
@@ -194,6 +194,10 @@ jobs:
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO tg_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO vk_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO max_user;
+
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO tg_user;
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO vk_user;
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO max_user;
 
             -- Удалить тестовые seed-мероприятия (созданные seed.py)
             DELETE FROM payments WHERE ticket_id IN (

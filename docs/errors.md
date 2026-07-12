@@ -366,3 +366,27 @@
   Добавлена проверка наличия `reply_markup` в kwargs.
 - **Коммит:** `f8846be`
 - **Связанные ошибки:** нет
+
+---
+
+## 023 — Permission denied for schema public при CREATE TYPE platformtype
+
+- **Дата:** 2026-07-12
+- **Статус:** ✅ Исправлено
+- **Описание:** После деплоя контейнер telegram циклически перезапускается с ошибкой:
+  ```
+  asyncpg.exceptions.InsufficientPrivilegeError: permission denied for schema public
+  [SQL: CREATE TYPE platformtype AS ENUM ('telegram', 'vk', 'max')]
+  ```
+  `init_db()` не может создать ENUM-тип `platformtype`, бот не стартует.
+- **Анализ:**
+  - **Подтверждено (`.github/workflows/deploy.yml:135,143,151`):**
+    - На шаге «Создать роли PostgreSQL» платформенным ролям выдаётся только `GRANT USAGE ON SCHEMA public`
+    - `USAGE` позволяет обращаться к существующим объектам, но `CREATE TYPE/platformtype` требует права `CREATE` на схему
+    - `init_db()` → `Base.metadata.create_all` → создание ENUM → `InsufficientPrivilegeError`
+    - Аналогичная проблема с последовательностями (sequences) — не выданы права на `ALL SEQUENCES`
+- **Исправление (подтверждено: `.github/workflows/deploy.yml`):**
+  1. `GRANT USAGE` → `GRANT USAGE, CREATE ON SCHEMA public` для всех трёх ролей (`tg_user`, `vk_user`, `max_user`)
+  2. Добавлены `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public` для всех трёх ролей в шаг «Права на таблицы»
+- **Коммит:** (текущий)
+- **Связанные ошибки:** нет
