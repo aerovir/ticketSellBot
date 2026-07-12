@@ -74,3 +74,4 @@
 | 49 | Fix: UnboundLocalError — select импортирован внутри блока, недоступен в других блоках | ✅ done | 2026-07-12 | `305691e` |
 | 50 | Feat: FSM-ввод параметров для кнопок админ-меню группы Б (channel_info, subscribe, и др.) | ✅ done | 2026-07-12 | `e2fa6a8` |
 | 51 | Fix: Missing imports — TicketStatus, PaymentStatus, User, Event, Ticket, Payment | ✅ done | 2026-07-12 | `e2fa6a8` |
+| 52 | Feat: Кнопка «🎛 Управление» на анонсах в канале — гибридная админ-панель через ЛС | ✅ done | 2026-07-12 | — |

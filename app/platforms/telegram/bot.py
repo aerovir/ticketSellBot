@@ -1563,6 +1563,11 @@ class TelegramBot(PlatformBot):
             await self._handle_channel_events(callback)
             return
 
+        # ─── Канал: управление мероприятием (админ) ─────
+        if data.startswith("ch_admin:"):
+            await self._handle_channel_admin(callback, data)
+            return
+
         # ─── Админ: подтвердить создание ────────────────
         if data == "admin:confirm_create":
             # Сначала подтверждаем callback, чтобы пользователь
@@ -2089,6 +2094,222 @@ class TelegramBot(PlatformBot):
                 "ℹ️ Напишите @username бота /start, чтобы увидеть мероприятия.",
                 show_alert=True,
             )
+
+    # ═══════════════════════════════════════════════════════
+    # КАНАЛ: АДМИН-ПАНЕЛЬ (через кнопку «🎛 Управление»)
+    # ═══════════════════════════════════════════════════════
+
+    async def _send_ch_admin_panel(
+        self,
+        user_id: int,
+        event,
+        edit_message: types.Message | None = None,
+    ):
+        """Отправить или обновить панель управления мероприятием в ЛС админа."""
+        date_str = event.date.strftime("%d.%m.%Y %H:%M")
+        status = "🟢 Активно" if event.is_active else "🔴 Отключено"
+        header = (
+            f"🎫 <b>{event.title}</b>\n"
+            f"📅 {date_str}\n"
+            f"🎟 {event.available_tickets}/{event.total_tickets}\n"
+            f"{status}\n\n"
+            f"<b>Выберите действие:</b>"
+        )
+
+        rows = [
+            [
+                InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{event.id}"),
+                InlineKeyboardButton(
+                    text="⏸ Отключить" if event.is_active else "▶ Включить",
+                    callback_data=f"ch_admin:toggle:{event.id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="🔄 Репост анонса", callback_data=f"ch_admin:repost:{event.id}"),
+            ],
+            [
+                InlineKeyboardButton(text="❌ Закрыть панель", callback_data="ch_admin:close"),
+            ],
+        ]
+
+        kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+        if edit_message:
+            await edit_message.edit_text(header, parse_mode="HTML", reply_markup=kb)
+        else:
+            await self.bot.send_message(
+                chat_id=user_id,
+                text=header,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+
+    async def _handle_channel_admin(self, callback: types.CallbackQuery, data: str):
+        """Обработка всех ch_admin:* callback'ов.
+
+        Приходит из двух мест:
+        - Из канала: нажали «🎛 Управление» на анонсе → проверить админа → панель в ЛС
+        - Из ЛС: кнопки панели (статистика, включить/отключить, репост, закрыть)
+        """
+        parts = data.split(":", 2)
+        action = parts[1] if len(parts) > 1 else ""
+        event_id = UUID(parts[2]) if len(parts) > 2 and parts[2] else None
+
+        # ─── Определяем, откуда пришёл callback ────────────
+        is_from_channel = callback.message and callback.message.chat.type == "channel"
+
+        # ─── Из канала: кнопка «🎛 Управление» на анонсе ──
+        if is_from_channel:
+            if action != "menu" or not event_id:
+                await callback.answer()
+                return
+
+            # Проверить, что нажавший — админ этого канала
+            source_chat_id = str(callback.message.chat.id)
+            async with async_session_factory() as session:
+                channel_svc = ChannelService(session)
+                channel = await channel_svc.get_by_telegram_id(source_chat_id)
+                is_super = self._is_admin(callback.from_user.id)
+                if not channel or (
+                    channel.admin_telegram_user_id != str(callback.from_user.id) and not is_super
+                ):
+                    await callback.answer(
+                        "❌ Доступно только администратору канала.",
+                        show_alert=True,
+                    )
+                    return
+
+            await callback.answer()
+
+            # Загрузить мероприятие
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if not event:
+                    await callback.answer("❌ Мероприятие не найдено.", show_alert=True)
+                    return
+
+            # Отправить панель в ЛС
+            try:
+                await self._send_ch_admin_panel(callback.from_user.id, event)
+                await callback.answer(
+                    "📨 Панель отправлена в личные сообщения.",
+                    show_alert=True,
+                )
+            except Exception:
+                await callback.answer(
+                    "ℹ️ Напишите /start боту в личных сообщениях, чтобы открыть панель.",
+                    show_alert=True,
+                )
+            return
+
+        # ─── Из ЛС: кнопки панели управления ───────────────
+        # Проверить, что пользователь — админ канала (или super-admin)
+        channel = await self._get_admin_channel(callback.from_user.id)
+        is_super = self._is_admin(callback.from_user.id)
+        if not channel and not is_super:
+            await callback.answer("❌ Доступно только администратору канала.", show_alert=True)
+            return
+
+        # ─── Показать панель (menu) ────────────────────────
+        if action == "menu" and event_id:
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if not event:
+                    await callback.answer("❌ Мероприятие не найдено.", show_alert=True)
+                    return
+            await self._send_ch_admin_panel(
+                callback.from_user.id, event, edit_message=callback.message,
+            )
+            await callback.answer()
+            return
+
+        # ─── Статистика ────────────────────────────────────
+        if action == "stats" and event_id:
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if not event:
+                    await callback.answer("❌ Мероприятие не найдено.", show_alert=True)
+                    return
+                try:
+                    stats = await svc.get_event_stats(event_id)
+                except ValueError:
+                    await callback.answer("❌ Статистика недоступна.", show_alert=True)
+                    return
+
+            active = stats["sold"] - stats["refunded"]
+            text = (
+                f"📊 <b>Статистика: {event.title}</b>\n\n"
+                f"🎟 Всего билетов: {stats['total_tickets']}\n"
+                f"✅ Продано: {stats['sold']} ({stats['sold_pct']}%)\n"
+                f"🔄 Возвращено: {stats['refunded']}\n"
+                f"🏷 Активных: {active}\n"
+                f"💰 Выручка: {stats['revenue']:.0f}₽\n\n"
+                f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}\n"
+                f"🟢 {'Активно' if event.is_active else 'Отключено'}"
+            )
+            back_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="◀️ Назад к панели",
+                    callback_data=f"ch_admin:menu:{event_id}",
+                )],
+            ])
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_kb)
+            await callback.answer()
+            return
+
+        # ─── Включить / Отключить ─────────────────────────
+        if action == "toggle" and event_id:
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if not event:
+                    await callback.answer("❌ Мероприятие не найдено.", show_alert=True)
+                    return
+                await svc.set_active(event_id, not event.is_active)
+                await session.commit()
+                event.is_active = not event.is_active  # обновить локально
+
+            await self._send_ch_admin_panel(
+                callback.from_user.id, event, edit_message=callback.message,
+            )
+            await callback.answer()
+            return
+
+        # ─── Репост анонса ────────────────────────────────
+        if action == "repost" and event_id:
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if not event:
+                    await callback.answer("❌ Мероприятие не найдено.", show_alert=True)
+                    return
+
+                channel_svc = ChannelService(session)
+                channel_obj = await channel_svc.get_by_id(event.channel_id)
+                if not channel_obj:
+                    await callback.answer("❌ Канал не найден.", show_alert=True)
+                    return
+
+            try:
+                await self.channel.post_event_announcement(event, channel_obj.telegram_channel_id)
+                await callback.answer("✅ Анонс перепощен в канал!", show_alert=True)
+            except Exception:
+                await callback.answer("❌ Ошибка репоста.", show_alert=True)
+            return
+
+        # ─── Закрыть панель ──────────────────────────────
+        if action == "close":
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_text("❌ Панель закрыта.")
+            await callback.answer()
+            return
+
+        await callback.answer()
 
     # ═══════════════════════════════════════════════════════
     # ПУБЛИЧНЫЕ МЕТОДЫ

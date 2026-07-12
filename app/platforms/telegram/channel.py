@@ -53,6 +53,9 @@ class ChannelManager:
             [
                 InlineKeyboardButton(text="📋 Все мероприятия", callback_data="channel_events"),
             ],
+            [
+                InlineKeyboardButton(text="🎛 Управление", callback_data=f"ch_admin:menu:{event.id}"),
+            ],
         ])
 
         try:
