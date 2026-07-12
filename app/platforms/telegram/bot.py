@@ -854,7 +854,7 @@ class TelegramBot(PlatformBot):
                     else:
                         channel = await channel_svc.create(
                             telegram_channel_id=channel_telegram_id,
-                            admin_telegram_user_id=str(message.from_user.id),
+                            admin_telegram_user_id="",
                             title=f"Канал {channel_telegram_id}",
                         )
                         channel = await channel_svc.activate_subscription(channel.id, days)
@@ -1376,7 +1376,7 @@ class TelegramBot(PlatformBot):
                     # Create a new channel record with subscription
                     channel = await channel_svc.create(
                         telegram_channel_id=channel_telegram_id,
-                        admin_telegram_user_id=str(message.from_user.id),
+                        admin_telegram_user_id="",
                         title=f"Канал {channel_telegram_id}",
                     )
                     channel = await channel_svc.activate_subscription(channel.id, days)
@@ -1485,11 +1485,20 @@ class TelegramBot(PlatformBot):
                 channel_svc = ChannelService(session)
                 channel = await channel_svc.get_by_telegram_id(str(chat.id))
 
+                # Если не нашли по числовому ID — ищем по @username
+                if not channel and chat.username:
+                    channel = await channel_svc.get_by_telegram_id(f"@{chat.username}")
+                    if channel:
+                        logger.info(
+                            "Канал %s найден по @username, telegram_channel_id: %s → %s",
+                            chat.username, channel.telegram_channel_id, chat.id,
+                        )
+
                 if channel:
                     # Channel already exists — check subscription
                     if await channel_svc.is_subscription_valid(channel.id):
                         # Update admin and channel info if needed
-                        if channel.telegram_channel_id.startswith("pending_") or channel.telegram_channel_id == "__legacy__":
+                        if channel.telegram_channel_id.startswith("pending_") or channel.telegram_channel_id == "__legacy__" or channel.telegram_channel_id.startswith("@"):
                             channel.telegram_channel_id = str(chat.id)
                         channel.admin_telegram_user_id = adder_id
                         channel.title = chat.title

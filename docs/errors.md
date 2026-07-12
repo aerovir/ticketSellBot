@@ -432,3 +432,21 @@
   ```
 - **Коммит:** `e2fa6a8`
 - **Связанные ошибки:** нет
+
+---
+
+## 026 — Каналу при подписке назначается суперадмин вместо реального админа
+
+- **Дата:** 2026-07-13
+- **Статус:** ✅ Исправлено
+- **Описание:** Super-admin подписывает канал через `/subscribe @channel 30` (или через FSM-кнопку «Подписать»). Канал регистрируется в БД с `admin_telegram_user_id = super_admin_id`. Реальный админ канала добавляет бота, но не может управлять каналом — запись уже занята суперадмином. Дополнительно: при добавлении бота в канал создаётся дубликат записи, т.к. поиск по числовому ID не находит запись, созданную с @username.
+- **Причина (подтверждено: `app/platforms/telegram/bot.py`):**
+  - Две несогласованные точки создания/обновления записей канала:
+    1. `/subscribe` при создании нового канала записывает `admin_telegram_user_id = str(message.from_user.id)` (суперадмин)
+    2. `on_chat_member_update` ищет канал по `str(chat.id)` — не находит запись с @username → создаёт дубликат
+  - Формат ключа не совпадает: `/subscribe` сохраняет @username, `on_chat_member_update` ищет по числовому ID
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py`):**
+  1. `/subscribe` (text command, ~line 1379 и FSM handler, ~line 857): `admin_telegram_user_id=str(message.from_user.id)` → `admin_telegram_user_id=""` (пустая строка). Реальный админ определится, когда добавит бота.
+  2. `on_chat_member_update` (~line 1486): после неудачного поиска по `str(chat.id)` добавлен fallback — поиск по `chat.username` (если есть @username у канала). Если запись найдена — обновляется: числовой ID, admin_telegram_user_id, title.
+  3. Условие замены `telegram_channel_id` расширено: теперь также срабатывает при `channel.telegram_channel_id.startswith("@")`.
+- **Коммит:** —
