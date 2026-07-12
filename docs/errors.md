@@ -408,3 +408,27 @@
   2. Убран дублирующийся локальный импорт внутри `if action == "stats_all"`
 - **Коммит:** `305691e`
 - **Связанные ошибки:** нет
+
+---
+
+## 025 — NameError: TicketStatus / PaymentStatus / User / Event / Ticket / Payment не импортированы
+
+- **Дата:** 2026-07-12
+- **Статус:** ✅ Исправлено
+- **Описание:** В `bot.py` отсутствовали импорты `TicketStatus`, `PaymentStatus`, `User`, `Event`, `Ticket`, `Payment` из `app.core.models`. При попытке выполнить действия, использующие эти имена (статистика, отмена билета, инфо о канале и т.д.), бот падал бы с `NameError`.
+- **Анализ:**
+  - **Подтверждено (`app/platforms/telegram/bot.py:15`):**
+    - Импорт был только `from app.core.models import PlatformType, Channel`
+    - `User`, `Event`, `Ticket`, `Payment` использовались в запросах SQLAlchemy (`select(func.count()).select_from(User)` и т.д.)
+    - `TicketStatus`, `PaymentStatus` использовались как значения enum (`TicketStatus.active`, `PaymentStatus.completed`)
+    - Баг не проявлялся раньше, т.к. код до недавних правок не использовал эти имена напрямую
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py:15-18`):**
+  Расширен импорт:
+  ```python
+  from app.core.models import (
+      PlatformType, Channel, User, Event, Ticket, Payment,
+      TicketStatus, PaymentStatus,
+  )
+  ```
+- **Коммит:** `e2fa6a8`
+- **Связанные ошибки:** нет

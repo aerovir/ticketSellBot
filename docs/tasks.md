@@ -72,3 +72,5 @@
 | 47 | Fix: GRANT USAGE → GRANT USAGE, CREATE ON SCHEMA public для платформенных ролей БД | ✅ done | 2026-07-12 | `2a8c29b` |
 | 48 | Fix: admin_menu кнопки выполняют действие вместо показа команды | ✅ done | 2026-07-12 | `e3b7167` |
 | 49 | Fix: UnboundLocalError — select импортирован внутри блока, недоступен в других блоках | ✅ done | 2026-07-12 | `305691e` |
+| 50 | Feat: FSM-ввод параметров для кнопок админ-меню группы Б (channel_info, subscribe, и др.) | ✅ done | 2026-07-12 | `e2fa6a8` |
+| 51 | Fix: Missing imports — TicketStatus, PaymentStatus, User, Event, Ticket, Payment | ✅ done | 2026-07-12 | `e2fa6a8` |
