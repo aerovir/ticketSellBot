@@ -238,7 +238,7 @@
   command: ["python", "-m", "app.bot.telegram"]
   ```
   Изменены сервисы: `telegram`, `vk`, `max`, `seed`, `web`.
-- **Коммит:** (текущий)
+- **Коммит:** (будет в след. коммите)
 - **Связанные ошибки:** нет
 
 ---
@@ -388,5 +388,5 @@
 - **Исправление (подтверждено: `.github/workflows/deploy.yml`):**
   1. `GRANT USAGE` → `GRANT USAGE, CREATE ON SCHEMA public` для всех трёх ролей (`tg_user`, `vk_user`, `max_user`)
   2. Добавлены `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public` для всех трёх ролей в шаг «Права на таблицы»
-- **Коммит:** (текущий)
+- **Коммит:** `2a8c29b`
 - **Связанные ошибки:** нет

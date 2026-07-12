@@ -69,3 +69,4 @@
 | 44 | Тесты: обновлены для multi-tenant (fixture sample_channel, channel_id) | ✅ done | 2026-07-11 | `f886a16`, `f8846be`, `18e56ed` |
 | 45 | Удалён TELEGRAM_CHANNEL_ID из конфига и .env | ✅ done | 2026-07-11 | `acc7953` |
 | 46 | Канал: my_chat_member хендлер (обнаружение добавления бота) | ✅ done | 2026-07-11 | `acc7953` |
+| 47 | Fix: GRANT USAGE → GRANT USAGE, CREATE ON SCHEMA public для платформенных ролей БД | ✅ done | 2026-07-12 | `2a8c29b` |
