@@ -390,3 +390,21 @@
   2. Добавлены `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public` для всех трёх ролей в шаг «Права на таблицы»
 - **Коммит:** `2a8c29b`
 - **Связанные ошибки:** нет
+
+---
+
+## 024 — UnboundLocalError: cannot access local variable 'select' where it is not associated with a value
+
+- **Дата:** 2026-07-12
+- **Статус:** ✅ Исправлено
+- **Описание:** При нажатии на кнопки админ-меню (кроме stats_all) бот падает с `UnboundLocalError: cannot access local variable 'select' where it is not associated with a value`. Traceback указывает на строку `select(Channel).where(...)` в `cmd_callback`.
+- **Анализ:**
+  - **Подтверждено (`app/platforms/telegram/bot.py`, callback handler):**
+    - `from sqlalchemy import select, func` стоял внутри `if action == "stats_all":` — это сделало `select` локальной переменной для всей функции `cmd_callback`
+    - Python при компиляции функции видит `select` в любом блоке как локальную переменную (из-за присваивания через import в одном из блоков)
+    - Все остальные `if action == ...` блоки (check_expired, list_channels, health и др.) используют `select` без собственного импорта → `UnboundLocalError`
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py`):**
+  1. Перенесён `from sqlalchemy import select, func` на верхний уровень файла (после стандартных импортов)
+  2. Убран дублирующийся локальный импорт внутри `if action == "stats_all"`
+- **Коммит:** `305691e`
+- **Связанные ошибки:** нет
