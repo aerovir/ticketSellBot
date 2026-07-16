@@ -478,3 +478,27 @@
   2. Дополнительно удалена строка 593 `from sqlalchemy import select, func` внутри `sa_channel_info()` — избыточный импорт, т.к. `select` и `func` уже импортированы глобально на строке 12. Этот импорт не вызывал ошибки (использовался сразу после объявления), но являлся техническим долгом.
   Аналогичная проблема (локальный импорт, затеняющий глобальный) была ранее с #024 (`select`), исправлена тем же способом.
 - **Коммит:** —
+
+---
+
+## 028 — CI test_admin_create_event_unauthorized падает: _get_admin_channel требует БД (InvalidCatalogNameError)
+
+- **Дата:** 2026-07-16
+- **Статус:** ✅ Исправлено
+- **Описание:** На CI тест `test_admin_create_event_unauthorized` падает с ошибкой:
+  ```
+  asyncpg.exceptions.InvalidCatalogNameError: database "ticketbot" does not exist
+  ```
+  Остальные 83 теста проходят. Ошибка возникает, потому что `admin_create_event()` вызывает `_is_channel_admin()`, который при незаадминенном пользователе вызывает `_get_admin_channel()`, который открывает реальную сессию БД через `async_session_factory()`, использующую `settings.database_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/ticketbot"`. В CI есть только `ticketbot_test`.
+- **Причина (подтверждено: `tests/test_telegram_bot.py:190-199`):**
+  - После замены `_is_admin` на `_is_channel_admin` в `admin_create_event()` (строка 1048), метод вызывает `_get_admin_channel()` (транзитивно через `_is_channel_admin` на строке 426), который требует реальную БД
+  - Тест не мокает `_get_admin_channel`, в отличие от `test_admin_menu_unauthorized` (строка 167), который мокает этот же метод
+  - `async_session_factory` на строке 8 `database.py` использует дефолтный URL `ticketbot`, а в CI существует только `ticketbot_test`
+- **Исправление (подтверждено: `tests/test_telegram_bot.py:194`):**
+  Добавлен `patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=None)`:
+  ```python
+  with patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=None):
+      await telegram_bot.admin_create_event(mock_message, mock_state)
+  ```
+  По аналогии с `test_admin_menu_unauthorized` (строка 167). Теперь `_is_channel_admin` вызывает замоканный `_get_admin_channel`, получает None, возвращает False, и хендлер корректно отвечает «У вас нет доступа», без обращения к БД.
+- **Связанные ошибки:** #021 (аналогичная проблема для `test_admin_menu_unauthorized`)

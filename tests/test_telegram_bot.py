@@ -192,7 +192,8 @@ class TestAdminCommands:
         mock_message.from_user.id = 99999
         mock_state = AsyncMock()
 
-        await telegram_bot.admin_create_event(mock_message, mock_state)
+        with patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=None):
+            await telegram_bot.admin_create_event(mock_message, mock_state)
 
         mock_message.answer.assert_awaited_once_with(
             "У вас нет доступа к панели администратора."
