@@ -1046,7 +1046,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_create_event(self, message: types.Message, state: FSMContext):
         """Start the create-event wizard."""
-        if not self._is_admin(message.from_user.id):
+        if not await self._is_channel_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1186,7 +1186,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_events_all(self, message: types.Message):
         """Show ALL events for the admin's channel."""
-        if not self._is_admin(message.from_user.id):
+        if not await self._is_channel_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1223,7 +1223,7 @@ class TelegramBot(PlatformBot):
 
     async def _toggle_active(self, message: types.Message, activate: bool):
         """Toggle event active state."""
-        if not self._is_admin(message.from_user.id):
+        if not await self._is_channel_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1266,7 +1266,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_stats(self, message: types.Message):
         """Show event sales stats."""
-        if not self._is_admin(message.from_user.id):
+        if not await self._is_channel_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1314,7 +1314,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_repost_events(self, message: types.Message):
         """Repost all active event announcements to the admin's channel."""
-        if not self._is_admin(message.from_user.id):
+        if not await self._is_channel_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
