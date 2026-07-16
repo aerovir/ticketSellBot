@@ -782,7 +782,6 @@ class TelegramBot(PlatformBot):
                 events_count = (await session.execute(
                     select(func.count()).select_from(Event).where(Event.channel_id == channel.id)
                 )).scalar() or 0
-                from datetime import datetime, timezone
                 upcoming = (await session.execute(
                     select(func.count()).select_from(Event)
                     .where(Event.channel_id == channel.id, Event.date >= datetime.now(timezone.utc))
