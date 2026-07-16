@@ -78,3 +78,6 @@
 | 53 | Fix: Каналу при подписке назначается суперадмин вместо реального админа | ✅ done | 2026-07-13 | — |
 | 54 | Fix: нейминг ролевой модели (_is_admin → _is_super_admin, _is_channel_admin → _has_admin_access) | ✅ done | 2026-07-16 | — |
 | 55 | Fix: /my_channels проверял super-admin вместо channel admin (баг) | ✅ done | 2026-07-16 | — |
+| 56 | Feat: верификация админа канала через Telegram API (get_chat_member) при каждом действии | ✅ done | 2026-07-16 | — |
+| 57 | Fix: on_chat_member_update не обрабатывал статус "administrator" (каналы) | ✅ done | 2026-07-16 | — |
+| 58 | Refactor: устранены двойные вызовы _get_admin_channel в хендлерах | ✅ done | 2026-07-16 | — |

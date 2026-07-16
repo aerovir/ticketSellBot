@@ -387,6 +387,21 @@ class TelegramBot(PlatformBot):
         admin_ids = [x.strip() for x in settings.admin_telegram_ids.split(",") if x.strip()]
         return str(user_id) in admin_ids
 
+    async def _verify_channel_admin(self, channel: Channel, user_id: int) -> bool:
+        """Проверить через Telegram API, что пользователь — админ канала и бот в канале."""
+        try:
+            member = await self.bot.get_chat_member(
+                chat_id=channel.telegram_channel_id,
+                user_id=user_id,
+            )
+            return member.status in ("administrator", "creator")
+        except Exception as e:
+            logger.warning(
+                "Channel verification failed for %s (admin %s): %s",
+                channel.telegram_channel_id, user_id, e,
+            )
+            return False
+
     async def _get_admin_channel(self, user_id: int) -> Channel | None:
         """Get the channel managed by this Telegram user with an active subscription."""
         async with async_session_factory() as session:
@@ -394,7 +409,16 @@ class TelegramBot(PlatformBot):
             channels = await channel_svc.get_channels_by_admin(str(user_id))
             for channel in channels:
                 if await channel_svc.is_subscription_valid(channel.id):
-                    return channel
+                    if await self._verify_channel_admin(channel, user_id):
+                        return channel
+                    # Пользователь больше не админ канала — деактивировать подписку
+                    await channel_svc.deactivate_subscription(channel.id)
+                    await session.commit()
+                    logger.info(
+                        "Subscription deactivated for channel %s: user %s is no longer admin",
+                        channel.telegram_channel_id, user_id,
+                    )
+                    return None
 
             # Fallback for super-admins: adopt an unassigned active channel
             if self._is_super_admin(user_id):
@@ -402,11 +426,20 @@ class TelegramBot(PlatformBot):
                 if unassigned:
                     unassigned.admin_telegram_user_id = str(user_id)
                     await session.commit()
+                    # Проверить, что супер-админ действительно админ в Telegram
+                    if await self._verify_channel_admin(unassigned, user_id):
+                        logger.info(
+                            "Супер-админ %s привязан к каналу %s",
+                            user_id, unassigned.telegram_channel_id,
+                        )
+                        return unassigned
+                    # Не сработало — откатываем привязку, не деактивируем подписку
+                    unassigned.admin_telegram_user_id = ""
+                    await session.commit()
                     logger.info(
-                        "Супер-админ %s привязан к каналу %s",
+                        "Супер-админ %s не верифицирован для канала %s, откат привязки",
                         user_id, unassigned.telegram_channel_id,
                     )
-                    return unassigned
 
             # Fallback: admin has no channels but legacy channel exists with
             # active subscription — adopt them as the admin of that channel.
@@ -414,8 +447,16 @@ class TelegramBot(PlatformBot):
             if legacy and await channel_svc.is_subscription_valid(legacy.id):
                 legacy.admin_telegram_user_id = str(user_id)
                 await session.commit()
-                logger.info("Легаси-канал привязан к админу %s", user_id)
-                return legacy
+                if await self._verify_channel_admin(legacy, user_id):
+                    logger.info("Легаси-канал привязан к админу %s", user_id)
+                    return legacy
+                # Не сработало — откатываем
+                legacy.admin_telegram_user_id = ""
+                await session.commit()
+                logger.info(
+                    "Легаси-канал: пользователь %s не верифицирован, откат привязки",
+                    user_id,
+                )
 
         return None
 
@@ -1045,11 +1086,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_create_event(self, message: types.Message, state: FSMContext):
         """Start the create-event wizard."""
-        if not await self._has_admin_access(message.from_user.id):
-            await message.answer("У вас нет доступа к панели администратора.")
-            return
-
-        # Get admin's channel
+        # Get admin's channel (проверяет права через Telegram API внутри)
         channel = await self._get_admin_channel(message.from_user.id)
         if not channel:
             await message.answer("❌ У вас нет канала с активной подпиской.\n\nОбратитесь к администратору для оформления подписки.")
@@ -1185,13 +1222,9 @@ class TelegramBot(PlatformBot):
 
     async def admin_events_all(self, message: types.Message):
         """Show ALL events for the admin's channel."""
-        if not await self._has_admin_access(message.from_user.id):
-            await message.answer("У вас нет доступа к панели администратора.")
-            return
-
         channel = await self._get_admin_channel(message.from_user.id)
         if not channel:
-            await message.answer("❌ У вас нет канала с активной подпиской.")
+            await message.answer("❌ У вас нет канала с активной подпиской.\n\nОбратитесь к администратору для оформления подписки.")
             return
 
         async with async_session_factory() as session:
@@ -1222,13 +1255,9 @@ class TelegramBot(PlatformBot):
 
     async def _toggle_active(self, message: types.Message, activate: bool):
         """Toggle event active state."""
-        if not await self._has_admin_access(message.from_user.id):
-            await message.answer("У вас нет доступа к панели администратора.")
-            return
-
         channel = await self._get_admin_channel(message.from_user.id)
         if not channel:
-            await message.answer("❌ У вас нет канала с активной подпиской.")
+            await message.answer("❌ У вас нет канала с активной подпиской.\n\nОбратитесь к администратору для оформления подписки.")
             return
 
         args = message.text.split(maxsplit=1)
@@ -1265,13 +1294,9 @@ class TelegramBot(PlatformBot):
 
     async def admin_stats(self, message: types.Message):
         """Show event sales stats."""
-        if not await self._has_admin_access(message.from_user.id):
-            await message.answer("У вас нет доступа к панели администратора.")
-            return
-
         channel = await self._get_admin_channel(message.from_user.id)
         if not channel:
-            await message.answer("❌ У вас нет канала с активной подпиской.")
+            await message.answer("❌ У вас нет канала с активной подпиской.\n\nОбратитесь к администратору для оформления подписки.")
             return
 
         args = message.text.split(maxsplit=1)
@@ -1313,13 +1338,9 @@ class TelegramBot(PlatformBot):
 
     async def admin_repost_events(self, message: types.Message):
         """Repost all active event announcements to the admin's channel."""
-        if not await self._has_admin_access(message.from_user.id):
-            await message.answer("У вас нет доступа к панели администратора.")
-            return
-
         channel = await self._get_admin_channel(message.from_user.id)
         if not channel:
-            await message.answer("❌ У вас нет канала с активной подпиской.")
+            await message.answer("❌ У вас нет канала с активной подпиской.\n\nОбратитесь к администратору для оформления подписки.")
             return
 
         async with async_session_factory() as session:
@@ -1488,8 +1509,8 @@ class TelegramBot(PlatformBot):
         chat = chat_member.chat
         adder_id = str(chat_member.from_user.id)
 
-        # Bot was added to a channel
-        if chat_member.new_chat_member.status == "member":
+        # Bot was added to a channel (в каналах бот всегда администратор)
+        if chat_member.new_chat_member.status in ("member", "administrator"):
             logger.info("Бот добавлен в канал %s пользователем %s", chat.id, adder_id)
 
             async with async_session_factory() as session:

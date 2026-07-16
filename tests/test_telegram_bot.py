@@ -51,6 +51,11 @@ def telegram_bot():
         mock_bot = AsyncMock()
         mock_bot_cls.return_value = mock_bot
 
+        # По умолчанию get_chat_member возвращает администратора канала
+        mock_member = Mock()
+        mock_member.status = "administrator"
+        mock_bot.get_chat_member = AsyncMock(return_value=mock_member)
+
         from app.platforms.telegram.bot import TelegramBot
 
         bot = TelegramBot()
@@ -195,9 +200,8 @@ class TestAdminCommands:
         with patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=None):
             await telegram_bot.admin_create_event(mock_message, mock_state)
 
-        mock_message.answer.assert_awaited_once_with(
-            "У вас нет доступа к панели администратора."
-        )
+        mock_message.answer.assert_awaited_once()
+        assert "нет канала" in mock_message.answer.call_args[0][0]
 
     async def test_deactivate_no_id(self, telegram_bot, mock_message):
         """/deactivate без ID."""
