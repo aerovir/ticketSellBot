@@ -455,7 +455,7 @@
 
 ## 027 — UnboundLocalError: cannot access local variable 'datetime' where it is not associated with a value
 
-- **Дата:** 2026-07-16
+- **Дата:** 2026-07-16 (обновлено 2026-07-16)
 - **Статус:** ✅ Исправлено
 - **Описание:** В runtime при нажатии inline-кнопки «Общая статистика» бот падает с ошибкой:
   ```
@@ -468,13 +468,13 @@
   ```
   Ошибка повторяется дважды (на двух разных сессиях).
 - **Анализ:**
-  - **Подтверждено (`app/platforms/telegram/bot.py:1595, 1684`):**
-    - Внутри функции `cmd_callback` (строка 1595) есть локальный импорт `from datetime import datetime` в ветке `if action == "admin:confirm_create":`
+  - **Подтверждено (`app/platforms/telegram/bot.py:1596`):**
+    - Внутри функции `cmd_callback` (строка 1596) есть локальный импорт `from datetime import datetime` в ветке `if action == "admin:confirm_create":`
     - Python при компиляции видит присваивание `datetime` через импорт в одном из блоков функции — `datetime` становится локальной переменной для всей функции
-    - Когда срабатывает ветка `if action == "stats_all":` (строка 1684), код использует `datetime.now(timezone.utc)` — но локальная `datetime` ещё не присвоена (ветка `admin:confirm_create` не выполнялась), возникает `UnboundLocalError`
-  - **Дополнительные затронутые места (без импорта):**
-    - `sa_stats_all()` строка 517: `datetime.now(timezone.utc)`
-    - `sa_channel_info()` строка 600: `datetime.now(timezone.utc)`
-- **Исправление (подтверждено: `app/platforms/telegram/bot.py:1-25`):**
-  Добавлен импорт `from datetime import datetime, timezone` на верхний уровень файла (после `import logging`). Это исправляет все три места одновременно.
+    - Когда срабатывает ветка `if action == "stats_all":` (строка 1685), код использует `datetime.now(timezone.utc)` — но локальная `datetime` ещё не присвоена (ветка `admin:confirm_create` не выполнялась), возникает `UnboundLocalError`
+  - **Корень проблемы:** Предыдущее «исправление» (добавление `from datetime import datetime, timezone` на верхний уровень) было недостаточным. Локальный импорт на строке 1596 остался и продолжал затенять глобальный `datetime`, потому что Python видит `import` внутри функции как присваивание локальной переменной, что делает `datetime` локальным для всей функции `cmd_callback` независимо от того, выполнилась ли эта ветка.
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py:1596,593`):**
+  1. Удалена строка 1596 `from datetime import datetime` внутри `cmd_callback`. Глобальный импорт `from datetime import datetime, timezone` (строка 2) уже предоставляет оба имени. `datetime.fromisoformat()` — классовый метод, доступный через глобальный `datetime`.
+  2. Дополнительно удалена строка 593 `from sqlalchemy import select, func` внутри `sa_channel_info()` — избыточный импорт, т.к. `select` и `func` уже импортированы глобально на строке 12. Этот импорт не вызывал ошибки (использовался сразу после объявления), но являлся техническим долгом.
+  Аналогичная проблема (локальный импорт, затеняющий глобальный) была ранее с #024 (`select`), исправлена тем же способом.
 - **Коммит:** —

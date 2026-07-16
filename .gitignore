@@ -21,5 +21,8 @@ Thumbs.db
 # Docker
 .dockerignore
 
-# Claude Code worktrees
+# Claude Code
+.claude/agents/
 .claude/worktrees/
+.claude/scheduled_tasks.json
+.claude/transcripts/

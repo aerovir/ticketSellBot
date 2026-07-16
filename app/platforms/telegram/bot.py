@@ -590,7 +590,6 @@ class TelegramBot(PlatformBot):
                 return
 
             # Events count for this channel
-            from sqlalchemy import select, func
             result = await session.execute(
                 select(func.count()).select_from(Event).where(Event.channel_id == channel.id)
             )
@@ -1593,7 +1592,6 @@ class TelegramBot(PlatformBot):
                 await state.clear()
                 return
 
-            from datetime import datetime
             event_date = datetime.fromisoformat(fsm_data["date"])
 
             try:
