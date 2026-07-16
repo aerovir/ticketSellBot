@@ -109,6 +109,21 @@ class ChannelService:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_active_unassigned_channel(self) -> Channel | None:
+        """Get a channel with active subscription but no admin assigned."""
+        stmt = (
+            select(Channel)
+            .where(
+                and_(
+                    Channel.admin_telegram_user_id == "",
+                    Channel.is_subscription_active == True,
+                )
+            )
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
 
 # ─── Event Service ───────────────────────────────────────────────────────────
 

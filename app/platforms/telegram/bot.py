@@ -396,6 +396,18 @@ class TelegramBot(PlatformBot):
                 if await channel_svc.is_subscription_valid(channel.id):
                     return channel
 
+            # Fallback for super-admins: adopt an unassigned active channel
+            if self._is_admin(user_id):
+                unassigned = await channel_svc.get_active_unassigned_channel()
+                if unassigned:
+                    unassigned.admin_telegram_user_id = str(user_id)
+                    await session.commit()
+                    logger.info(
+                        "Супер-админ %s привязан к каналу %s",
+                        user_id, unassigned.telegram_channel_id,
+                    )
+                    return unassigned
+
             # Fallback: admin has no channels but legacy channel exists with
             # active subscription — adopt them as the admin of that channel.
             legacy = await channel_svc.get_by_telegram_id("__legacy__")
@@ -1495,15 +1507,15 @@ class TelegramBot(PlatformBot):
                         )
 
                 if channel:
-                    # Channel already exists — check subscription
-                    if await channel_svc.is_subscription_valid(channel.id):
-                        # Update admin and channel info if needed
-                        if channel.telegram_channel_id.startswith("pending_") or channel.telegram_channel_id == "__legacy__" or channel.telegram_channel_id.startswith("@"):
-                            channel.telegram_channel_id = str(chat.id)
-                        channel.admin_telegram_user_id = adder_id
-                        channel.title = chat.title
-                        await session.commit()
+                    # Channel already exists — always save the admin who added the bot
+                    if channel.telegram_channel_id.startswith("pending_") or channel.telegram_channel_id == "__legacy__" or channel.telegram_channel_id.startswith("@"):
+                        channel.telegram_channel_id = str(chat.id)
+                    channel.admin_telegram_user_id = adder_id
+                    channel.title = chat.title
+                    await session.commit()
 
+                    # Subscription status determines the welcome message
+                    if await channel_svc.is_subscription_valid(channel.id):
                         await self.bot.send_message(
                             chat_id=chat.id,
                             text=(
