@@ -450,3 +450,31 @@
   2. `on_chat_member_update` (~line 1486): после неудачного поиска по `str(chat.id)` добавлен fallback — поиск по `chat.username` (если есть @username у канала). Если запись найдена — обновляется: числовой ID, admin_telegram_user_id, title.
   3. Условие замены `telegram_channel_id` расширено: теперь также срабатывает при `channel.telegram_channel_id.startswith("@")`.
 - **Коммит:** —
+
+---
+
+## 027 — UnboundLocalError: cannot access local variable 'datetime' where it is not associated with a value
+
+- **Дата:** 2026-07-16
+- **Статус:** ✅ Исправлено
+- **Описание:** В runtime при нажатии inline-кнопки «Общая статистика» бот падает с ошибкой:
+  ```
+  UnboundLocalError: cannot access local variable 'datetime' where it is not associated with a value
+  Traceback (most recent call last):
+    File "/app/app/platforms/telegram/bot.py", line 1684, in cmd_callback
+      select(func.count()).select_from(Event).where(Event.date >= datetime.now(timezone.utc))
+                                                                  ^^^^^^^^
+  UnboundLocalError: cannot access local variable 'datetime' where it is not associated with a value
+  ```
+  Ошибка повторяется дважды (на двух разных сессиях).
+- **Анализ:**
+  - **Подтверждено (`app/platforms/telegram/bot.py:1595, 1684`):**
+    - Внутри функции `cmd_callback` (строка 1595) есть локальный импорт `from datetime import datetime` в ветке `if action == "admin:confirm_create":`
+    - Python при компиляции видит присваивание `datetime` через импорт в одном из блоков функции — `datetime` становится локальной переменной для всей функции
+    - Когда срабатывает ветка `if action == "stats_all":` (строка 1684), код использует `datetime.now(timezone.utc)` — но локальная `datetime` ещё не присвоена (ветка `admin:confirm_create` не выполнялась), возникает `UnboundLocalError`
+  - **Дополнительные затронутые места (без импорта):**
+    - `sa_stats_all()` строка 517: `datetime.now(timezone.utc)`
+    - `sa_channel_info()` строка 600: `datetime.now(timezone.utc)`
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py:1-25`):**
+  Добавлен импорт `from datetime import datetime, timezone` на верхний уровень файла (после `import logging`). Это исправляет все три места одновременно.
+- **Коммит:** —
