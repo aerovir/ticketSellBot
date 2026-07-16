@@ -7,7 +7,7 @@ from aiogram.filters import Command, CommandObject, ChatMemberUpdatedFilter, IS_
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeChat, BotCommandScopeAllPrivateChats
 
 from sqlalchemy import select, func
 
@@ -24,6 +24,24 @@ from app.platforms.telegram.channel import ChannelManager
 logger = logging.getLogger("ticketbot.telegram")
 
 PAGE_SIZE = 5  # мероприятий/билетов на страницу
+
+# ─── Наборы команд для Menu Button ────────────────────────────────
+USER_COMMANDS = [
+    BotCommand(command="start", description="🚀 Приветствие"),
+    BotCommand(command="events", description="📋 Список мероприятий"),
+    BotCommand(command="my_tickets", description="🎫 Мои билеты"),
+]
+
+ADMIN_COMMANDS = [
+    BotCommand(command="admin", description="🎛 Панель управления"),
+    BotCommand(command="create_event", description="➕ Создать мероприятие"),
+]
+
+SUPER_ADMIN_COMMANDS = [
+    BotCommand(command="subscribe", description="🟢 Подписать канал"),
+    BotCommand(command="health", description="🩺 Статус бота"),
+    BotCommand(command="stats_all", description="📊 Общая статистика"),
+]
 
 
 # ─── FSM States для создания мероприятия ──────────────────────────────────
@@ -155,6 +173,10 @@ class TelegramBot(PlatformBot):
                 pass
 
         await self._get_user_id(message)
+
+        # Установить Menu Button под роль пользователя
+        await self._update_user_commands(message.from_user.id)
+
         text = (
             "🎫 <b>TicketBot</b>\n\n"
             "Я помогаю покупать билеты на мероприятия.\n\n"
@@ -408,6 +430,25 @@ class TelegramBot(PlatformBot):
             )
             return None
 
+    async def _update_user_commands(self, user_id: int):
+        """Установить список команд для пользователя в зависимости от его роли.
+
+        Вызывается при старте, при входе в админку и при добавлении бота в канал.
+        """
+        if self._is_super_admin(user_id):
+            commands = USER_COMMANDS + ADMIN_COMMANDS + SUPER_ADMIN_COMMANDS
+        else:
+            channel = await self._get_admin_channel(user_id)
+            if channel:
+                commands = USER_COMMANDS + ADMIN_COMMANDS
+            else:
+                commands = USER_COMMANDS
+
+        await self.bot.set_my_commands(
+            commands=commands,
+            scope=BotCommandScopeChat(chat_id=user_id),
+        )
+
     async def _get_admin_channel(self, user_id: int) -> Channel | None:
         """Get the channel managed by this Telegram user with an active subscription."""
         async with async_session_factory() as session:
@@ -552,6 +593,9 @@ class TelegramBot(PlatformBot):
             if not ch:
                 await message.answer("У вас нет доступа к панели администратора.")
                 return
+
+        # Обновить Menu Button: админу — расширенный набор команд
+        await self._update_user_commands(user_id)
 
         title = "🎫 <b>Панель управления</b>\n\n"
         if is_super:
@@ -1567,6 +1611,9 @@ class TelegramBot(PlatformBot):
                     channel.title = chat.title
                     await session.commit()
 
+                    # Обновить Menu Button для нового админа канала
+                    await self._update_user_commands(int(adder_id))
+
                     # Subscription status determines the welcome message
                     if await channel_svc.is_subscription_valid(channel.id):
                         await self.bot.send_message(
@@ -2415,6 +2462,13 @@ class TelegramBot(PlatformBot):
                 me = await self.bot.get_me()
                 self._bot_username = me.username
                 self.channel.bot_username = me.username
+
+                # Устанавливаем Menu Button: пользователи видят команды в меню
+                await self.bot.set_my_commands(
+                    commands=USER_COMMANDS,
+                    scope=BotCommandScopeAllPrivateChats(),
+                )
+
                 await self.dp.start_polling(
                     self.bot,
                     allowed_updates=["message", "channel_post", "callback_query", "my_chat_member"],

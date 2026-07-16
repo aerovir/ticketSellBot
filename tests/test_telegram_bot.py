@@ -73,10 +73,13 @@ class TestUserCommands:
         """Команда /start возвращает приветствие."""
         mock_message.text = "/start"
 
-        with patch(
-            "app.platforms.telegram.bot.UserService.get_or_create",
-            new_callable=AsyncMock,
-            return_value=Mock(id=uuid.uuid4()),
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch.object(telegram_bot, "_update_user_commands", new_callable=AsyncMock),
         ):
             await telegram_bot.cmd_start(mock_message)
 
@@ -403,10 +406,13 @@ class TestDeepLink:
 
     async def test_start_without_payload(self, telegram_bot, mock_message):
         """/start без payload — обычное приветствие."""
-        with patch(
-            "app.platforms.telegram.bot.UserService.get_or_create",
-            new_callable=AsyncMock,
-            return_value=Mock(id=uuid.uuid4()),
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch.object(telegram_bot, "_update_user_commands", new_callable=AsyncMock),
         ):
             await telegram_bot.cmd_start(mock_message)
 

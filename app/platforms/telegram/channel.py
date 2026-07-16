@@ -44,17 +44,11 @@ class ChannelManager:
             f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}"
         )
 
-        # Inline-кнопки: всё в канале через callback_data
+        # Быстрая покупка — единственная inline-кнопка в анонсе.
+        # Остальные действия — через Menu Button в личных сообщениях (/events, /my_tickets, /admin).
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="🎟 Купить", callback_data=f"channel_buy:{event.id}"),
-                InlineKeyboardButton(text="🎫 Мои билеты", callback_data="channel_my_tickets"),
-            ],
-            [
-                InlineKeyboardButton(text="📋 Все мероприятия", callback_data="channel_events"),
-            ],
-            [
-                InlineKeyboardButton(text="🎛 Управление", callback_data=f"ch_admin:menu:{event.id}"),
             ],
         ])
 
