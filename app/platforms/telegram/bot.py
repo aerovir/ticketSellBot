@@ -380,7 +380,7 @@ class TelegramBot(PlatformBot):
     # АДМИН-ХЕНДЛЕРЫ
     # ═══════════════════════════════════════════════════════
 
-    def _is_admin(self, user_id: int) -> bool:
+    def _is_super_admin(self, user_id: int) -> bool:
         """Check if a Telegram user is in the super admin list."""
         if not settings.admin_telegram_ids:
             return False
@@ -397,7 +397,7 @@ class TelegramBot(PlatformBot):
                     return channel
 
             # Fallback for super-admins: adopt an unassigned active channel
-            if self._is_admin(user_id):
+            if self._is_super_admin(user_id):
                 unassigned = await channel_svc.get_active_unassigned_channel()
                 if unassigned:
                     unassigned.admin_telegram_user_id = str(user_id)
@@ -419,9 +419,9 @@ class TelegramBot(PlatformBot):
 
         return None
 
-    async def _is_channel_admin(self, user_id: int) -> bool:
-        """Check if user has at least one channel with active subscription."""
-        if self._is_admin(user_id):
+    async def _has_admin_access(self, user_id: int) -> bool:
+        """Check if user has admin access (super-admin OR channel admin with active subscription)."""
+        if self._is_super_admin(user_id):
             return True
         channel = await self._get_admin_channel(user_id)
         return channel is not None
@@ -477,7 +477,7 @@ class TelegramBot(PlatformBot):
     async def admin_menu(self, message: types.Message):
         """Show admin panel with inline buttons."""
         user_id = message.from_user.id
-        is_super = self._is_admin(user_id)
+        is_super = self._is_super_admin(user_id)
 
         if not is_super:
             ch = await self._get_admin_channel(user_id)
@@ -500,7 +500,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_stats_all(self, message: types.Message):
         """Global statistics: channels, events, tickets, users."""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -556,7 +556,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_list_channels(self, message: types.Message):
         """List all channels with subscription status."""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -583,7 +583,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_channel_info(self, message: types.Message):
         """Show channel details. Usage: /channel_info <channel_id>"""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -635,7 +635,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_user_info(self, message: types.Message):
         """Show user info. Usage: /user_info <telegram_user_id>"""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -673,7 +673,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_admin_cancel(self, message: types.Message):
         """Admin cancel any ticket. Usage: /admin_cancel <ticket_id>"""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -699,7 +699,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_broadcast(self, message: types.Message, state: FSMContext):
         """Broadcast a message to all bot users via their DMs."""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -768,7 +768,7 @@ class TelegramBot(PlatformBot):
         user_input = message.text.strip()
 
         if action == "channel_info":
-            if not self._is_admin(message.from_user.id):
+            if not self._is_super_admin(message.from_user.id):
                 await message.answer("У вас нет доступа.")
                 await state.clear()
                 return
@@ -806,7 +806,7 @@ class TelegramBot(PlatformBot):
             return
 
         if action == "user_info":
-            if not self._is_admin(message.from_user.id):
+            if not self._is_super_admin(message.from_user.id):
                 await message.answer("У вас нет доступа.")
                 await state.clear()
                 return
@@ -834,7 +834,7 @@ class TelegramBot(PlatformBot):
             return
 
         if action == "subscribe":
-            if not self._is_admin(message.from_user.id):
+            if not self._is_super_admin(message.from_user.id):
                 await message.answer("У вас нет доступа.")
                 await state.clear()
                 return
@@ -883,7 +883,7 @@ class TelegramBot(PlatformBot):
             return
 
         if action == "unsubscribe":
-            if not self._is_admin(message.from_user.id):
+            if not self._is_super_admin(message.from_user.id):
                 await message.answer("У вас нет доступа.")
                 await state.clear()
                 return
@@ -909,7 +909,7 @@ class TelegramBot(PlatformBot):
             return
 
         if action == "change_admin":
-            if not self._is_admin(message.from_user.id):
+            if not self._is_super_admin(message.from_user.id):
                 await message.answer("У вас нет доступа.")
                 await state.clear()
                 return
@@ -937,7 +937,7 @@ class TelegramBot(PlatformBot):
             return
 
         if action == "admin_cancel":
-            if not self._is_admin(message.from_user.id):
+            if not self._is_super_admin(message.from_user.id):
                 await message.answer("У вас нет доступа.")
                 await state.clear()
                 return
@@ -963,7 +963,7 @@ class TelegramBot(PlatformBot):
     async def sa_health(self, message: types.Message):
         """Check bot health status."""
         """Check bot health status."""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -986,7 +986,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_check_expired(self, message: types.Message):
         """Check and deactivate expired subscriptions."""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -1013,7 +1013,7 @@ class TelegramBot(PlatformBot):
 
     async def sa_change_admin(self, message: types.Message):
         """Change channel admin. Usage: /change_admin <channel_id> <new_user_id>"""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа.")
             return
 
@@ -1045,7 +1045,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_create_event(self, message: types.Message, state: FSMContext):
         """Start the create-event wizard."""
-        if not await self._is_channel_admin(message.from_user.id):
+        if not await self._has_admin_access(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1185,7 +1185,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_events_all(self, message: types.Message):
         """Show ALL events for the admin's channel."""
-        if not await self._is_channel_admin(message.from_user.id):
+        if not await self._has_admin_access(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1222,7 +1222,7 @@ class TelegramBot(PlatformBot):
 
     async def _toggle_active(self, message: types.Message, activate: bool):
         """Toggle event active state."""
-        if not await self._is_channel_admin(message.from_user.id):
+        if not await self._has_admin_access(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1265,7 +1265,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_stats(self, message: types.Message):
         """Show event sales stats."""
-        if not await self._is_channel_admin(message.from_user.id):
+        if not await self._has_admin_access(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1313,7 +1313,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_repost_events(self, message: types.Message):
         """Repost all active event announcements to the admin's channel."""
-        if not await self._is_channel_admin(message.from_user.id):
+        if not await self._has_admin_access(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1347,7 +1347,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_subscribe(self, message: types.Message):
         """Activate a subscription for a channel. Usage: /subscribe <channel_id> <days>"""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1409,7 +1409,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_unsubscribe(self, message: types.Message):
         """Deactivate a subscription for a channel. Usage: /unsubscribe <channel_id>"""
-        if not self._is_admin(message.from_user.id):
+        if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1450,7 +1450,7 @@ class TelegramBot(PlatformBot):
 
     async def admin_my_channels(self, message: types.Message):
         """Show the admin's channels and subscription status."""
-        if not self._is_admin(message.from_user.id):
+        if not await self._has_admin_access(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
@@ -1652,14 +1652,14 @@ class TelegramBot(PlatformBot):
             action = data.split(":", 1)[1]
 
             if action == "back":
-                is_super = self._is_admin(callback.from_user.id)
+                is_super = self._is_super_admin(callback.from_user.id)
                 kb = self._admin_menu_kb(is_super)
                 title = "🎫 <b>Панель управления</b>\n\n<i>Выберите действие:</i>"
                 await callback.message.edit_text(title, parse_mode="HTML", reply_markup=kb)
                 return
 
             user_id = callback.from_user.id
-            is_super = self._is_admin(user_id)
+            is_super = self._is_super_admin(user_id)
 
             if not is_super:
                 ch = await self._get_admin_channel(user_id)
@@ -2188,7 +2188,7 @@ class TelegramBot(PlatformBot):
             async with async_session_factory() as session:
                 channel_svc = ChannelService(session)
                 channel = await channel_svc.get_by_telegram_id(source_chat_id)
-                is_super = self._is_admin(callback.from_user.id)
+                is_super = self._is_super_admin(callback.from_user.id)
                 if not channel or (
                     channel.admin_telegram_user_id != str(callback.from_user.id) and not is_super
                 ):
@@ -2225,7 +2225,7 @@ class TelegramBot(PlatformBot):
         # ─── Из ЛС: кнопки панели управления ───────────────
         # Проверить, что пользователь — админ канала (или super-admin)
         channel = await self._get_admin_channel(callback.from_user.id)
-        is_super = self._is_admin(callback.from_user.id)
+        is_super = self._is_super_admin(callback.from_user.id)
         if not channel and not is_super:
             await callback.answer("❌ Доступно только администратору канала.", show_alert=True)
             return

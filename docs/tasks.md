@@ -76,3 +76,5 @@
 | 51 | Fix: Missing imports — TicketStatus, PaymentStatus, User, Event, Ticket, Payment | ✅ done | 2026-07-12 | `e2fa6a8` |
 | 52 | Feat: Кнопка «🎛 Управление» на анонсах в канале — гибридная админ-панель через ЛС | ✅ done | 2026-07-12 | `2560555` |
 | 53 | Fix: Каналу при подписке назначается суперадмин вместо реального админа | ✅ done | 2026-07-13 | — |
+| 54 | Fix: нейминг ролевой модели (_is_admin → _is_super_admin, _is_channel_admin → _has_admin_access) | ✅ done | 2026-07-16 | — |
+| 55 | Fix: /my_channels проверял super-admin вместо channel admin (баг) | ✅ done | 2026-07-16 | — |
