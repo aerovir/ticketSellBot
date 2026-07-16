@@ -387,8 +387,14 @@ class TelegramBot(PlatformBot):
         admin_ids = [x.strip() for x in settings.admin_telegram_ids.split(",") if x.strip()]
         return str(user_id) in admin_ids
 
-    async def _verify_channel_admin(self, channel: Channel, user_id: int) -> bool:
-        """Проверить через Telegram API, что пользователь — админ канала и бот в канале."""
+    async def _verify_channel_admin(self, channel: Channel, user_id: int) -> bool | None:
+        """Проверить через Telegram API, что пользователь — админ канала и бот в канале.
+
+        Returns:
+            True  — пользователь администратор или создатель канала
+            False — пользователь НЕ админ (подтверждено API)
+            None  — ошибка API (бот не в канале, канал не найден, сетевой сбой)
+        """
         try:
             member = await self.bot.get_chat_member(
                 chat_id=channel.telegram_channel_id,
@@ -400,7 +406,7 @@ class TelegramBot(PlatformBot):
                 "Channel verification failed for %s (admin %s): %s",
                 channel.telegram_channel_id, user_id, e,
             )
-            return False
+            return None
 
     async def _get_admin_channel(self, user_id: int) -> Channel | None:
         """Get the channel managed by this Telegram user with an active subscription."""
@@ -409,16 +415,24 @@ class TelegramBot(PlatformBot):
             channels = await channel_svc.get_channels_by_admin(str(user_id))
             for channel in channels:
                 if await channel_svc.is_subscription_valid(channel.id):
-                    if await self._verify_channel_admin(channel, user_id):
+                    verified = await self._verify_channel_admin(channel, user_id)
+                    if verified is True:
                         return channel
-                    # Пользователь больше не админ канала — деактивировать подписку
-                    await channel_svc.deactivate_subscription(channel.id)
-                    await session.commit()
+                    elif verified is False:
+                        # API подтвердила: пользователь не админ — деактивировать
+                        await channel_svc.deactivate_subscription(channel.id)
+                        await session.commit()
+                        logger.info(
+                            "Subscription deactivated for channel %s: user %s is no longer admin",
+                            channel.telegram_channel_id, user_id,
+                        )
+                        return None
+                    # verified is None — ошибка API, подписку не трогаем,
+                    # пробуем следующий канал (если есть)
                     logger.info(
-                        "Subscription deactivated for channel %s: user %s is no longer admin",
+                        "Skipping channel %s for user %s: Telegram API error, subscription kept",
                         channel.telegram_channel_id, user_id,
                     )
-                    return None
 
             # Fallback for super-admins: adopt an unassigned active channel
             if self._is_super_admin(user_id):
@@ -426,20 +440,26 @@ class TelegramBot(PlatformBot):
                 if unassigned:
                     unassigned.admin_telegram_user_id = str(user_id)
                     await session.commit()
-                    # Проверить, что супер-админ действительно админ в Telegram
-                    if await self._verify_channel_admin(unassigned, user_id):
+                    verified = await self._verify_channel_admin(unassigned, user_id)
+                    if verified is True:
                         logger.info(
                             "Супер-админ %s привязан к каналу %s",
                             user_id, unassigned.telegram_channel_id,
                         )
                         return unassigned
-                    # Не сработало — откатываем привязку, не деактивируем подписку
+                    # Не удалось верифицировать — откатываем привязку, не деактивируем подписку
                     unassigned.admin_telegram_user_id = ""
                     await session.commit()
-                    logger.info(
-                        "Супер-админ %s не верифицирован для канала %s, откат привязки",
-                        user_id, unassigned.telegram_channel_id,
-                    )
+                    if verified is False:
+                        logger.info(
+                            "Супер-админ %s не админ канала %s, откат привязки",
+                            user_id, unassigned.telegram_channel_id,
+                        )
+                    else:
+                        logger.info(
+                            "Супер-админ %s не верифицирован для канала %s (ошибка API), откат привязки",
+                            user_id, unassigned.telegram_channel_id,
+                        )
 
             # Fallback: admin has no channels but legacy channel exists with
             # active subscription — adopt them as the admin of that channel.
@@ -447,16 +467,23 @@ class TelegramBot(PlatformBot):
             if legacy and await channel_svc.is_subscription_valid(legacy.id):
                 legacy.admin_telegram_user_id = str(user_id)
                 await session.commit()
-                if await self._verify_channel_admin(legacy, user_id):
+                verified = await self._verify_channel_admin(legacy, user_id)
+                if verified is True:
                     logger.info("Легаси-канал привязан к админу %s", user_id)
                     return legacy
-                # Не сработало — откатываем
+                # Не удалось верифицировать — откатываем
                 legacy.admin_telegram_user_id = ""
                 await session.commit()
-                logger.info(
-                    "Легаси-канал: пользователь %s не верифицирован, откат привязки",
-                    user_id,
-                )
+                if verified is False:
+                    logger.info(
+                        "Легаси-канал: пользователь %s не админ, откат привязки",
+                        user_id,
+                    )
+                else:
+                    logger.info(
+                        "Легаси-канал: пользователь %s не верифицирован (ошибка API), откат привязки",
+                        user_id,
+                    )
 
         return None
 
@@ -1528,7 +1555,13 @@ class TelegramBot(PlatformBot):
 
                 if channel:
                     # Channel already exists — always save the admin who added the bot
-                    if channel.telegram_channel_id.startswith("pending_") or channel.telegram_channel_id == "__legacy__" or channel.telegram_channel_id.startswith("@"):
+                    # Обновляем telegram_channel_id если он: pending_*, __legacy__, @username или голое число без -100
+                    if (
+                        channel.telegram_channel_id.startswith("pending_")
+                        or channel.telegram_channel_id == "__legacy__"
+                        or channel.telegram_channel_id.startswith("@")
+                        or channel.telegram_channel_id.lstrip("-").isdigit()
+                    ):
                         channel.telegram_channel_id = str(chat.id)
                     channel.admin_telegram_user_id = adder_id
                     channel.title = chat.title

@@ -81,3 +81,5 @@
 | 56 | Feat: верификация админа канала через Telegram API (get_chat_member) при каждом действии | ✅ done | 2026-07-16 | — |
 | 57 | Fix: on_chat_member_update не обрабатывал статус "administrator" (каналы) | ✅ done | 2026-07-16 | — |
 | 58 | Refactor: устранены двойные вызовы _get_admin_channel в хендлерах | ✅ done | 2026-07-16 | — |
+| 59 | Fix: _verify_channel_admin теперь возвращает True/False/None (не деактивирует подписку при ошибке API) | ✅ done | 2026-07-16 | — |
+| 60 | Fix: on_chat_member_update обновляет telegram_channel_id для голых чисел (без -100) | ✅ done | 2026-07-16 | — |
