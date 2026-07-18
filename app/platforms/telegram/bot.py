@@ -1446,14 +1446,19 @@ class TelegramBot(PlatformBot):
         lines = ["🎫 <b>Все мероприятия:</b>\n"]
         kb_rows = []
         for e in events:
-            status = "🟢" if e.is_active else "🔴"
+            event_status = "🟢" if e.is_active else "🔴"
             date_str = e.date.strftime("%d.%m.%Y %H:%M")
             lines.append(
-                f"{status} <b>{e.title}</b>\n"
+                f"{event_status} <b>{e.title}</b>\n"
                 f"📅 {date_str}\n"
                 f"🎟 {e.available_tickets}/{e.total_tickets}\n"
             )
-            # Кнопки управления для каждого мероприятия
+            # Первая строка: название мероприятия (до 40 символов)
+            title_btn = e.title[:40]
+            kb_rows.append([
+                InlineKeyboardButton(text=f"🎫 {title_btn}", callback_data=f"ch_admin:menu:{e.id}"),
+            ])
+            # Вторая строка: кнопки управления
             toggle_label = "▶ Включить" if not e.is_active else "⏸ Отключить"
             kb_rows.append([
                 InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{e.id}"),
@@ -2120,15 +2125,27 @@ class TelegramBot(PlatformBot):
                     await edit("Нет мероприятий.", reply_markup=back_kb)
                     return
                 lines = ["🎫 <b>Все мероприятия:</b>\n"]
+                ev_kb_rows = []
                 for e in events:
-                    status = "🟢" if e.is_active else "🔴"
+                    event_status = "🟢" if e.is_active else "🔴"
                     date_str = e.date.strftime("%d.%m.%Y %H:%M")
                     lines.append(
-                        f"{status} <b>{e.title}</b>\n"
+                        f"{event_status} <b>{e.title}</b>\n"
                         f"📅 {date_str}\n"
                         f"🎟 {e.available_tickets}/{e.total_tickets}\n"
                     )
-                await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
+                    title_btn = e.title[:40]
+                    ev_kb_rows.append([
+                        InlineKeyboardButton(text=f"🎫 {title_btn}", callback_data=f"ch_admin:menu:{e.id}"),
+                    ])
+                    toggle_label = "▶ Включить" if not e.is_active else "⏸ Отключить"
+                    ev_kb_rows.append([
+                        InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{e.id}"),
+                        InlineKeyboardButton(text=toggle_label, callback_data=f"ch_admin:toggle:{e.id}"),
+                    ])
+                ev_kb_rows.append([InlineKeyboardButton(text="◀️ Назад в меню", callback_data="admin_menu:back")])
+                ev_kb = InlineKeyboardMarkup(inline_keyboard=ev_kb_rows) if ev_kb_rows else None
+                await edit("\n".join(lines), parse_mode="HTML", reply_markup=ev_kb)
                 return
 
             if action == "repost_events":
