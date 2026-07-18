@@ -17,7 +17,7 @@ from app.core.models import (
     PlatformType, Channel, User, Event, Ticket, Payment,
     TicketStatus, PaymentStatus,
 )
-from app.core.services import UserService, EventService, TicketService, ChannelService
+from app.core.services import UserService, EventService, TicketService, ChannelService, ChannelAdminService
 from app.platforms.base import PlatformBot
 from app.platforms.telegram.channel import ChannelManager
 
@@ -452,14 +452,13 @@ class TelegramBot(PlatformBot):
     async def _get_admin_channel(self, user_id: int) -> Channel | None:
         """Get the channel managed by this Telegram user with an active subscription.
 
-        Приоритет:
-        1. Каналы пользователя с активной подпиской (проверка через Telegram API)
-        2. Если API недоступен (None) — доверяем БД и возвращаем канал
-        3. Fallback для super-admin: бесхозный канал
-        4. Fallback: legacy-канал (__legacy__)
+        Поиск через channel_admins (все админы канала). Если Telegram API
+        подтверждает что пользователь не админ — удаляем из channel_admins.
+        Если API недоступен — доверяем БД.
         """
         async with async_session_factory() as session:
             channel_svc = ChannelService(session)
+            admin_svc = ChannelAdminService(session)
             channels = await channel_svc.get_channels_by_admin(str(user_id))
             for channel in channels:
                 if await channel_svc.is_subscription_valid(channel.id):
@@ -467,13 +466,14 @@ class TelegramBot(PlatformBot):
                     if verified is True:
                         return channel
                     elif verified is False:
-                        # API подтвердила: пользователь не админ — деактивировать
-                        await channel_svc.deactivate_subscription(channel.id)
+                        # API подтвердила: пользователь не админ — удаляем из channel_admins
+                        await admin_svc.remove_admin(channel.id, str(user_id))
                         await session.commit()
                         logger.info(
-                            "Subscription deactivated for channel %s: user %s is no longer admin",
-                            channel.telegram_channel_id, user_id,
+                            "Removed user %s from admins of channel %s (no longer admin)",
+                            user_id, channel.telegram_channel_id,
                         )
+                        # Другие админы канала могут быть ещё валидны — не деактивируем подписку
                         return None
                     # verified is None — ошибка API (сеть, таймаут, формат ID).
                     # Доверяем БД: подписка активна, пользователь админ.
@@ -482,53 +482,48 @@ class TelegramBot(PlatformBot):
                         channel.telegram_channel_id, user_id,
                     )
                     return channel
+
+            # Fallback for super-admins: adopt an unassigned active channel
             if self._is_super_admin(user_id):
                 unassigned = await channel_svc.get_active_unassigned_channel()
                 if unassigned:
-                    unassigned.admin_telegram_user_id = str(user_id)
-                    await session.commit()
                     verified = await self._verify_channel_admin(unassigned, user_id)
                     if verified is True:
+                        await admin_svc.sync_admins(unassigned.id, [str(user_id)])
+                        await session.commit()
                         logger.info(
                             "Супер-админ %s привязан к каналу %s",
                             user_id, unassigned.telegram_channel_id,
                         )
                         return unassigned
-                    # Не удалось верифицировать — откатываем привязку, не деактивируем подписку
-                    unassigned.admin_telegram_user_id = ""
-                    await session.commit()
                     if verified is False:
                         logger.info(
-                            "Супер-админ %s не админ канала %s, откат привязки",
+                            "Супер-админ %s не админ канала %s",
                             user_id, unassigned.telegram_channel_id,
                         )
                     else:
                         logger.info(
-                            "Супер-админ %s не верифицирован для канала %s (ошибка API), откат привязки",
+                            "Супер-админ %s не верифицирован для канала %s (ошибка API)",
                             user_id, unassigned.telegram_channel_id,
                         )
 
-            # Fallback: admin has no channels but legacy channel exists with
-            # active subscription — adopt them as the admin of that channel.
+            # Fallback: legacy channel
             legacy = await channel_svc.get_by_telegram_id("__legacy__")
             if legacy and await channel_svc.is_subscription_valid(legacy.id):
-                legacy.admin_telegram_user_id = str(user_id)
-                await session.commit()
                 verified = await self._verify_channel_admin(legacy, user_id)
                 if verified is True:
+                    await admin_svc.sync_admins(legacy.id, [str(user_id)])
+                    await session.commit()
                     logger.info("Легаси-канал привязан к админу %s", user_id)
                     return legacy
-                # Не удалось верифицировать — откатываем
-                legacy.admin_telegram_user_id = ""
-                await session.commit()
                 if verified is False:
                     logger.info(
-                        "Легаси-канал: пользователь %s не админ, откат привязки",
+                        "Легаси-канал: пользователь %s не админ",
                         user_id,
                     )
                 else:
                     logger.info(
-                        "Легаси-канал: пользователь %s не верифицирован (ошибка API), откат привязки",
+                        "Легаси-канал: пользователь %s не верифицирован (ошибка API)",
                         user_id,
                     )
 
@@ -683,6 +678,12 @@ class TelegramBot(PlatformBot):
             result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
             channels = list(result.scalars().all())
 
+            # Получить админов для всех каналов одним запросом
+            admin_svc = ChannelAdminService(session)
+            channel_admins_map = {}
+            for ch in channels:
+                channel_admins_map[ch.telegram_channel_id] = await admin_svc.get_admin_ids(ch.id)
+
         if not channels:
             await message.answer("Нет зарегистрированных каналов.")
             return
@@ -690,10 +691,14 @@ class TelegramBot(PlatformBot):
         lines = ["📋 <b>Все каналы:</b>\n"]
         for ch in channels:
             status = "🟢" if ch.is_subscription_active else "🔴"
-            admin_display = ch.admin_telegram_user_id[:8] + "..." if len(ch.admin_telegram_user_id) > 8 else ch.admin_telegram_user_id
+            admins = channel_admins_map.get(ch.telegram_channel_id, [])
+            if admins:
+                admin_display = ", ".join(a[:8] + "..." if len(a) > 8 else a for a in admins)
+            else:
+                admin_display = "—"
             lines.append(
                 f"{status} {ch.title or ch.telegram_channel_id}\n"
-                f"   Админ: {admin_display}\n"
+                f"   Админы: {admin_display}\n"
                 f"   Подписка: {'до ' + ch.subscription_until.strftime('%d.%m.%Y') if ch.subscription_until else 'нет'}\n"
             )
 
@@ -739,12 +744,17 @@ class TelegramBot(PlatformBot):
             )
             tickets_sold = result.scalar() or 0
 
+            # Получить всех админов канала
+            admin_svc = ChannelAdminService(session)
+            admins = await admin_svc.get_admin_ids(channel.id)
+
         sub_status = "🟢 Активна" if channel.is_subscription_active else "🔴 Неактивна"
         sub_until = f" до {channel.subscription_until.strftime('%d.%m.%Y')}" if channel.subscription_until else ""
+        admins_display = ", ".join(f"<code>{a}</code>" for a in admins) if admins else "—"
         text = (
             f"ℹ️ <b>Канал: {channel.title or channel.telegram_channel_id}</b>\n\n"
             f"🆔 {channel.telegram_channel_id}\n"
-            f"👤 Админ: <code>{channel.admin_telegram_user_id}</code>\n"
+            f"👥 Админы: {admins_display}\n"
             f"📊 {sub_status}{sub_until}\n"
             f"🎫 Мероприятий: {events_count} (предстоящих: {upcoming})\n"
             f"🎟 Продано билетов: {tickets_sold}"
@@ -909,12 +919,15 @@ class TelegramBot(PlatformBot):
                     .join(Event, Ticket.event_id == Event.id)
                     .where(Event.channel_id == channel.id, Ticket.status == TicketStatus.active)
                 )).scalar() or 0
+                admin_svc = ChannelAdminService(session)
+                admins = await admin_svc.get_admin_ids(channel.id)
             sub_status = "🟢 Активна" if channel.is_subscription_active else "🔴 Неактивна"
             sub_until = f" до {channel.subscription_until.strftime('%d.%m.%Y')}" if channel.subscription_until else ""
+            admins_display = ", ".join(f"<code>{a}</code>" for a in admins) if admins else "—"
             text = (
                 f"ℹ️ <b>Канал: {channel.title or channel.telegram_channel_id}</b>\n\n"
                 f"🆔 {channel.telegram_channel_id}\n"
-                f"👤 Админ: <code>{channel.admin_telegram_user_id}</code>\n"
+                f"👥 Админы: {admins_display}\n"
                 f"📊 {sub_status}{sub_until}\n"
                 f"🎫 Мероприятий: {events_count} (предстоящих: {upcoming})\n"
                 f"🎟 Продано билетов: {tickets_sold}"
@@ -1039,17 +1052,20 @@ class TelegramBot(PlatformBot):
             new_admin_id = parts[1].strip()
             async with async_session_factory() as session:
                 channel_svc = ChannelService(session)
+                admin_svc = ChannelAdminService(session)
                 channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
                 if not channel:
                     await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
                     await state.clear()
                     return
-                old_admin = channel.admin_telegram_user_id
+                old_admins = await admin_svc.get_admin_ids(channel.id)
+                await admin_svc.sync_admins(channel.id, [new_admin_id])
                 channel.admin_telegram_user_id = new_admin_id
                 await session.commit()
+                old_display = ", ".join(old_admins) if old_admins else "—"
                 await message.answer(
-                    f"✅ Админ канала {channel.title or channel.telegram_channel_id} изменён:\n"
-                    f"{old_admin} → {new_admin_id}"
+                    f"✅ Админы канала {channel.title or channel.telegram_channel_id} заменены:\n"
+                    f"{old_display} → {new_admin_id}"
                 )
             await state.clear()
             return
@@ -1145,18 +1161,21 @@ class TelegramBot(PlatformBot):
 
         async with async_session_factory() as session:
             channel_svc = ChannelService(session)
+            admin_svc = ChannelAdminService(session)
             channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
             if not channel:
                 await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
                 return
 
-            old_admin = channel.admin_telegram_user_id
+            old_admins = await admin_svc.get_admin_ids(channel.id)
+            await admin_svc.sync_admins(channel.id, [new_admin_id])
             channel.admin_telegram_user_id = new_admin_id
             await session.commit()
 
+            old_display = ", ".join(old_admins) if old_admins else "—"
             await message.answer(
-                f"✅ Админ канала {channel.title or channel.telegram_channel_id} изменён:\n"
-                f"{old_admin} → {new_admin_id}"
+                f"✅ Админы канала {channel.title or channel.telegram_channel_id} заменены:\n"
+                f"{old_display} → {new_admin_id}"
             )
 
     # ─── FSM: Создание мероприятия ──────────────────────────────────────
@@ -1590,8 +1609,24 @@ class TelegramBot(PlatformBot):
         if chat_member.new_chat_member.status in ("member", "administrator"):
             logger.info("Бот добавлен в канал %s пользователем %s", chat.id, adder_id)
 
+            # Получить список всех админов канала через Telegram API
+            admin_ids: list[str] = []
+            try:
+                admins = await self.bot.get_chat_administrators(chat_id=chat.id)
+                admin_ids = [
+                    str(admin.user.id) for admin in admins
+                    if admin.status in ("creator", "administrator") and not admin.user.is_bot
+                ]
+                logger.info(
+                    "Канал %s: найдено %d администраторов",
+                    chat.id, len(admin_ids),
+                )
+            except Exception as e:
+                logger.error("Не удалось получить админов канала %s: %s", chat.id, e)
+
             async with async_session_factory() as session:
                 channel_svc = ChannelService(session)
+                admin_svc = ChannelAdminService(session)
                 channel = await channel_svc.get_by_telegram_id(str(chat.id))
 
                 # Если не нашли по числовому ID — ищем по @username
@@ -1604,7 +1639,6 @@ class TelegramBot(PlatformBot):
                         )
 
                 if channel:
-                    # Channel already exists — always save the admin who added the bot
                     # Обновляем telegram_channel_id если он: pending_*, __legacy__, @username или голое число без -100
                     if (
                         channel.telegram_channel_id.startswith("pending_")
@@ -1613,12 +1647,26 @@ class TelegramBot(PlatformBot):
                         or channel.telegram_channel_id.lstrip("-").isdigit()
                     ):
                         channel.telegram_channel_id = str(chat.id)
-                    channel.admin_telegram_user_id = adder_id
                     channel.title = chat.title
+
+                    # Синхронизировать всех админов канала из Telegram
+                    if admin_ids:
+                        await admin_svc.sync_admins(channel.id, admin_ids)
+                        # Legacy fallback: сохранить первого админа
+                        channel.admin_telegram_user_id = admin_ids[0]
+                    elif not channel.admin_telegram_user_id or channel.admin_telegram_user_id in ("", "0"):
+                        # Если API не вернул админов — хотя бы записать кто добавил
+                        channel.admin_telegram_user_id = adder_id
+                        await admin_svc.sync_admins(channel.id, [adder_id])
+
                     await session.commit()
 
-                    # Обновить Menu Button для нового админа канала
-                    await self._update_user_commands(int(adder_id))
+                    # Обновить Menu Button для всех админов
+                    for aid in admin_ids or [adder_id]:
+                        try:
+                            await self._update_user_commands(int(aid))
+                        except Exception:
+                            logger.warning("Не удалось обновить команды для %s", aid)
 
                     # Subscription status determines the welcome message
                     if await channel_svc.is_subscription_valid(channel.id):
@@ -1647,6 +1695,8 @@ class TelegramBot(PlatformBot):
                         admin_telegram_user_id=adder_id,
                         title=chat.title,
                     )
+                    # Добавить всех найденных админов (или хотя бы того, кто добавил)
+                    await admin_svc.sync_admins(channel.id, admin_ids or [adder_id])
                     await session.commit()
 
                     # Notify the adder in DM
@@ -1842,16 +1892,21 @@ class TelegramBot(PlatformBot):
                 async with async_session_factory() as session:
                     result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
                     channels = list(result.scalars().all())
+                    admin_svc = ChannelAdminService(session)
+                    ch_admins = {}
+                    for ch in channels:
+                        ch_admins[ch.id] = await admin_svc.get_admin_ids(ch.id)
                 if not channels:
                     await edit("Нет зарегистрированных каналов.", reply_markup=back_kb)
                     return
                 lines = ["📋 <b>Все каналы:</b>\n"]
                 for ch in channels:
                     status = "🟢" if ch.is_subscription_active else "🔴"
-                    admin_display = ch.admin_telegram_user_id[:8] + "..." if len(ch.admin_telegram_user_id) > 8 else ch.admin_telegram_user_id
+                    admins = ch_admins.get(ch.id, [])
+                    admin_display = ", ".join(a[:8] + "..." if len(a) > 8 else a for a in admins) if admins else "—"
                     lines.append(
                         f"{status} {ch.title or ch.telegram_channel_id}\n"
-                        f"   Админ: {admin_display}\n"
+                        f"   Админы: {admin_display}\n"
                         f"   Подписка: {'до ' + ch.subscription_until.strftime('%d.%m.%Y') if ch.subscription_until else 'нет'}\n"
                     )
                 await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
@@ -2294,11 +2349,13 @@ class TelegramBot(PlatformBot):
             source_chat_id = str(callback.message.chat.id)
             async with async_session_factory() as session:
                 channel_svc = ChannelService(session)
+                admin_svc = ChannelAdminService(session)
                 channel = await channel_svc.get_by_telegram_id(source_chat_id)
                 is_super = self._is_super_admin(callback.from_user.id)
-                if not channel or (
-                    channel.admin_telegram_user_id != str(callback.from_user.id) and not is_super
-                ):
+                is_admin = channel and await admin_svc.user_is_admin(
+                    channel.id, str(callback.from_user.id),
+                )
+                if not channel or (not is_admin and not is_super):
                     await callback.answer(
                         "❌ Доступно только администратору канала.",
                         show_alert=True,

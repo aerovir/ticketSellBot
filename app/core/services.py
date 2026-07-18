@@ -2,10 +2,10 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.models import User, Event, Ticket, Payment, Channel, TicketStatus, PaymentStatus, PlatformType
+from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType
 from app.core.schemas import EventOut, EventShortOut, TicketOut, UserOut
 
 
@@ -103,12 +103,6 @@ class ChannelService:
             return False
         return True
 
-    async def get_channels_by_admin(self, admin_telegram_user_id: str) -> list[Channel]:
-        """Get all channels managed by a given Telegram user."""
-        stmt = select(Channel).where(Channel.admin_telegram_user_id == admin_telegram_user_id)
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
     async def get_active_unassigned_channel(self) -> Channel | None:
         """Get a channel with active subscription but no admin assigned."""
         stmt = (
@@ -123,6 +117,76 @@ class ChannelService:
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_channel_ids_by_admin(self, telegram_user_id: str) -> list[uuid.UUID]:
+        """Получить ID всех каналов, где пользователь — админ (из channel_admins)."""
+        stmt = select(ChannelAdmin.channel_id).where(ChannelAdmin.telegram_user_id == telegram_user_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_channels_by_admin(self, telegram_user_id: str) -> list[Channel]:
+        """Получить все каналы, где пользователь — админ (через channel_admins)."""
+        channel_ids = await self.get_channel_ids_by_admin(telegram_user_id)
+        if not channel_ids:
+            return []
+        stmt = select(Channel).where(Channel.id.in_(channel_ids))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+
+# ─── Channel Admin Service ──────────────────────────────────────────────────
+
+class ChannelAdminService:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_admin_ids(self, channel_id: uuid.UUID) -> list[str]:
+        """Получить список Telegram ID админов канала."""
+        stmt = select(ChannelAdmin.telegram_user_id).where(ChannelAdmin.channel_id == channel_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def sync_admins(self, channel_id: uuid.UUID, admin_ids: list[str]):
+        """Синхронизировать список админов канала с Telegram.
+
+        Удаляет отсутствующих, добавляет новых, существующих не трогает.
+        """
+        existing = await self.get_admin_ids(channel_id)
+        existing_set = set(existing)
+        new_set = set(admin_ids)
+
+        # Добавить новых
+        for uid in new_set - existing_set:
+            self.session.add(ChannelAdmin(channel_id=channel_id, telegram_user_id=uid))
+
+        # Удалить отсутствующих
+        to_remove = existing_set - new_set
+        if to_remove:
+            stmt = delete(ChannelAdmin).where(
+                ChannelAdmin.channel_id == channel_id,
+                ChannelAdmin.telegram_user_id.in_(to_remove),
+            )
+            await self.session.execute(stmt)
+
+        await self.session.flush()
+
+    async def user_is_admin(self, channel_id: uuid.UUID, telegram_user_id: str) -> bool:
+        """Проверить, является ли пользователь админом канала."""
+        stmt = select(ChannelAdmin).where(
+            ChannelAdmin.channel_id == channel_id,
+            ChannelAdmin.telegram_user_id == telegram_user_id,
+        ).limit(1)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def remove_admin(self, channel_id: uuid.UUID, telegram_user_id: str):
+        """Удалить пользователя из админов канала."""
+        stmt = delete(ChannelAdmin).where(
+            ChannelAdmin.channel_id == channel_id,
+            ChannelAdmin.telegram_user_id == telegram_user_id,
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
 
 
 # ─── Event Service ───────────────────────────────────────────────────────────

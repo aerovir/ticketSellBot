@@ -84,3 +84,4 @@
 | 59 | Fix: _verify_channel_admin теперь возвращает True/False/None (не деактивирует подписку при ошибке API) | ✅ done | 2026-07-16 | — |
 | 60 | Fix: on_chat_member_update обновляет telegram_channel_id для голых чисел (без -100) | ✅ done | 2026-07-16 | — |
 | 61 | Fix: _verify_channel_admin возвращает None → доверяем БД и возвращаем канал (вместо skip) | ✅ done | 2026-07-18 | — |
+| 62 | Feat: multi-admin каналов — новая модель ChannelAdmin, getChatAdministrators, синхронизация всех админов | ✅ done | 2026-07-18 | — |
