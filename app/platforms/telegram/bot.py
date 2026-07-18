@@ -2533,6 +2533,9 @@ class TelegramBot(PlatformBot):
                 InlineKeyboardButton(text="🔄 Репост анонса", callback_data=f"ch_admin:repost:{event.id}"),
             ],
             [
+                InlineKeyboardButton(text="🗑 Удалить мероприятие", callback_data=f"ch_admin:delete:{event.id}"),
+            ],
+            [
                 InlineKeyboardButton(text="❌ Закрыть панель", callback_data="ch_admin:close"),
             ],
         ]
@@ -2705,6 +2708,51 @@ class TelegramBot(PlatformBot):
                 await callback.answer("✅ Анонс перепощен в канал!", show_alert=True)
             except Exception:
                 await callback.answer("❌ Ошибка репоста.", show_alert=True)
+            return
+
+        # ─── Удалить мероприятие (подтверждение) ──────────
+        if action == "delete" and event_id:
+            confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"ch_admin:delete_confirm:{event_id}"),
+                    InlineKeyboardButton(text="❌ Отмена", callback_data=f"ch_admin:delete_cancel:{event_id}"),
+                ],
+            ])
+            await callback.message.edit_text(
+                f"🗑 <b>Удалить мероприятие?</b>\n\n"
+                f"Мероприятие будет скрыто из списков. "
+                f"Билеты и данные останутся в системе.",
+                parse_mode="HTML",
+                reply_markup=confirm_kb,
+            )
+            await callback.answer()
+            return
+
+        # ─── Удалить: подтверждение ──────────────────────
+        if action == "delete_confirm" and event_id:
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if event:
+                    await svc.set_active(event_id, False)
+                    await session.commit()
+            await callback.message.edit_text(
+                f"🗑 Мероприятие «{event.title}» удалено.\n"
+                f"Оно больше не отображается в списках.",
+            )
+            await callback.answer()
+            return
+
+        # ─── Удалить: отмена ─────────────────────────────
+        if action == "delete_cancel" and event_id:
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if event:
+                    await self._send_ch_admin_panel(
+                        callback.from_user.id, event, edit_message=callback.message,
+                    )
+            await callback.answer()
             return
 
         # ─── Закрыть панель ──────────────────────────────
