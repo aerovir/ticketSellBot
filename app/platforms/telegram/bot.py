@@ -29,18 +29,35 @@ PAGE_SIZE = 5  # мероприятий/билетов на страницу
 USER_COMMANDS = [
     BotCommand(command="start", description="🚀 Приветствие"),
     BotCommand(command="events", description="📋 Список мероприятий"),
+    BotCommand(command="event", description="📌 Детали мероприятия"),
+    BotCommand(command="buy", description="🎟 Купить билет"),
     BotCommand(command="my_tickets", description="🎫 Мои билеты"),
+    BotCommand(command="cancel", description="↩️ Отменить билет"),
 ]
 
 ADMIN_COMMANDS = [
     BotCommand(command="admin", description="🎛 Панель управления"),
     BotCommand(command="create_event", description="➕ Создать мероприятие"),
+    BotCommand(command="events_all", description="📋 Все мероприятия канала"),
+    BotCommand(command="deactivate", description="⏸ Отключить мероприятие"),
+    BotCommand(command="activate", description="▶️ Включить мероприятие"),
+    BotCommand(command="stats", description="📊 Статистика продаж"),
+    BotCommand(command="repost_events", description="🔄 Репост анонсов"),
+    BotCommand(command="my_channels", description="📢 Мои каналы"),
 ]
 
 SUPER_ADMIN_COMMANDS = [
     BotCommand(command="subscribe", description="🟢 Подписать канал"),
-    BotCommand(command="health", description="🩺 Статус бота"),
+    BotCommand(command="unsubscribe", description="🔴 Отписать канал"),
     BotCommand(command="stats_all", description="📊 Общая статистика"),
+    BotCommand(command="list_channels", description="📋 Список каналов"),
+    BotCommand(command="channel_info", description="ℹ️ Инфо о канале"),
+    BotCommand(command="user_info", description="👥 Инфо о пользователе"),
+    BotCommand(command="admin_cancel", description="✅ Отменить билет"),
+    BotCommand(command="broadcast", description="📢 Рассылка"),
+    BotCommand(command="health", description="🩺 Статус бота"),
+    BotCommand(command="check_expired", description="🔍 Проверить подписки"),
+    BotCommand(command="change_admin", description="🔄 Сменить админа"),
 ]
 
 
