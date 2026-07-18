@@ -2734,7 +2734,7 @@ class TelegramBot(PlatformBot):
                 svc = EventService(session)
                 event = await svc.get_by_id(event_id)
                 if event:
-                    await svc.set_active(event_id, False)
+                    await svc.soft_delete(event_id)
                     await session.commit()
             await callback.message.edit_text(
                 f"🗑 Мероприятие «{event.title}» удалено.\n"

@@ -239,9 +239,9 @@ class EventService:
     # ─── Admin methods ───────────────────────────────────────────────────
 
     async def list_all(self, channel_id: uuid.UUID | None = None) -> list[Event]:
-        """Get ALL events (active or not, past or future), newest first.
+        """Get ALL events that are not deleted, newest first.
         Optionally filtered by channel."""
-        stmt = select(Event).order_by(Event.date.desc())
+        stmt = select(Event).where(Event.deleted_at.is_(None)).order_by(Event.date.desc())
         if channel_id is not None:
             stmt = stmt.where(Event.channel_id == channel_id)
         result = await self.session.execute(stmt)
@@ -273,6 +273,17 @@ class EventService:
         if event is None:
             return None
         event.is_active = is_active
+        await self.session.flush()
+        return event
+
+    async def soft_delete(self, event_id: uuid.UUID) -> Event | None:
+        """Soft delete an event — hides it from all lists.
+        Sets is_active=False and deleted_at=now()."""
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            return None
+        event.is_active = False
+        event.deleted_at = datetime.now(timezone.utc)
         await self.session.flush()
         return event
 
