@@ -1217,7 +1217,7 @@ class TelegramBot(PlatformBot):
     def _fsm_cancel_kb(self, extra_buttons: list[list[InlineKeyboardButton]] | None = None) -> InlineKeyboardMarkup:
         """Клавиатура с кнопкой отмены для FSM-шагов."""
         rows = list(extra_buttons) if extra_buttons else []
-        rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel_create")])
+        rows.append([InlineKeyboardButton(text="❌ Отмена создания", callback_data="admin:cancel_create")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _fsm_header(self, data: dict) -> str:
