@@ -198,14 +198,14 @@ class TelegramBot(PlatformBot):
             "Я помогаю покупать билеты на мероприятия.\n\n"
             "Подпишитесь на канал, где публикуются анонсы, "
             "и покупайте билеты через inline-кнопки.\n\n"
-            "Доступные команды:\n"
-            "/events — список мероприятий\n"
-            "/event &lt;id&gt; — детали мероприятия\n"
-            "/buy &lt;id&gt; — купить билет\n"
-            "/my_tickets — мои билеты\n"
-            "/cancel &lt;id&gt; — отменить билет"
+            "ℹ️ Нажмите кнопку меню <b>☰</b> в левом нижнем углу, "
+            "чтобы увидеть все доступные команды."
         )
-        await message.answer(text, parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Список мероприятий", callback_data="ev_page:0")],
+            [InlineKeyboardButton(text="🎫 Мои билеты", callback_data="channel_my_tickets")],
+        ])
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
     async def cmd_events(self, message: types.Message, page: int = 0):
         """Список мероприятий с пагинацией."""
@@ -282,7 +282,13 @@ class TelegramBot(PlatformBot):
     async def cmd_event(self, message: types.Message):
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("Укажите ID мероприятия: /event &lt;id&gt;")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Список мероприятий", callback_data="ev_page:0")],
+            ])
+            await message.answer(
+                "📌 Чтобы посмотреть детали мероприятия, выберите его из списка:",
+                reply_markup=kb,
+            )
             return
 
         try:
@@ -331,7 +337,13 @@ class TelegramBot(PlatformBot):
     async def cmd_buy(self, message: types.Message):
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("Укажите ID мероприятия: /buy &lt;id&gt;")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Список мероприятий", callback_data="ev_page:0")],
+            ])
+            await message.answer(
+                "🎟 Чтобы купить билет, выберите мероприятие из списка:",
+                reply_markup=kb,
+            )
             return
 
         try:
@@ -390,7 +402,13 @@ class TelegramBot(PlatformBot):
     async def cmd_cancel(self, message: types.Message):
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("Укажите ID билета: /cancel &lt;id&gt;")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎫 Мои билеты", callback_data="channel_my_tickets")],
+            ])
+            await message.answer(
+                "↩️ Чтобы отменить билет, выберите его из списка:",
+                reply_markup=kb,
+            )
             return
 
         try:
@@ -1426,6 +1444,7 @@ class TelegramBot(PlatformBot):
             return
 
         lines = ["🎫 <b>Все мероприятия:</b>\n"]
+        kb_rows = []
         for e in events:
             status = "🟢" if e.is_active else "🔴"
             date_str = e.date.strftime("%d.%m.%Y %H:%M")
@@ -1434,12 +1453,15 @@ class TelegramBot(PlatformBot):
                 f"📅 {date_str}\n"
                 f"🎟 {e.available_tickets}/{e.total_tickets}\n"
             )
-            if e.is_active:
-                lines.append(f"/stats {e.id} | /deactivate {e.id}\n")
-            else:
-                lines.append(f"/stats {e.id} | /activate {e.id}\n")
+            # Кнопки управления для каждого мероприятия
+            toggle_label = "▶ Включить" if not e.is_active else "⏸ Отключить"
+            kb_rows.append([
+                InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{e.id}"),
+                InlineKeyboardButton(text=toggle_label, callback_data=f"ch_admin:toggle:{e.id}"),
+            ])
 
-        await message.answer("\n".join(lines), parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
+        await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
     # ─── /deactivate /activate ───────────────────────────────────────────
 
@@ -1452,8 +1474,13 @@ class TelegramBot(PlatformBot):
 
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            cmd = "activate" if activate else "deactivate"
-            await message.answer(f"Укажите ID мероприятия: /{cmd} &lt;id&gt;")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Мои мероприятия", callback_data="admin_menu:events_all")],
+            ])
+            await message.answer(
+                "⏸ Выберите мероприятие для изменения статуса:",
+                reply_markup=kb,
+            )
             return
         try:
             event_id = UUID(args[1])
@@ -1491,7 +1518,13 @@ class TelegramBot(PlatformBot):
 
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("Укажите ID мероприятия: /stats &lt;id&gt;")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Мои мероприятия", callback_data="admin_menu:events_all")],
+            ])
+            await message.answer(
+                "📊 Выберите мероприятие для просмотра статистики:",
+                reply_markup=kb,
+            )
             return
         try:
             event_id = UUID(args[1])
@@ -1932,7 +1965,7 @@ class TelegramBot(PlatformBot):
             await state.clear()
             await callback.message.edit_text(
                 f"✅ Мероприятие «{event.title}» создано!\n"
-                f"ID: <code>{event.id}</code>",
+                f"Анонс будет отправлен в канал.",
                 parse_mode="HTML",
             )
             # Анонс отправляем после всего — если упадёт, пользователь
@@ -2284,16 +2317,16 @@ class TelegramBot(PlatformBot):
                 f"📅 {date_str}\n"
                 f"📍 {e.location or 'Не указано'}\n"
                 f"💰 {e.price:.0f}₽ | Осталось: {e.available_tickets}/{e.total_tickets}\n"
-                f"➡️ Купить: @{self._bot_username} /buy {e.id}\n"
             )
 
+        lines.append("\nℹ️ Купить билет — откройте меню бота ☰ или нажмите 🎟 Купить в анонсе.")
         await channel_post.answer("\n".join(lines), parse_mode="HTML")
 
     async def channel_cmd_event(self, channel_post: types.Message):
         """/event <id> в канале — детали мероприятия прямо в канал."""
         args = channel_post.text.split(maxsplit=1)
         if len(args) < 2:
-            await channel_post.answer("Укажите ID мероприятия: /event &lt;id&gt;")
+            await channel_post.answer("📌 Чтобы посмотреть детали мероприятия, нажмите 🎟 Купить в анонсе или откройте меню бота.")
             return
 
         try:
@@ -2318,8 +2351,8 @@ class TelegramBot(PlatformBot):
             f"📍 {event.location or 'Не указано'}\n"
             f"💰 {event.price:.0f}₽\n"
             f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}\n\n"
-            f"👇 Для покупки напишите мне в личку:\n"
-            f"@{self._bot_username} — команда /buy {event.id}"
+            f"👇 Для покупки откройте меню бота ☰ "
+            f"или нажмите 🎟 Купить в анонсе канала."
         )
 
         await channel_post.answer(text, parse_mode="HTML")

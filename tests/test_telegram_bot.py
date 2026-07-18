@@ -86,8 +86,7 @@ class TestUserCommands:
         mock_message.answer.assert_awaited_once()
         text = mock_message.answer.call_args[0][0]
         assert "TicketBot" in text
-        assert "/events" in text
-        assert "/buy" in text
+        assert "меню" in text
 
     async def test_cmd_events_empty(self, telegram_bot, mock_message):
         """Команда /events когда нет мероприятий."""
@@ -108,7 +107,7 @@ class TestUserCommands:
         await telegram_bot.cmd_event(mock_message)
 
         mock_message.answer.assert_awaited_once()
-        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+        assert "выберите его из списка" in mock_message.answer.call_args[0][0]
 
     async def test_cmd_event_invalid_id(self, telegram_bot, mock_message):
         """Команда /event с неверным ID."""
@@ -125,7 +124,7 @@ class TestUserCommands:
         await telegram_bot.cmd_buy(mock_message)
 
         mock_message.answer.assert_awaited_once()
-        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+        assert "выберите мероприятие" in mock_message.answer.call_args[0][0]
 
     async def test_cmd_my_tickets_empty(self, telegram_bot, mock_message):
         """Команда /my_tickets без билетов."""
@@ -161,7 +160,7 @@ class TestUserCommands:
             await telegram_bot.cmd_cancel(mock_message)
 
         mock_message.answer.assert_awaited_once()
-        assert "Укажите ID билета" in mock_message.answer.call_args[0][0]
+        assert "выберите его из списка" in mock_message.answer.call_args[0][0]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -222,7 +221,7 @@ class TestAdminCommands:
             await telegram_bot.admin_deactivate(mock_message)
 
         mock_message.answer.assert_awaited_once()
-        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+        assert "Выберите мероприятие" in mock_message.answer.call_args[0][0]
 
     async def test_activate_no_id(self, telegram_bot, mock_message):
         """/activate без ID."""
@@ -240,7 +239,7 @@ class TestAdminCommands:
             await telegram_bot.admin_activate(mock_message)
 
         mock_message.answer.assert_awaited_once()
-        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+        assert "Выберите мероприятие" in mock_message.answer.call_args[0][0]
 
     async def test_stats_no_id(self, telegram_bot, mock_message):
         """/stats без ID."""
@@ -258,7 +257,7 @@ class TestAdminCommands:
             await telegram_bot.admin_stats(mock_message)
 
         mock_message.answer.assert_awaited_once()
-        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+        assert "Выберите мероприятие" in mock_message.answer.call_args[0][0]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -290,7 +289,7 @@ class TestChannelCommands:
         await telegram_bot.channel_cmd_event(mock_message)
 
         mock_message.answer.assert_awaited_once()
-        assert "Укажите ID" in mock_message.answer.call_args[0][0]
+        assert "посмотреть детали" in mock_message.answer.call_args[0][0]
 
 
 # ═══════════════════════════════════════════════════════════════
