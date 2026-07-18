@@ -1465,7 +1465,7 @@ class TelegramBot(PlatformBot):
             nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin_ev_page:{page - 1}"))
         nav_row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="admin_ev_page:current"))
         if page < total_pages - 1:
-            nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_ev_page:{page + 1}"))
+            nav_row.append(InlineKeyboardButton(text="Следующее мероприятие ➡️", callback_data=f"admin_ev_page:{page + 1}"))
         kb_rows.append(nav_row)
 
         kb_rows.append([InlineKeyboardButton(text="◀️ Назад в меню", callback_data="admin_menu:back")])
