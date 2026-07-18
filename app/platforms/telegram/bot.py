@@ -1428,8 +1428,53 @@ class TelegramBot(PlatformBot):
 
     # ─── /events_all ─────────────────────────────────────────────────────
 
+    async def _send_admin_event_page(self, events: list, page: int = 0):
+        """Отправить страницу админ-списка мероприятий (одно мероприятие на страницу)."""
+        total_pages = max(1, (len(events) + 0) // 1)
+        page = max(0, min(page, total_pages - 1))
+        e = events[page]
+
+        event_status = "🟢 Активно" if e.is_active else "🔴 Отключено"
+        date_str = e.date.strftime("%d.%m.%Y %H:%M")
+        text = (
+            f"🎫 <b>Все мероприятия</b> ({page + 1}/{total_pages})\n\n"
+            f"{'🟢' if e.is_active else '🔴'} <b>{e.title}</b>\n"
+            f"{e.description or 'Описание отсутствует'}\n\n"
+            f"📅 {date_str}\n"
+            f"📍 {e.location or 'Не указано'}\n"
+            f"💰 {e.price:.0f}₽\n"
+            f"🎟 Осталось: {e.available_tickets}/{e.total_tickets}\n"
+            f"{event_status}"
+        )
+
+        kb_rows = []
+
+        # Кнопки управления
+        toggle_label = "⏸ Отключить" if e.is_active else "▶ Включить"
+        kb_rows.append([
+            InlineKeyboardButton(text="🎫 Подробнее", callback_data=f"ch_admin:menu:{e.id}"),
+        ])
+        kb_rows.append([
+            InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{e.id}"),
+            InlineKeyboardButton(text=toggle_label, callback_data=f"ch_admin:toggle:{e.id}"),
+        ])
+
+        # Навигация по страницам
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin_ev_page:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="admin_ev_page:current"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_ev_page:{page + 1}"))
+        kb_rows.append(nav_row)
+
+        kb_rows.append([InlineKeyboardButton(text="◀️ Назад в меню", callback_data="admin_menu:back")])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+        return text, kb
+
     async def admin_events_all(self, message: types.Message):
-        """Show ALL events for the admin's channel."""
+        """Show ALL events for the admin's channel (paginated, one per page)."""
         channel = await self._get_admin_channel(message.from_user.id)
         if not channel:
             await message.answer("❌ У вас нет канала с активной подпиской.\n\nОбратитесь к администратору для оформления подписки.")
@@ -1443,30 +1488,8 @@ class TelegramBot(PlatformBot):
             await message.answer("Нет мероприятий.")
             return
 
-        lines = ["🎫 <b>Все мероприятия:</b>\n"]
-        kb_rows = []
-        for e in events:
-            event_status = "🟢" if e.is_active else "🔴"
-            date_str = e.date.strftime("%d.%m.%Y %H:%M")
-            lines.append(
-                f"{event_status} <b>{e.title}</b>\n"
-                f"📅 {date_str}\n"
-                f"🎟 {e.available_tickets}/{e.total_tickets}\n"
-            )
-            # Первая строка: название мероприятия (до 40 символов)
-            title_btn = e.title[:40]
-            kb_rows.append([
-                InlineKeyboardButton(text=f"🎫 {title_btn}", callback_data=f"ch_admin:menu:{e.id}"),
-            ])
-            # Вторая строка: кнопки управления
-            toggle_label = "▶ Включить" if not e.is_active else "⏸ Отключить"
-            kb_rows.append([
-                InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{e.id}"),
-                InlineKeyboardButton(text=toggle_label, callback_data=f"ch_admin:toggle:{e.id}"),
-            ])
-
-        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
-        await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+        text, kb = await self._send_admin_event_page(events, page=0)
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
     # ─── /deactivate /activate ───────────────────────────────────────────
 
@@ -2124,31 +2147,12 @@ class TelegramBot(PlatformBot):
                 if not events:
                     await edit("Нет мероприятий.", reply_markup=back_kb)
                     return
-                lines = ["🎫 <b>Все мероприятия:</b>\n"]
-                ev_kb_rows = []
-                for e in events:
-                    event_status = "🟢" if e.is_active else "🔴"
-                    date_str = e.date.strftime("%d.%m.%Y %H:%M")
-                    lines.append(
-                        f"{event_status} <b>{e.title}</b>\n"
-                        f"📅 {date_str}\n"
-                        f"🎟 {e.available_tickets}/{e.total_tickets}\n"
-                    )
-                    title_btn = e.title[:40]
-                    ev_kb_rows.append([
-                        InlineKeyboardButton(text=f"🎫 {title_btn}", callback_data=f"ch_admin:menu:{e.id}"),
-                    ])
-                    toggle_label = "▶ Включить" if not e.is_active else "⏸ Отключить"
-                    ev_kb_rows.append([
-                        InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{e.id}"),
-                        InlineKeyboardButton(text=toggle_label, callback_data=f"ch_admin:toggle:{e.id}"),
-                    ])
-                ev_kb_rows.append([InlineKeyboardButton(text="◀️ Назад в меню", callback_data="admin_menu:back")])
-                ev_kb = InlineKeyboardMarkup(inline_keyboard=ev_kb_rows) if ev_kb_rows else None
-                await edit("\n".join(lines), parse_mode="HTML", reply_markup=ev_kb)
+                # Сохраняем ID событий в state для пагинации
+                event_ids = [str(e.id) for e in events]
+                await state.update_data(admin_events=event_ids)
+                text, pag_kb = await self._send_admin_event_page(events, page=0)
+                await edit(text, parse_mode="HTML", reply_markup=pag_kb)
                 return
-
-            if action == "repost_events":
                 ch = await self._get_admin_channel(user_id)
                 if not ch:
                     await edit("❌ У вас нет канала с активной подпиской.", reply_markup=back_kb)
@@ -2230,6 +2234,29 @@ class TelegramBot(PlatformBot):
                 return
 
             await callback.answer("Неизвестная команда", show_alert=True)
+            return
+
+        # ─── Навигация по страницам админ-списка ─────────
+        if data.startswith("admin_ev_page:"):
+            if data == "admin_ev_page:current":
+                await callback.answer()
+                return
+            page = int(data.split(":")[1])
+            fsm_data = await state.get_data()
+            event_ids = fsm_data.get("admin_events", [])
+            if event_ids:
+                async with async_session_factory() as session:
+                    from sqlalchemy import select
+                    stmt = select(Event).where(Event.id.in_([UUID(eid) for eid in event_ids]))
+                    result = await session.execute(stmt)
+                    events = list(result.scalars().all())
+                    # Восстановить порядок
+                    id_order = {UUID(eid): i for i, eid in enumerate(event_ids)}
+                    events.sort(key=lambda e: id_order.get(e.id, 0))
+                if events and page < len(events):
+                    text, kb = await self._send_admin_event_page(events, page)
+                    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+            await callback.answer()
             return
 
         # ─── Навигация по страницам мероприятий ──────────
