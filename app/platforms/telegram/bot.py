@@ -450,7 +450,14 @@ class TelegramBot(PlatformBot):
         )
 
     async def _get_admin_channel(self, user_id: int) -> Channel | None:
-        """Get the channel managed by this Telegram user with an active subscription."""
+        """Get the channel managed by this Telegram user with an active subscription.
+
+        Приоритет:
+        1. Каналы пользователя с активной подпиской (проверка через Telegram API)
+        2. Если API недоступен (None) — доверяем БД и возвращаем канал
+        3. Fallback для super-admin: бесхозный канал
+        4. Fallback: legacy-канал (__legacy__)
+        """
         async with async_session_factory() as session:
             channel_svc = ChannelService(session)
             channels = await channel_svc.get_channels_by_admin(str(user_id))
@@ -468,14 +475,13 @@ class TelegramBot(PlatformBot):
                             channel.telegram_channel_id, user_id,
                         )
                         return None
-                    # verified is None — ошибка API, подписку не трогаем,
-                    # пробуем следующий канал (если есть)
-                    logger.info(
-                        "Skipping channel %s for user %s: Telegram API error, subscription kept",
+                    # verified is None — ошибка API (сеть, таймаут, формат ID).
+                    # Доверяем БД: подписка активна, пользователь админ.
+                    logger.warning(
+                        "Returning channel %s for user %s despite Telegram API error",
                         channel.telegram_channel_id, user_id,
                     )
-
-            # Fallback for super-admins: adopt an unassigned active channel
+                    return channel
             if self._is_super_admin(user_id):
                 unassigned = await channel_svc.get_active_unassigned_channel()
                 if unassigned:
