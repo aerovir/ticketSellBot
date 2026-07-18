@@ -140,7 +140,6 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.fsm_location, CreateEvent.location)
         self.dp.message.register(self.fsm_price, CreateEvent.price)
         self.dp.message.register(self.fsm_tickets, CreateEvent.tickets)
-        self.dp.message.register(self.fsm_confirm, CreateEvent.confirm)
 
         # Отмена во время FSM
         self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(CreateEvent))
@@ -1215,6 +1214,25 @@ class TelegramBot(PlatformBot):
 
     # ─── FSM: Создание мероприятия ──────────────────────────────────────
 
+    async def _fsm_header(self, data: dict) -> str:
+        """Сформировать блок с уже введёнными данными для шапки FSM."""
+        lines = []
+        if "title" in data:
+            lines.append(f"📌 Название: {data['title']}")
+        if "description" in data and data["description"]:
+            desc = data["description"][:50] + "…" if len(data["description"]) > 50 else data["description"]
+            lines.append(f"📖 Описание: {desc}")
+        if "date" in data:
+            d = datetime.fromisoformat(data["date"])
+            lines.append(f"📅 Дата: {d.strftime('%d.%m.%Y %H:%M')}")
+        if "location" in data and data["location"]:
+            lines.append(f"📍 Место: {data['location']}")
+        if "price" in data:
+            lines.append(f"💰 Цена: {data['price']:.0f}₽")
+        if "tickets" in data:
+            lines.append(f"🎟 Билетов: {data['tickets']}")
+        return "\n".join(lines) + "\n\n" if lines else ""
+
     async def admin_create_event(self, message: types.Message, state: FSMContext):
         """Start the create-event wizard."""
         # Get admin's channel (проверяет права через Telegram API внутри)
@@ -1227,7 +1245,9 @@ class TelegramBot(PlatformBot):
         await state.update_data(channel_id=channel.id)
         await state.set_state(CreateEvent.title)
         await message.answer(
-            "📝 Введите <b>название</b> мероприятия:",
+            "📝 <b>Создание мероприятия</b> (шаг 1/6)\n\n"
+            "Введите <b>название</b> мероприятия.\n"
+            "Отправьте /cancel в любой момент для отмены.",
             parse_mode="HTML",
         )
 
@@ -1237,23 +1257,25 @@ class TelegramBot(PlatformBot):
         await message.answer("❌ Создание мероприятия отменено.")
 
     async def fsm_title(self, message: types.Message, state: FSMContext):
-        await state.update_data(title=message.text.strip())
+        data = await state.update_data(title=message.text.strip())
         await state.set_state(CreateEvent.description)
+        header = await self._fsm_header(data)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Пропустить", callback_data="fsm_skip:description")],
+        ])
         await message.answer(
-            "📝 Введите <b>описание</b> мероприятия\n"
-            "Или отправьте <code>-</code> чтобы пропустить.",
+            f"{header}📝 Введите <b>описание</b> мероприятия\n"
+            "или нажмите «Пропустить».",
             parse_mode="HTML",
+            reply_markup=kb,
         )
 
     async def fsm_description(self, message: types.Message, state: FSMContext):
-        text = message.text.strip()
-        if text == "-":
-            await state.update_data(description=None)
-        else:
-            await state.update_data(description=text)
+        data = await state.get_data()
+        header = await self._fsm_header(data)
         await state.set_state(CreateEvent.date)
         await message.answer(
-            "📅 Введите <b>дату и время</b> в формате:\n"
+            f"{header}📅 Введите <b>дату и время</b> в формате:\n"
             "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n\n"
             "Пример: <code>25.12.2026 19:00</code>",
             parse_mode="HTML",
@@ -1262,32 +1284,40 @@ class TelegramBot(PlatformBot):
     async def fsm_date(self, message: types.Message, state: FSMContext):
         text = message.text.strip()
         try:
-            from datetime import datetime, timezone
             date = datetime.strptime(text, "%d.%m.%Y %H:%M").replace(tzinfo=timezone.utc)
         except ValueError:
+            data = await state.get_data()
+            header = await self._fsm_header(data)
             await message.answer(
-                "❌ Неверный формат. Используйте <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+                f"{header}❌ Неверный формат. Используйте <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
                 "Пример: <code>25.12.2026 19:00</code>",
                 parse_mode="HTML",
             )
             return
         await state.update_data(date=date.isoformat())
         await state.set_state(CreateEvent.location)
+        data = await state.get_data()
+        header = await self._fsm_header(data)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Пропустить", callback_data="fsm_skip:location")],
+        ])
         await message.answer(
-            "📍 Введите <b>место проведения</b>\n"
-            "Или отправьте <code>-</code> чтобы пропустить.",
+            f"{header}📍 Введите <b>адрес или место</b> проведения.\n\n"
+            "Например: <code>Москва, ул. Тверская, д. 1</code>\n"
+            "Или <code>Онлайн</code> для вебинара.\n"
+            "или нажмите «Пропустить».",
             parse_mode="HTML",
+            reply_markup=kb,
         )
 
     async def fsm_location(self, message: types.Message, state: FSMContext):
-        text = message.text.strip()
-        if text == "-":
-            await state.update_data(location=None)
-        else:
-            await state.update_data(location=text)
+        await state.update_data(location=message.text.strip())
+        data = await state.get_data()
+        header = await self._fsm_header(data)
         await state.set_state(CreateEvent.price)
         await message.answer(
-            "💰 Введите <b>цену билета</b> (число, в рублях):",
+            f"{header}💰 Введите <b>цену билета</b> в рублях.\n\n"
+            "Например: <code>1500</code> или <code>0</code> для бесплатного.",
             parse_mode="HTML",
         )
 
@@ -1298,12 +1328,21 @@ class TelegramBot(PlatformBot):
             if price < 0:
                 raise ValueError
         except ValueError:
-            await message.answer("❌ Введите число (например: <code>1500</code> или <code>0</code> для бесплатного):", parse_mode="HTML")
+            data = await state.get_data()
+            header = await self._fsm_header(data)
+            await message.answer(
+                f"{header}❌ Введите число. Например: <code>1500</code> или <code>0</code>.\n"
+                "Допускается запятая: <code>1500,50</code>",
+                parse_mode="HTML",
+            )
             return
         await state.update_data(price=price)
+        data = await state.get_data()
+        header = await self._fsm_header(data)
         await state.set_state(CreateEvent.tickets)
         await message.answer(
-            "🎟 Введите <b>количество билетов</b> (целое число):",
+            f"{header}🎟 Введите <b>количество билетов</b> (целое число).\n"
+            "Например: <code>100</code>",
             parse_mode="HTML",
         )
 
@@ -1314,13 +1353,18 @@ class TelegramBot(PlatformBot):
             if tickets <= 0:
                 raise ValueError
         except ValueError:
-            await message.answer("❌ Введите целое число больше 0 (например: <code>100</code>):", parse_mode="HTML")
+            data = await state.get_data()
+            header = await self._fsm_header(data)
+            await message.answer(
+                f"{header}❌ Введите целое число больше 0.\n"
+                "Например: <code>100</code>",
+                parse_mode="HTML",
+            )
             return
         data = await state.update_data(tickets=tickets)
         await state.set_state(CreateEvent.confirm)
 
         # Показать сводку
-        from datetime import datetime
         date = datetime.fromisoformat(data["date"])
         date_str = date.strftime("%d.%m.%Y %H:%M")
         desc = data.get("description") or "—"
@@ -1333,7 +1377,7 @@ class TelegramBot(PlatformBot):
             f"📍 Место: {loc}\n"
             f"💰 Цена: {data['price']:.0f}₽\n"
             f"🎟 Билетов: {data['tickets']}\n\n"
-            f"Подтвердить создание?"
+            f"✅ <b>Подтвердите создание</b> или нажмите «Отмена»."
         )
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -1344,10 +1388,6 @@ class TelegramBot(PlatformBot):
             ]
         )
         await message.answer(summary, parse_mode="HTML", reply_markup=kb)
-
-    async def fsm_confirm(self, message: types.Message, state: FSMContext):
-        """Handle text messages in confirm state (ignore, only buttons work)."""
-        await message.answer("Используйте кнопки ниже для подтверждения или отмены.")
 
     # ─── /events_all ─────────────────────────────────────────────────────
 
@@ -1796,6 +1836,38 @@ class TelegramBot(PlatformBot):
         # ─── Канал: управление мероприятием (админ) ─────
         if data.startswith("ch_admin:"):
             await self._handle_channel_admin(callback, data)
+            return
+
+        # ─── FSM: пропустить шаг (описание/место) ──────────
+        if data.startswith("fsm_skip:"):
+            field = data.split(":", 1)[1]
+            current_state = await state.get_state()
+            expected_state = getattr(CreateEvent, field, None)
+            if expected_state and current_state == expected_state.state:
+                data_dict = await state.get_data()
+                # Поле уже могло быть заполнено текстом — не перезаписываем
+                if field not in data_dict or not data_dict.get(field):
+                    await state.update_data(**{field: None})
+                if field == "description":
+                    await state.set_state(CreateEvent.date)
+                    data_dict = await state.get_data()
+                    header = await self._fsm_header(data_dict)
+                    await callback.message.edit_text(
+                        f"{header}📅 Введите <b>дату и время</b> в формате:\n"
+                        "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n\n"
+                        "Пример: <code>25.12.2026 19:00</code>",
+                        parse_mode="HTML",
+                    )
+                elif field == "location":
+                    await state.set_state(CreateEvent.price)
+                    data_dict = await state.get_data()
+                    header = await self._fsm_header(data_dict)
+                    await callback.message.edit_text(
+                        f"{header}💰 Введите <b>цену билета</b> в рублях.\n\n"
+                        "Например: <code>1500</code> или <code>0</code> для бесплатного.",
+                        parse_mode="HTML",
+                    )
+            await callback.answer()
             return
 
         # ─── Админ: подтвердить создание ────────────────
