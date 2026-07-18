@@ -988,6 +988,24 @@ class TelegramBot(PlatformBot):
                     if channel:
                         channel = await channel_svc.activate_subscription(channel.id, days)
                         channel_name = channel.title or channel.telegram_channel_id
+
+                        # Синхронизировать админов канала, если бот в нём
+                        admin_svc = ChannelAdminService(session)
+                        try:
+                            admins = await self.bot.get_chat_administrators(chat_id=channel.telegram_channel_id)
+                            admin_ids = [
+                                str(a.user.id) for a in admins
+                                if a.status in ("creator", "administrator") and not a.user.is_bot
+                            ]
+                            if admin_ids:
+                                await admin_svc.sync_admins(channel.id, admin_ids)
+                                channel.admin_telegram_user_id = admin_ids[0]
+                        except Exception as e:
+                            logger.info(
+                                "Не удалось синхронизировать админов для %s: %s",
+                                channel.telegram_channel_id, e,
+                            )
+
                         await session.commit()
                         text = (
                             f"✅ Подписка активирована для канала {channel_name}!\n"
@@ -1495,6 +1513,24 @@ class TelegramBot(PlatformBot):
                     # Update existing channel's subscription
                     channel = await channel_svc.activate_subscription(channel.id, days)
                     channel_name = channel.title or channel.telegram_channel_id
+
+                    # Синхронизировать админов канала, если бот в нём
+                    admin_svc = ChannelAdminService(session)
+                    try:
+                        admins = await self.bot.get_chat_administrators(chat_id=channel.telegram_channel_id)
+                        admin_ids = [
+                            str(a.user.id) for a in admins
+                            if a.status in ("creator", "administrator") and not a.user.is_bot
+                        ]
+                        if admin_ids:
+                            await admin_svc.sync_admins(channel.id, admin_ids)
+                            channel.admin_telegram_user_id = admin_ids[0]
+                    except Exception as e:
+                        logger.info(
+                            "Не удалось синхронизировать админов для %s: %s (бот может быть не в канале)",
+                            channel.telegram_channel_id, e,
+                        )
+
                     await session.commit()
                     text = (
                         f"✅ Подписка активирована для канала {channel_name}!\n"
