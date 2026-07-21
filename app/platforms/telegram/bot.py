@@ -109,20 +109,20 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.admin_activate, Command("activate"))
         self.dp.message.register(self.admin_stats, Command("stats"))
         self.dp.message.register(self.admin_repost_events, Command("repost_events"))
-        self.dp.message.register(self.admin_subscribe, Command("subscribe"))
-        self.dp.message.register(self.admin_unsubscribe, Command("unsubscribe"))
+        self.dp.message.register(self.admin_subscribe, Command("subscribe"), StateFilter(None))
+        self.dp.message.register(self.admin_unsubscribe, Command("unsubscribe"), StateFilter(None))
         self.dp.message.register(self.admin_my_channels, Command("my_channels"))
 
         # ─── Супер-админ команды (текстовые) ─────────
         self.dp.message.register(self.sa_stats_all, Command("stats_all"))
         self.dp.message.register(self.sa_list_channels, Command("list_channels"))
-        self.dp.message.register(self.sa_channel_info, Command("channel_info"))
-        self.dp.message.register(self.sa_user_info, Command("user_info"))
-        self.dp.message.register(self.sa_admin_cancel, Command("admin_cancel"))
+        self.dp.message.register(self.sa_channel_info, Command("channel_info"), StateFilter(None))
+        self.dp.message.register(self.sa_user_info, Command("user_info"), StateFilter(None))
+        self.dp.message.register(self.sa_admin_cancel, Command("admin_cancel"), StateFilter(None))
         self.dp.message.register(self.sa_broadcast, Command("broadcast"))
         self.dp.message.register(self.sa_health, Command("health"))
         self.dp.message.register(self.sa_check_expired, Command("check_expired"))
-        self.dp.message.register(self.sa_change_admin, Command("change_admin"))
+        self.dp.message.register(self.sa_change_admin, Command("change_admin"), StateFilter(None))
 
         # ─── Обработчик текстового ввода для broadcast ──
         self.dp.message.register(self._handle_broadcast_input, StateFilter(BroadcastFSM.text))

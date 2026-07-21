@@ -569,3 +569,54 @@
   При `None` (ошибка API) — возвращаем канал. Подписку не деактивируем, действие не блокируем.
   Логируем предупреждение, чтобы админ знал о проблеме.
 - **Связанные ошибки:** #030 (это доработка фикса #030)
+
+---
+
+## 032 — Кнопка "Сменить админа" показывает usage вместо FSM-диалога
+
+- **Дата:** 2026-07-21
+- **Статус:** ✅ Исправлено
+- **Описание:** Super-admin нажимает кнопку «🔄 Сменить админа» в админ-меню. Вместо FSM-диалога (ввод @channel и new_user_id) получает сообщение: «Использование: /change_admin <channel_id> <new_user_id>».
+- **Анализ:**
+  - **Был вызов:**
+
+    Пользователь кликает кнопку с `callback_data="admin_menu:change_admin"`. Callback-хендлер `cmd_callback` (строка 1889) обрабатывает её и попадает в блок `input_actions` (строка 2215-2227): устанавливает `AwaitingAdminInput.text` state и отправляет приглашение ввести параметры.
+
+    Однако если пользователь после этого (или вместо этого) вводит текстовую команду `/change_admin`, срабатывает **не** FSM-хендлер `_handle_admin_input`, а **текстовый** команда-хендлер `sa_change_admin`, потому что:
+
+    1. `sa_change_admin` зарегистрирован на строке 125: `self.dp.message.register(self.sa_change_admin, Command("change_admin"))` — **без StateFilter**
+    2. `_handle_admin_input` зарегистрирован на строке 131: `self.dp.message.register(self._handle_admin_input, StateFilter(AwaitingAdminInput.text))`
+    3. aiogram 3 проверяет хендлеры в порядке регистрации. Первый подошедший — `sa_change_admin` (строка 125), так как у него нет StateFilter, и он подходит для любого сообщения `/change_admin`, включая те, что пришли во время FSM.
+    4. В `sa_change_admin` (строка 1197-1224): `args = message.text.split(maxsplit=2)` → если аргументов меньше 3, выводится usage-сообщение (строка 1204-1205).
+
+  - **Корень проблемы (подтверждено: `app/platforms/telegram/bot.py:125`):**
+
+    `Command("change_admin")` не имеет `StateFilter`, поэтому перехватывает сообщения `/change_admin` даже когда пользователь находится в состоянии `AwaitingAdminInput.text`. FSM-хендлер `_handle_admin_input` (строка 131) не успевает сработать.
+
+  - **Аналогичная проблема** у других команд, имеющих FSM-альтернативу:
+    - `sa_channel_info` (строка 119) — `Command("channel_info")`, без StateFilter
+    - `sa_user_info` (строка 120) — `Command("user_info")`, без StateFilter
+    - `sa_admin_cancel` (строка 121) — `Command("admin_cancel")`, без StateFilter
+    - `admin_subscribe` (строка 112) — `Command("subscribe")`, без StateFilter
+    - `admin_unsubscribe` (строка 113) — `Command("unsubscribe")`, без StateFilter
+
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py:125`):**
+
+  Добавить `StateFilter(None)` в регистрацию `sa_change_admin`, чтобы хендлер срабатывал **только** когда пользователь не находится ни в одном FSM-состоянии. Когда пользователь в `AwaitingAdminInput.text`, сообщение `/change_admin` будет обработано FSM-хендлером `_handle_admin_input`.
+
+  ```python
+  # Было (строка 125):
+  self.dp.message.register(self.sa_change_admin, Command("change_admin"))
+
+  # Стало:
+  self.dp.message.register(self.sa_change_admin, Command("change_admin"), StateFilter(None))
+  ```
+
+  **Дополнительно:** Аналогично стоит поправить регистрацию других команда-хендлеров, конфликтующих с FSM:
+  - `sa_channel_info` (строка 119)
+  - `sa_user_info` (строка 120)
+  - `sa_admin_cancel` (строка 121)
+  - `admin_subscribe` (строка 112)
+  - `admin_unsubscribe` (строка 113)
+
+- **Связанные ошибки:** нет
