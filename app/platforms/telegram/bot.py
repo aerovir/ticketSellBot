@@ -746,7 +746,14 @@ class TelegramBot(PlatformBot):
 
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("Укажите ID канала: /channel_info &lt;channel_id&gt;")
+            await message.answer(
+                "ℹ️ <b>Информация о канале</b>\n\n"
+                "Требуется действие: укажите ID канала.\n\n"
+                "channel_id — @username канала или его числовой Telegram ID.\n"
+                "Пример: <code>/channel_info @my_channel</code>\n"
+                "Пример: <code>/channel_info -1001234567890</code>",
+                parse_mode="HTML",
+            )
             return
 
         channel_telegram_id = args[1].strip()
@@ -803,7 +810,13 @@ class TelegramBot(PlatformBot):
 
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("Укажите Telegram ID: /user_info &lt;user_id&gt;")
+            await message.answer(
+                "👤 <b>Информация о пользователе</b>\n\n"
+                "Требуется действие: укажите Telegram ID пользователя.\n\n"
+                "user_id — числовой Telegram ID пользователя.\n"
+                "Пример: <code>/user_info 123456789</code>",
+                parse_mode="HTML",
+            )
             return
 
         user_tg_id = args[1].strip()
@@ -841,7 +854,13 @@ class TelegramBot(PlatformBot):
 
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.answer("Укажите ID билета: /admin_cancel &lt;ticket_id&gt;")
+            await message.answer(
+                "✅ <b>Отмена билета (админ)</b>\n\n"
+                "Требуется действие: укажите ID билета, который нужно отменить.\n\n"
+                "ticket_id — UUID билета из списка билетов пользователя.\n"
+                "Пример: <code>/admin_cancel 550e8400-e29b-41d4-a716-446655440000</code>",
+                parse_mode="HTML",
+            )
             return
 
         try:
@@ -1202,7 +1221,15 @@ class TelegramBot(PlatformBot):
 
         args = message.text.split(maxsplit=2)
         if len(args) < 3:
-            await message.answer("Использование: /change_admin &lt;channel_id&gt; &lt;new_user_id&gt;")
+            await message.answer(
+                "🔄 <b>Смена администратора канала</b>\n\n"
+                "Требуется действие: укажите @username канала и новый Telegram ID пользователя через пробел.\n\n"
+                "channel_id — @username канала или его числовой ID.\n"
+                "new_user_id — числовой Telegram ID нового администратора.\n"
+                "Пример: <code>/change_admin @my_channel 123456789</code>\n"
+                "Пример: <code>/change_admin -1001234567890 987654321</code>",
+                parse_mode="HTML",
+            )
             return
 
         channel_telegram_id = args[1].strip()
