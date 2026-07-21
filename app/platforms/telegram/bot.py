@@ -455,11 +455,11 @@ class TelegramBot(PlatformBot):
         Вызывается при старте, при входе в админку и при добавлении бота в канал.
         """
         if self._is_super_admin(user_id):
-            commands = USER_COMMANDS + ADMIN_COMMANDS + SUPER_ADMIN_COMMANDS
+            commands = SUPER_ADMIN_COMMANDS
         else:
             channel = await self._get_admin_channel(user_id)
             if channel:
-                commands = USER_COMMANDS + ADMIN_COMMANDS
+                commands = ADMIN_COMMANDS
             else:
                 commands = USER_COMMANDS
 
