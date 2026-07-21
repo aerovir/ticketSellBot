@@ -1,11 +1,11 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.models import User, Event, Ticket, Payment, TicketStatus, PaymentStatus, PlatformType
+from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType
 from app.core.schemas import EventOut, EventShortOut, TicketOut, UserOut
 
 
@@ -35,14 +35,196 @@ class UserService:
         return user
 
 
+# ─── Channel Service ─────────────────────────────────────────────────────────
+
+class ChannelService:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_telegram_id(self, telegram_channel_id: str) -> Channel | None:
+        """Look up a channel by its Telegram chat_id or @username."""
+        stmt = select(Channel).where(Channel.telegram_channel_id == telegram_channel_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, channel_id: uuid.UUID) -> Channel | None:
+        """Look up a channel by its UUID."""
+        return await self.session.get(Channel, channel_id)
+
+    async def create(
+        self,
+        telegram_channel_id: str,
+        admin_telegram_user_id: str,
+        title: str | None = None,
+    ) -> Channel:
+        """Create a new channel record."""
+        channel = Channel(
+            telegram_channel_id=telegram_channel_id,
+            title=title,
+            admin_telegram_user_id=admin_telegram_user_id,
+            is_subscription_active=False,
+        )
+        self.session.add(channel)
+        await self.session.flush()
+        return channel
+
+    async def activate_subscription(self, channel_id: uuid.UUID, duration_days: int = 30) -> Channel | None:
+        """Manually activate subscription for a channel."""
+        channel = await self.session.get(Channel, channel_id)
+        if channel is None:
+            return None
+        channel.is_subscription_active = True
+        channel.subscription_until = datetime.now(timezone.utc) + timedelta(days=duration_days)
+        await self.session.flush()
+        return channel
+
+    async def deactivate_subscription(self, channel_id: uuid.UUID) -> Channel | None:
+        """Deactivate subscription."""
+        channel = await self.session.get(Channel, channel_id)
+        if channel is None:
+            return None
+        channel.is_subscription_active = False
+        channel.subscription_until = None
+        await self.session.flush()
+        return channel
+
+    async def is_subscription_valid(self, channel_id: uuid.UUID) -> bool:
+        """Check if the channel has an active, non-expired subscription."""
+        channel = await self.session.get(Channel, channel_id)
+        if channel is None:
+            return False
+        if not channel.is_subscription_active:
+            return False
+        if channel.subscription_until and channel.subscription_until < datetime.now(timezone.utc):
+            # Auto-deactivate expired subscriptions
+            channel.is_subscription_active = False
+            channel.subscription_until = None
+            await self.session.flush()
+            return False
+        return True
+
+    async def get_active_unassigned_channel(self) -> Channel | None:
+        """Get a channel with active subscription but no admin assigned."""
+        stmt = (
+            select(Channel)
+            .where(
+                and_(
+                    Channel.admin_telegram_user_id == "",
+                    Channel.is_subscription_active == True,
+                )
+            )
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_channel_ids_by_admin(self, telegram_user_id: str) -> list[uuid.UUID]:
+        """Получить ID всех каналов, где пользователь — админ (из channel_admins)."""
+        stmt = select(ChannelAdmin.channel_id).where(ChannelAdmin.telegram_user_id == telegram_user_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_channels_by_admin(self, telegram_user_id: str) -> list[Channel]:
+        """Получить все каналы, где пользователь — админ (через channel_admins)."""
+        channel_ids = await self.get_channel_ids_by_admin(telegram_user_id)
+        if not channel_ids:
+            return []
+        stmt = select(Channel).where(Channel.id.in_(channel_ids))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def change_admin(self, channel_telegram_id: str, new_admin_id: str) -> tuple[Channel, list[str]]:
+        """Сменить администратора канала.
+
+        Обновляет channel_admins (M2M) и legacy-поле admin_telegram_user_id.
+        Использует ChannelAdminService внутренне для синхронизации.
+
+        Args:
+            channel_telegram_id: @username или ID канала.
+            new_admin_id: Telegram ID нового администратора.
+
+        Returns:
+            tuple[Channel, list[str]]: (канал, список старых admin_id).
+
+        Raises:
+            ValueError: если канал с таким channel_telegram_id не найден.
+        """
+        channel = await self.get_by_telegram_id(channel_telegram_id)
+        if not channel:
+            raise ValueError(f"Канал {channel_telegram_id} не найден")
+
+        admin_svc = ChannelAdminService(self.session)
+        old_admin_ids = await admin_svc.get_admin_ids(channel.id)
+        await admin_svc.sync_admins(channel.id, [new_admin_id])
+        channel.admin_telegram_user_id = new_admin_id
+        await self.session.flush()
+
+        return channel, old_admin_ids
+
+
+# ─── Channel Admin Service ──────────────────────────────────────────────────
+
+class ChannelAdminService:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_admin_ids(self, channel_id: uuid.UUID) -> list[str]:
+        """Получить список Telegram ID админов канала."""
+        stmt = select(ChannelAdmin.telegram_user_id).where(ChannelAdmin.channel_id == channel_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def sync_admins(self, channel_id: uuid.UUID, admin_ids: list[str]):
+        """Синхронизировать список админов канала с Telegram.
+
+        Удаляет отсутствующих, добавляет новых, существующих не трогает.
+        """
+        existing = await self.get_admin_ids(channel_id)
+        existing_set = set(existing)
+        new_set = set(admin_ids)
+
+        # Добавить новых
+        for uid in new_set - existing_set:
+            self.session.add(ChannelAdmin(channel_id=channel_id, telegram_user_id=uid))
+
+        # Удалить отсутствующих
+        to_remove = existing_set - new_set
+        if to_remove:
+            stmt = delete(ChannelAdmin).where(
+                ChannelAdmin.channel_id == channel_id,
+                ChannelAdmin.telegram_user_id.in_(to_remove),
+            )
+            await self.session.execute(stmt)
+
+        await self.session.flush()
+
+    async def user_is_admin(self, channel_id: uuid.UUID, telegram_user_id: str) -> bool:
+        """Проверить, является ли пользователь админом канала."""
+        stmt = select(ChannelAdmin).where(
+            ChannelAdmin.channel_id == channel_id,
+            ChannelAdmin.telegram_user_id == telegram_user_id,
+        ).limit(1)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def remove_admin(self, channel_id: uuid.UUID, telegram_user_id: str):
+        """Удалить пользователя из админов канала."""
+        stmt = delete(ChannelAdmin).where(
+            ChannelAdmin.channel_id == channel_id,
+            ChannelAdmin.telegram_user_id == telegram_user_id,
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+
+
 # ─── Event Service ───────────────────────────────────────────────────────────
 
 class EventService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_upcoming(self) -> list[Event]:
-        """Get all active events that haven't passed yet."""
+    async def list_upcoming(self, channel_id: uuid.UUID | None = None) -> list[Event]:
+        """Get all active events that haven't passed yet, optionally filtered by channel."""
         now = datetime.now(timezone.utc)
         stmt = (
             select(Event)
@@ -51,17 +233,22 @@ class EventService:
             )
             .order_by(Event.date.asc())
         )
+        if channel_id is not None:
+            stmt = stmt.where(Event.channel_id == channel_id)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_by_id(self, event_id: uuid.UUID) -> Event | None:
+    async def get_by_id(self, event_id: uuid.UUID, channel_id: uuid.UUID | None = None) -> Event | None:
+        """Get event by ID, optionally scoped to a channel."""
         stmt = select(Event).where(Event.id == event_id)
+        if channel_id is not None:
+            stmt = stmt.where(Event.channel_id == channel_id)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def create(self, title: str, description: Optional[str], date: datetime,
                      location: Optional[str], price: float,
-                     total_tickets: int) -> Event:
+                     total_tickets: int, channel_id: uuid.UUID) -> Event:
         event = Event(
             title=title,
             description=description,
@@ -71,6 +258,7 @@ class EventService:
             total_tickets=total_tickets,
             available_tickets=total_tickets,
             is_active=True,
+            channel_id=channel_id,
         )
         self.session.add(event)
         await self.session.flush()
@@ -78,9 +266,12 @@ class EventService:
 
     # ─── Admin methods ───────────────────────────────────────────────────
 
-    async def list_all(self) -> list[Event]:
-        """Get ALL events (active or not, past or future), newest first."""
-        stmt = select(Event).order_by(Event.date.desc())
+    async def list_all(self, channel_id: uuid.UUID | None = None) -> list[Event]:
+        """Get ALL events that are not deleted, newest first.
+        Optionally filtered by channel."""
+        stmt = select(Event).where(Event.deleted_at.is_(None)).order_by(Event.date.desc())
+        if channel_id is not None:
+            stmt = stmt.where(Event.channel_id == channel_id)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -110,6 +301,17 @@ class EventService:
         if event is None:
             return None
         event.is_active = is_active
+        await self.session.flush()
+        return event
+
+    async def soft_delete(self, event_id: uuid.UUID) -> Event | None:
+        """Soft delete an event — hides it from all lists.
+        Sets is_active=False and deleted_at=now()."""
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            return None
+        event.is_active = False
+        event.deleted_at = datetime.now(timezone.utc)
         await self.session.flush()
         return event
 
@@ -288,14 +490,16 @@ class TicketService:
         await self.session.flush()
         return ticket
 
-    async def get_user_tickets(self, user_id: uuid.UUID) -> list[dict]:
-        """Get all tickets for a user with event info."""
+    async def get_user_tickets(self, user_id: uuid.UUID, channel_id: uuid.UUID | None = None) -> list[dict]:
+        """Get all tickets for a user with event info, optionally filtered by channel."""
         stmt = (
             select(Ticket, Event.title)
             .join(Event, Ticket.event_id == Event.id)
             .where(Ticket.user_id == user_id)
-            .order_by(Ticket.purchase_date.desc())
         )
+        if channel_id is not None:
+            stmt = stmt.where(Event.channel_id == channel_id)
+        stmt = stmt.order_by(Ticket.purchase_date.desc())
         result = await self.session.execute(stmt)
         rows = result.all()
 

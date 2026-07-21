@@ -2,7 +2,7 @@ name: Deploy TicketBot
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:  # ручной запуск
 
 env:
@@ -56,7 +56,7 @@ jobs:
   deploy:
     runs-on: self-hosted
     needs: [test]
-    if: success() && github.ref == 'refs/heads/main'
+    if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
 
     steps:
       - name: 📥 Получить код
@@ -67,7 +67,6 @@ jobs:
           cat > .env.telegram << 'ENVEOF'
           DATABASE_URL=postgresql+asyncpg://tg_user:${{ secrets.DB_PASSWORD_TG }}@db:5432/ticketbot
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHANNEL_ID=${{ secrets.TELEGRAM_CHANNEL_ID }}
           ADMIN_TELEGRAM_IDS=${{ secrets.ADMIN_TELEGRAM_IDS }}
           DEBUG=false
           ENVEOF
@@ -133,7 +132,7 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO tg_user;
-            GRANT USAGE ON SCHEMA public TO tg_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO tg_user;
 
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'vk_user') THEN
@@ -141,7 +140,7 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO vk_user;
-            GRANT USAGE ON SCHEMA public TO vk_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO vk_user;
 
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'max_user') THEN
@@ -149,40 +148,94 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO max_user;
-            GRANT USAGE ON SCHEMA public TO max_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO max_user;
             SELECT rolname FROM pg_catalog.pg_roles WHERE rolname IN ('tg_user', 'vk_user', 'max_user');
           EOSQL
           "
           echo "✅ Роли PostgreSQL созданы"
 
-      - name: 🗄️ Создать таблицы
+      - name: 🗄️ Накатить миграции
         run: |
+          # Ставим alembic stamp на head (создаёт alembic_version если нет)
           docker compose ${{ env.COMPOSE_FILES }} run --rm \
-            -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@db:5432/ticketbot" \
-            telegram python -c "
-          import asyncio;
-          from app.core.database import init_db;
-          asyncio.run(init_db());
-          print('✅ Таблицы созданы');
+            -e DATABASE_URL="postgresql+asyncpg://tg_user:${{ secrets.DB_PASSWORD_TG }}@db:5432/ticketbot" \
+            --entrypoint python \
+            telegram -c "
+          from alembic.config import Config
+          from alembic import command
+          cfg = Config('alembic.ini')
+          cfg.set_main_option('sqlalchemy.url', 'postgresql+asyncpg://tg_user:${{ secrets.DB_PASSWORD_TG }}@db:5432/ticketbot')
+          command.stamp(cfg, 'head')
+          print('✅ Миграции заштампованы')
           " 2>&1
 
-      - name: 🐘 Выдать права на таблицы
+      - name: 🗄️ Синхронизировать схему БД
         run: |
-          docker compose ${{ env.COMPOSE_FILES }} exec -T db psql -U postgres -d ticketbot -c "
+          # init_db() не добавляет колонки в существующие таблицы.
+          # Применяем изменения идемпотентно через IF NOT EXISTS.
+          docker compose ${{ env.COMPOSE_FILES }} exec -T db psql -U postgres -d ticketbot <<-EOSQL
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS channel_id UUID REFERENCES channels(id);
+
+            -- deleted_at for events (soft delete)
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+            -- channel_admins (multi-admin support)
+            CREATE TABLE IF NOT EXISTS channel_admins (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                telegram_user_id VARCHAR(255) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE (channel_id, telegram_user_id)
+            );
+            INSERT INTO channel_admins (id, channel_id, telegram_user_id, created_at)
+            SELECT gen_random_uuid(), id, admin_telegram_user_id, created_at
+            FROM channels
+            WHERE admin_telegram_user_id != '' AND admin_telegram_user_id != '0'
+            AND NOT EXISTS (
+                SELECT 1 FROM channel_admins ca
+                WHERE ca.channel_id = channels.id
+                AND ca.telegram_user_id = channels.admin_telegram_user_id
+            );
+
+            INSERT INTO channels (id, telegram_channel_id, title, admin_telegram_user_id, is_subscription_active)
+            SELECT gen_random_uuid(), '__legacy__', 'Legacy Default Channel', '0', true
+            WHERE NOT EXISTS (SELECT 1 FROM channels WHERE telegram_channel_id = '__legacy__');
+
+            UPDATE events SET channel_id = (SELECT id FROM channels WHERE telegram_channel_id = '__legacy__')
+            WHERE channel_id IS NULL;
+          EOSQL
+          echo "✅ Схема синхронизирована"
+
+      - name: 🗄️ Права на таблицы и очистка тестовых данных
+        run: |
+          docker compose ${{ env.COMPOSE_FILES }} exec -T db psql -U postgres -d ticketbot <<-EOSQL
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO tg_user;
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO vk_user;
             GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO max_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO tg_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO vk_user;
             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO max_user;
-          "
-          echo "✅ Права на таблицы выданы"
 
-      - name: 🌱 Накатить тестовые мероприятия
-        run: |
-          docker compose ${{ env.COMPOSE_FILES }} run --rm \
-            -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@db:5432/ticketbot" \
-            seed 2>&1 || echo "⚠️ Seed пропущен (возможно уже есть данные)"
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO tg_user;
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO vk_user;
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO max_user;
+
+            -- Удалить тестовые seed-мероприятия (созданные seed.py)
+            DELETE FROM payments WHERE ticket_id IN (
+              SELECT t.id FROM tickets t JOIN events e ON t.event_id = e.id
+              WHERE e.title LIKE 'Концерт ''Рок-хиты''%' OR e.title LIKE 'Stand-up%' OR e.title LIKE 'Театральная%'
+                 OR e.title LIKE 'Фестиваль%' OR e.title LIKE 'Мастер-класс%' OR e.title LIKE 'Спектакль%'
+            );
+            DELETE FROM tickets WHERE event_id IN (
+              SELECT id FROM events
+              WHERE title LIKE 'Концерт ''Рок-хиты''%' OR title LIKE 'Stand-up%' OR title LIKE 'Театральная%'
+                 OR title LIKE 'Фестиваль%' OR title LIKE 'Мастер-класс%' OR title LIKE 'Спектакль%'
+            );
+            DELETE FROM events
+              WHERE title LIKE 'Концерт ''Рок-хиты''%' OR title LIKE 'Stand-up%' OR title LIKE 'Театральная%'
+                 OR title LIKE 'Фестиваль%' OR title LIKE 'Мастер-класс%' OR title LIKE 'Спектакль%';
+          EOSQL
+          echo "✅ Права выданы, тестовые данные очищены"
 
       - name: 🚀 Запустить Telegram бота
         run: |

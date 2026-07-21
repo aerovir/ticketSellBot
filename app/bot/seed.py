@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from app.core.database import async_session_factory, init_db, close_db
-from app.core.models import Event
+from app.core.models import Event, Channel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("seed")
@@ -20,13 +20,33 @@ async def seed():
     await init_db()
 
     async with async_session_factory() as session:
-        # Check if already seeded
         from sqlalchemy import select, func
+
+        # Check if already seeded
         result = await session.execute(select(func.count(Event.id)))
         count = result.scalar()
         if count and count > 0:
             logger.info("В базе уже есть %d мероприятий, пропускаем сидирование.", count)
             return
+
+        # Create or find a default channel (skip if channels already exist from migration)
+        result = await session.execute(select(func.count(Channel.id)))
+        channel_count = result.scalar()
+        if channel_count and channel_count > 0:
+            # Use the first existing channel
+            result = await session.execute(select(Channel).limit(1))
+            default_channel = result.scalar_one()
+        else:
+            # Create a seed channel
+            default_channel = Channel(
+                telegram_channel_id="__seed__",
+                title="Seed Events Channel",
+                admin_telegram_user_id="0",
+                is_subscription_active=True,
+            )
+            session.add(default_channel)
+            await session.flush()
+            logger.info("📢 Создан seed-канал: %s", default_channel.id)
 
         now = datetime.now(timezone.utc)
         events = [
@@ -39,6 +59,7 @@ async def seed():
                 total_tickets=500,
                 available_tickets=500,
                 is_active=True,
+                channel_id=default_channel.id,
             ),
             Event(
                 title="Stand-up вечер",
@@ -49,6 +70,7 @@ async def seed():
                 total_tickets=200,
                 available_tickets=200,
                 is_active=True,
+                channel_id=default_channel.id,
             ),
             Event(
                 title="Театральная премьера: 'Гамлет'",
@@ -59,6 +81,7 @@ async def seed():
                 total_tickets=300,
                 available_tickets=300,
                 is_active=True,
+                channel_id=default_channel.id,
             ),
             Event(
                 title="Фестиваль электронной музыки",
@@ -69,6 +92,7 @@ async def seed():
                 total_tickets=1000,
                 available_tickets=1000,
                 is_active=True,
+                channel_id=default_channel.id,
             ),
             Event(
                 title="Мастер-класс по фотографии",
@@ -79,6 +103,7 @@ async def seed():
                 total_tickets=50,
                 available_tickets=50,
                 is_active=True,
+                channel_id=default_channel.id,
             ),
             Event(
                 title="Спектакль 'Три сестры'",
@@ -89,6 +114,7 @@ async def seed():
                 total_tickets=400,
                 available_tickets=400,
                 is_active=True,
+                channel_id=default_channel.id,
             ),
         ]
 
@@ -99,20 +125,22 @@ async def seed():
         logger.info("✅ Добавлено %d тестовых мероприятий!", len(events))
 
         # Отправляем анонсы в Telegram канал (если настроен)
-        from app.config import settings as app_settings
-        if app_settings.telegram_token and app_settings.telegram_channel_id:
+        app_settings = __import__("app.config", fromlist=["settings"]).settings
+        if app_settings.telegram_token and not default_channel.telegram_channel_id.startswith("__"):
             try:
                 from aiogram import Bot as AiogramBot
                 from app.platforms.telegram.channel import ChannelManager
 
                 bot = AiogramBot(token=app_settings.telegram_token)
-                channel = ChannelManager(bot)
+                channel_mgr = ChannelManager(bot)
                 for event in events:
-                    await channel.post_event_announcement(event)
+                    await channel_mgr.post_event_announcement(event, default_channel.telegram_channel_id)
                 await bot.session.close()
                 logger.info("📢 Анонсы отправлены в Telegram канал")
             except Exception as e:
                 logger.warning("Не удалось отправить анонсы: %s", e)
+        else:
+            logger.info("📢 Канал не настроен или используется seed-канал, пропускаем отправку анонсов")
 
 
 if __name__ == "__main__":

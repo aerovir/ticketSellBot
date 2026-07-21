@@ -33,10 +33,12 @@ class EventCreate(BaseModel):
     price: float = Field(default=0.0, ge=0)
     total_tickets: int = Field(default=0, ge=0)
     available_tickets: int = Field(default=0, ge=0)
+    channel_id: UUID
 
 
 class EventOut(BaseModel):
     id: UUID
+    channel_id: UUID
     title: str
     description: Optional[str]
     date: datetime
@@ -52,11 +54,32 @@ class EventOut(BaseModel):
 class EventShortOut(BaseModel):
     """Short version for event listings."""
     id: UUID
+    channel_id: UUID
     title: str
     date: datetime
     location: Optional[str]
     price: float
     available_tickets: int
+
+    model_config = {"from_attributes": True}
+
+
+# ─── Channel ─────────────────────────────────────────────────────────────────
+
+class ChannelCreate(BaseModel):
+    telegram_channel_id: str
+    title: Optional[str] = None
+    admin_telegram_user_id: str
+
+
+class ChannelOut(BaseModel):
+    id: UUID
+    telegram_channel_id: str
+    title: Optional[str]
+    admin_telegram_user_id: str
+    is_subscription_active: bool
+    subscription_until: Optional[datetime]
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

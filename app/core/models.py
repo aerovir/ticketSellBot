@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum
+from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,28 @@ class PlatformType(str, enum.Enum):
     telegram = "telegram"
     vk = "vk"
     max = "max"
+
+
+class Channel(Base):
+    __tablename__ = "channels"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    telegram_channel_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    admin_telegram_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_subscription_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    subscription_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    events = relationship("Event", back_populates="channel", lazy="raise")
+    admins = relationship("ChannelAdmin", back_populates="channel", lazy="raise", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Channel {self.telegram_channel_id}>"
 
 
 class User(Base):
@@ -55,6 +77,9 @@ class Event(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -63,11 +88,13 @@ class Event(Base):
     total_tickets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     available_tickets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     tickets = relationship("Ticket", back_populates="event", lazy="raise")
+    channel = relationship("Channel", back_populates="events", lazy="raise")
 
     def __repr__(self):
         return f"<Event {self.title}>"
@@ -121,3 +148,25 @@ class Payment(Base):
 
     def __repr__(self):
         return f"<Payment {self.id} — {self.status.value}>"
+
+
+class ChannelAdmin(Base):
+    __tablename__ = "channel_admins"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    telegram_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    channel = relationship("Channel", back_populates="admins", lazy="raise")
+
+    __table_args__ = (UniqueConstraint("channel_id", "telegram_user_id", name="uq_channel_admin"),)
+
+    def __repr__(self):
+        return f"<ChannelAdmin {self.channel_id}:{self.telegram_user_id}>"

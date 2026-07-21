@@ -1,46 +1,39 @@
 """
-ChannelManager — отправка анонсов в Telegram канал.
+ChannelManager — отправка анонсов в Telegram каналы.
 
 Бот должен быть добавлен в канал как администратор с правами:
 - Отправлять сообщения
 - Читать сообщения
 
-Privacy Mode в BotFather должен быть выключен.
+Поддерживает работу с несколькими каналами (multi-tenant).
+Канал указывается динамически, не из конфига.
 """
 import logging
 from uuid import UUID
 
 from aiogram import Bot
-from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton
-from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from app.config import settings
 from app.core.database import async_session_factory
-from app.core.models import Event
+from app.core.models import Event, Channel
 from app.core.services import EventService
 
 logger = logging.getLogger("ticketbot.telegram.channel")
 
 
 class ChannelManager:
-    """Управляет отправкой анонсов в Telegram канал."""
+    """Управляет отправкой анонсов в Telegram каналы.
+
+    В отличие от предыдущей версии, не привязан к одному каналу из конфига.
+    Все методы принимают telegram_channel_id — куда постить.
+    """
 
     def __init__(self, bot: Bot, bot_username: str | None = None):
         self.bot = bot
         self.bot_username = bot_username
-        self.channel_id = settings.telegram_channel_id
 
-    @property
-    def is_configured(self) -> bool:
-        """Проверяет, настроен ли канал для анонсов."""
-        return bool(self.channel_id)
-
-    async def post_event_announcement(self, event: Event):
-        """Отправляет анонс мероприятия в канал с inline-кнопками."""
-        if not self.is_configured:
-            logger.info("Канал не настроен, пропускаем анонс")
-            return
-
+    async def post_event_announcement(self, event: Event, channel_telegram_id: str):
+        """Отправляет анонс мероприятия в указанный канал с inline-кнопками."""
         date_str = event.date.strftime("%d.%m.%Y %H:%M")
         text = (
             f"🎫 <b>{event.title}</b>\n\n"
@@ -51,41 +44,35 @@ class ChannelManager:
             f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}"
         )
 
-        # Inline-кнопки: покупка в личку + детали
-        lines = []
-        if self.bot_username:
-            buy_url = f"https://t.me/{self.bot_username}?start=buy_{event.id}"
-            lines.append(InlineKeyboardButton(
-                text="🎟 Купить билет",
-                url=buy_url,
-            ))
-        lines.append(InlineKeyboardButton(
-            text="📋 Все мероприятия",
-            callback_data=f"ev_page:0",
-        ))
-
-        kb = InlineKeyboardMarkup(inline_keyboard=[lines]) if lines else None
+        # Быстрая покупка — единственная inline-кнопка в анонсе.
+        # Остальные действия — через Menu Button в личных сообщениях (/events, /my_tickets, /admin).
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎟 Купить", callback_data=f"channel_buy:{event.id}"),
+            ],
+        ])
 
         try:
             await self.bot.send_message(
-                chat_id=self.channel_id,
+                chat_id=channel_telegram_id,
                 text=text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
                 reply_markup=kb,
             )
-            logger.info("Анонс отправлен в канал %s: %s", self.channel_id, event.title)
+            logger.info("Анонс отправлен в канал %s: %s", channel_telegram_id, event.title)
         except Exception as e:
-            logger.error("Ошибка отправки анонса в канал %s: %s", self.channel_id, e)
+            logger.error("Ошибка отправки анонса в канал %s: %s", channel_telegram_id, e)
 
-    async def post_events_list(self, events: list[Event]):
-        """Отправляет список предстоящих мероприятий в канал."""
-        if not self.is_configured:
-            return
+    async def post_event_announcement_for_channel(self, event: Event, channel: Channel):
+        """Удобная обёртка: постит анонс в telegram_channel_id канала."""
+        await self.post_event_announcement(event, channel.telegram_channel_id)
 
+    async def post_events_list(self, events: list[Event], channel_telegram_id: str):
+        """Отправляет список предстоящих мероприятий в указанный канал."""
         if not events:
             await self.bot.send_message(
-                chat_id=self.channel_id,
+                chat_id=channel_telegram_id,
                 text="😔 Нет предстоящих мероприятий.",
             )
             return
@@ -101,7 +88,7 @@ class ChannelManager:
             )
 
         await self.bot.send_message(
-            chat_id=self.channel_id,
+            chat_id=channel_telegram_id,
             text="\n".join(lines),
             parse_mode="HTML",
         )
