@@ -1104,21 +1104,18 @@ class TelegramBot(PlatformBot):
             new_admin_id = parts[1].strip()
             async with async_session_factory() as session:
                 channel_svc = ChannelService(session)
-                admin_svc = ChannelAdminService(session)
-                channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
-                if not channel:
-                    await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
-                    await state.clear()
-                    return
-                old_admins = await admin_svc.get_admin_ids(channel.id)
-                await admin_svc.sync_admins(channel.id, [new_admin_id])
-                channel.admin_telegram_user_id = new_admin_id
-                await session.commit()
-                old_display = ", ".join(old_admins) if old_admins else "—"
-                await message.answer(
-                    f"✅ Админы канала {channel.title or channel.telegram_channel_id} заменены:\n"
-                    f"{old_display} → {new_admin_id}"
-                )
+                try:
+                    channel, old_admins = await channel_svc.change_admin(channel_telegram_id, new_admin_id)
+                    await session.commit()
+                    _old = ", ".join(old_admins) if old_admins else "—"
+                    await message.answer(
+                        f"✅ Администратор канала <b>{channel.title or channel.telegram_channel_id}</b> изменён:\n"
+                        f"├ Было:  <code>{_old}</code>\n"
+                        f"└ Стало: <code>{new_admin_id}</code>",
+                        parse_mode="HTML",
+                    )
+                except ValueError as e:
+                    await message.answer(f"❌ {e}")
             await state.clear()
             return
 
@@ -1213,22 +1210,18 @@ class TelegramBot(PlatformBot):
 
         async with async_session_factory() as session:
             channel_svc = ChannelService(session)
-            admin_svc = ChannelAdminService(session)
-            channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
-            if not channel:
-                await message.answer(f"❌ Канал {channel_telegram_id} не найден.")
-                return
-
-            old_admins = await admin_svc.get_admin_ids(channel.id)
-            await admin_svc.sync_admins(channel.id, [new_admin_id])
-            channel.admin_telegram_user_id = new_admin_id
-            await session.commit()
-
-            old_display = ", ".join(old_admins) if old_admins else "—"
-            await message.answer(
-                f"✅ Админы канала {channel.title or channel.telegram_channel_id} заменены:\n"
-                f"{old_display} → {new_admin_id}"
-            )
+            try:
+                channel, old_admins = await channel_svc.change_admin(channel_telegram_id, new_admin_id)
+                await session.commit()
+                _old = ", ".join(old_admins) if old_admins else "—"
+                await message.answer(
+                    f"✅ Администратор канала <b>{channel.title or channel.telegram_channel_id}</b> изменён:\n"
+                    f"├ Было:  <code>{_old}</code>\n"
+                    f"└ Стало: <code>{new_admin_id}</code>",
+                    parse_mode="HTML",
+                )
+            except ValueError as e:
+                await message.answer(f"❌ {e}")
 
     # ─── FSM: Создание мероприятия ──────────────────────────────────────
 

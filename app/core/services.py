@@ -133,6 +133,34 @@ class ChannelService:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def change_admin(self, channel_telegram_id: str, new_admin_id: str) -> tuple[Channel, list[str]]:
+        """Сменить администратора канала.
+
+        Обновляет channel_admins (M2M) и legacy-поле admin_telegram_user_id.
+        Использует ChannelAdminService внутренне для синхронизации.
+
+        Args:
+            channel_telegram_id: @username или ID канала.
+            new_admin_id: Telegram ID нового администратора.
+
+        Returns:
+            tuple[Channel, list[str]]: (канал, список старых admin_id).
+
+        Raises:
+            ValueError: если канал с таким channel_telegram_id не найден.
+        """
+        channel = await self.get_by_telegram_id(channel_telegram_id)
+        if not channel:
+            raise ValueError(f"Канал {channel_telegram_id} не найден")
+
+        admin_svc = ChannelAdminService(self.session)
+        old_admin_ids = await admin_svc.get_admin_ids(channel.id)
+        await admin_svc.sync_admins(channel.id, [new_admin_id])
+        channel.admin_telegram_user_id = new_admin_id
+        await self.session.flush()
+
+        return channel, old_admin_ids
+
 
 # ─── Channel Admin Service ──────────────────────────────────────────────────
 

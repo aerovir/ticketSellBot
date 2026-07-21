@@ -8,8 +8,9 @@ from datetime import datetime, timezone, timedelta
 import pytest
 from sqlalchemy import select, func
 
-from app.core.models import User, Event, Ticket, Payment
+from app.core.models import User, Event, Ticket, Payment, ChannelAdmin
 from app.core.models import PlatformType, TicketStatus, PaymentStatus
+from app.core.services import ChannelService, ChannelAdminService
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -48,6 +49,63 @@ class TestUserService:
             name="VK User",
         )
         assert user2.id != sample_user.id
+
+
+# ═══════════════════════════════════════════════════════════════
+# ChannelService
+# ═══════════════════════════════════════════════════════════════
+
+class TestChannelService:
+    async def test_change_admin_success(self, db_session, sample_channel):
+        """Успешная смена админа — обновляется и ChannelAdmin, и legacy-поле."""
+        svc = ChannelService(db_session)
+        channel, old_admins = await svc.change_admin("test_channel_1", "new_admin_42")
+        await db_session.commit()
+
+        assert channel.admin_telegram_user_id == "new_admin_42"
+
+        # ChannelAdmin обновлён
+        admin_svc = ChannelAdminService(db_session)
+        current = await admin_svc.get_admin_ids(channel.id)
+        assert "new_admin_42" in current
+        assert "test_12345" not in current
+
+    async def test_change_admin_not_found(self, db_session):
+        """Несуществующий канал -> ValueError."""
+        svc = ChannelService(db_session)
+        with pytest.raises(ValueError, match="не найден"):
+            await svc.change_admin("nonexistent", "admin_42")
+
+    async def test_change_admin_same_admin(self, db_session, sample_channel):
+        """Смена на того же админа — не падает, меняет корректно."""
+        svc = ChannelService(db_session)
+        channel, old_admins = await svc.change_admin("test_channel_1", "test_12345")
+        await db_session.commit()
+
+        admin_svc = ChannelAdminService(db_session)
+        current = await admin_svc.get_admin_ids(channel.id)
+        assert current == ["test_12345"]
+
+    async def test_change_admin_legacy_field(self, db_session, sample_channel):
+        """admin_telegram_user_id синхронизируется с channel_admins."""
+        svc = ChannelService(db_session)
+        channel, _ = await svc.change_admin("test_channel_1", "legacy_test")
+        await db_session.commit()
+
+        assert channel.admin_telegram_user_id == "legacy_test"
+
+    async def test_change_admin_returns_old_admins(self, db_session, sample_channel):
+        """Метод возвращает список старых админов."""
+        svc = ChannelService(db_session)
+        # Добавляем второго админа
+        admin_svc = ChannelAdminService(db_session)
+        await admin_svc.sync_admins(sample_channel.id, ["test_12345", "second_admin"])
+        await db_session.commit()
+
+        channel, old_admins = await svc.change_admin("test_channel_1", "new_admin_99")
+        await db_session.commit()
+
+        assert set(old_admins) == {"test_12345", "second_admin"}
 
 
 # ═══════════════════════════════════════════════════════════════
