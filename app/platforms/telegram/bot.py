@@ -36,14 +36,7 @@ USER_COMMANDS = [
 ]
 
 ADMIN_COMMANDS = [
-    BotCommand(command="admin", description="🎛 Панель управления"),
-    BotCommand(command="create_event", description="➕ Создать мероприятие"),
-    BotCommand(command="events_all", description="📋 Все мероприятия канала"),
-    BotCommand(command="deactivate", description="⏸ Отключить мероприятие"),
-    BotCommand(command="activate", description="▶️ Включить мероприятие"),
-    BotCommand(command="stats", description="📊 Статистика продаж"),
-    BotCommand(command="repost_events", description="🔄 Репост анонсов"),
-    BotCommand(command="my_channels", description="📢 Мои каналы"),
+    BotCommand(command="menu", description="🎛 Панель управления"),
 ]
 
 SUPER_ADMIN_COMMANDS = [
@@ -101,17 +94,9 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.cmd_my_tickets, Command("my_tickets"))
         self.dp.message.register(self.cmd_cancel, Command("cancel"))
 
-        # ─── Админ-команды (текстовые) ────────────────
-        self.dp.message.register(self.admin_menu, Command("admin"))
-        self.dp.message.register(self.admin_create_event, Command("create_event"))
-        self.dp.message.register(self.admin_events_all, Command("events_all"))
-        self.dp.message.register(self.admin_deactivate, Command("deactivate"))
-        self.dp.message.register(self.admin_activate, Command("activate"))
-        self.dp.message.register(self.admin_stats, Command("stats"))
-        self.dp.message.register(self.admin_repost_events, Command("repost_events"))
-        self.dp.message.register(self.admin_subscribe, Command("subscribe"), StateFilter(None))
-        self.dp.message.register(self.admin_unsubscribe, Command("unsubscribe"), StateFilter(None))
-        self.dp.message.register(self.admin_my_channels, Command("my_channels"))
+        # ─── Админ-команды (только /menu, остальное через inline) ──
+        self.dp.message.register(self.admin_menu, Command("menu"))
+        self.dp.message.register(self.admin_menu, Command("admin"))  # алиас для обратной совместимости
 
         # ─── Супер-админ команды (текстовые) ─────────
         self.dp.message.register(self.sa_stats_all, Command("stats_all"))
