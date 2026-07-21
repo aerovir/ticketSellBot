@@ -26,15 +26,6 @@ logger = logging.getLogger("ticketbot.telegram")
 PAGE_SIZE = 5  # мероприятий/билетов на страницу
 
 # ─── Наборы команд для Menu Button ────────────────────────────────
-USER_COMMANDS = [
-    BotCommand(command="start", description="🚀 Приветствие"),
-    BotCommand(command="events", description="📋 Список мероприятий"),
-    BotCommand(command="event", description="📌 Детали мероприятия"),
-    BotCommand(command="buy", description="🎟 Купить билет"),
-    BotCommand(command="my_tickets", description="🎫 Мои билеты"),
-    BotCommand(command="cancel", description="↩️ Отменить билет"),
-]
-
 ADMIN_COMMANDS = [
     BotCommand(command="menu", description="🎛 Панель управления"),
 ]
@@ -454,14 +445,7 @@ class TelegramBot(PlatformBot):
 
         Вызывается при старте, при входе в админку и при добавлении бота в канал.
         """
-        if self._is_super_admin(user_id):
-            commands = SUPER_ADMIN_COMMANDS
-        else:
-            channel = await self._get_admin_channel(user_id)
-            if channel:
-                commands = ADMIN_COMMANDS
-            else:
-                commands = USER_COMMANDS
+        commands = ADMIN_COMMANDS
 
         await self.bot.set_my_commands(
             commands=commands,
@@ -2826,9 +2810,9 @@ class TelegramBot(PlatformBot):
                 self._bot_username = me.username
                 self.channel.bot_username = me.username
 
-                # Устанавливаем Menu Button: пользователи видят команды в меню
+                # Устанавливаем Menu Button: все видят только /menu
                 await self.bot.set_my_commands(
-                    commands=USER_COMMANDS,
+                    commands=ADMIN_COMMANDS,
                     scope=BotCommandScopeAllPrivateChats(),
                 )
 
