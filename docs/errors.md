@@ -642,3 +642,54 @@
   3. `list_channels` обёрнут в `try/except` с логированием ошибки и показом сообщения пользователю
   4. `callback.answer()` добавлен во все return-пути (включая ошибки доступа, отсутствие данных и FSM-старт)
   5. Затронутые хендлеры: `back`, `stats_all`, `check_expired`, `list_channels`, `health`, `events_all`, `my_channels`, `create_event`, `broadcast`, `input_actions`
+
+---
+
+## 039 — Lazy `from sqlalchemy import select` вызывает UnboundLocalError в кнопках админ-меню
+
+- **Дата:** 2026-07-21
+- **Статус:** ✅ Исправлено
+- **Описание:** Кнопки «📋 Список каналов», «📊 Общая статистика» и «🔍 Проверить подписки» в админ-меню показывают «❌ Ошибка». В логах `UnboundLocalError: cannot access local variable 'select' where it is not associated with a value`.
+
+- **Анализ:**
+  - **Корень проблемы (подтверждено: `app/platforms/telegram/bot.py:2293`, семантика Python):**
+
+    Внутри `cmd_callback` на строке 2293 был `from sqlalchemy import select` внутри блока `if event_ids:`:
+    ```python
+    if event_ids:
+        async with async_session_factory() as session:
+            from sqlalchemy import select  # ← lazy import
+            stmt = select(Event).where(...)
+    ```
+
+    **Правило Python:** если в теле функции есть `import name` (или другое присваивание `name =`) хотя бы в одной ветке, **Python считает `name` локальной переменной во всей функции** — даже в тех ветках, которые идут ДО этого импорта.
+
+    Хендлеры, выполняющиеся РАНЬШЕ (строки 2070-2140), используют `select()`. Python видит `select` как локальную переменную, но она ещё не инициализирована → `UnboundLocalError`.
+
+  - **Почему другие кнопки работали:** не используют `select()` напрямую, либо уходят в отдельные методы (FSM).
+
+  - **Почему глобальный импорт (строка 12) не спасал:** Python внутри `cmd_callback` игнорирует его из-за локального импорта на строке 2293.
+
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py:2293`):**
+
+    Удалена строка `from sqlalchemy import select`. `select` уже импортирован глобально на строке 12. После удаления Python использует глобальный `select` во всей `cmd_callback`.
+
+    ```python
+    # Было:
+    if event_ids:
+        async with async_session_factory() as session:
+            from sqlalchemy import select
+            stmt = select(Event).where(...)
+    # Стало:
+    if event_ids:
+        async with async_session_factory() as session:
+            stmt = select(Event).where(...)
+    ```
+
+- **Добавлены тесты** (`TestAdminMenuSelectScope`):
+  - `test_list_channels_success` / `test_list_channels_empty`
+  - `test_stats_all_success`
+  - `test_check_expired_success` / `test_check_expired_deactivates`
+  - `test_admin_ev_page_pagination`
+
+- **Связанные ошибки:** #038 (логировал ошибку `list_channels`, но не устранил корень)

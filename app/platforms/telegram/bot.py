@@ -2290,7 +2290,6 @@ class TelegramBot(PlatformBot):
             event_ids = fsm_data.get("admin_events", [])
             if event_ids:
                 async with async_session_factory() as session:
-                    from sqlalchemy import select
                     stmt = select(Event).where(Event.id.in_([UUID(eid) for eid in event_ids]))
                     result = await session.execute(stmt)
                     events = list(result.scalars().all())
