@@ -2033,7 +2033,6 @@ class TelegramBot(PlatformBot):
 
         # ─── Админ-меню: навигация по кнопкам ───────────
         if data.startswith("admin_menu:"):
-            await callback.answer()
             action = data.split(":", 1)[1]
 
             if action == "back":
@@ -2041,6 +2040,7 @@ class TelegramBot(PlatformBot):
                 kb = self._admin_menu_kb(is_super)
                 title = "🎫 <b>Панель управления</b>\n\n<i>Выберите действие:</i>"
                 await callback.message.edit_text(title, parse_mode="HTML", reply_markup=kb)
+                await callback.answer()
                 return
 
             user_id = callback.from_user.id
@@ -2050,6 +2050,7 @@ class TelegramBot(PlatformBot):
                 ch = await self._get_admin_channel(user_id)
                 if not ch:
                     await callback.message.edit_text("У вас нет доступа.")
+                    await callback.answer()
                     return
 
             # Actions that require super-admin
@@ -2060,6 +2061,7 @@ class TelegramBot(PlatformBot):
             }
             if action in super_only and not is_super:
                 await callback.message.edit_text("❌ У вас нет доступа к этому разделу.")
+                await callback.answer()
                 return
 
             back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2094,6 +2096,7 @@ class TelegramBot(PlatformBot):
                     f"💰 Выручка: {revenue:.0f}₽",
                     parse_mode="HTML", reply_markup=back_kb,
                 )
+                await callback.answer()
                 return
 
             if action == "check_expired":
@@ -2114,30 +2117,38 @@ class TelegramBot(PlatformBot):
                     f"🔄 Отключено просроченных: {deactivated}",
                     reply_markup=back_kb,
                 )
+                await callback.answer()
                 return
 
             if action == "list_channels":
-                async with async_session_factory() as session:
-                    result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
-                    channels = list(result.scalars().all())
-                    admin_svc = ChannelAdminService(session)
-                    ch_admins = {}
+                try:
+                    async with async_session_factory() as session:
+                        result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
+                        channels = list(result.scalars().all())
+                        admin_svc = ChannelAdminService(session)
+                        ch_admins = {}
+                        for ch in channels:
+                            ch_admins[ch.id] = await admin_svc.get_admin_ids(ch.id)
+                    if not channels:
+                        await edit("Нет зарегистрированных каналов.", reply_markup=back_kb)
+                        await callback.answer()
+                        return
+                    lines = ["📋 <b>Все каналы:</b>\n"]
                     for ch in channels:
-                        ch_admins[ch.id] = await admin_svc.get_admin_ids(ch.id)
-                if not channels:
-                    await edit("Нет зарегистрированных каналов.", reply_markup=back_kb)
-                    return
-                lines = ["📋 <b>Все каналы:</b>\n"]
-                for ch in channels:
-                    status = "🟢" if ch.is_subscription_active else "🔴"
-                    admins = ch_admins.get(ch.id, [])
-                    admin_display = ", ".join(a[:8] + "..." if len(a) > 8 else a for a in admins) if admins else "—"
-                    lines.append(
-                        f"{status} {ch.title or ch.telegram_channel_id}\n"
-                        f"   Админы: {admin_display}\n"
-                        f"   Подписка: {'до ' + ch.subscription_until.strftime('%d.%m.%Y') if ch.subscription_until else 'нет'}\n"
-                    )
-                await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
+                        status = "🟢" if ch.is_subscription_active else "🔴"
+                        admins = ch_admins.get(ch.id, [])
+                        admin_display = ", ".join(a[:8] + "..." if len(a) > 8 else a for a in admins) if admins else "—"
+                        lines.append(
+                            f"{status} {ch.title or ch.telegram_channel_id}\n"
+                            f"   Админы: {admin_display}\n"
+                            f"   Подписка: {'до ' + ch.subscription_until.strftime('%d.%m.%Y') if ch.subscription_until else 'нет'}\n"
+                        )
+                    await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
+                    await callback.answer()
+                except Exception as e:
+                    logger.error("Ошибка при получении списка каналов: %s", e, exc_info=True)
+                    await callback.message.edit_text("❌ Ошибка при загрузке списка каналов.")
+                    await callback.answer()
                 return
 
             if action == "health":
@@ -2154,34 +2165,40 @@ class TelegramBot(PlatformBot):
                 except Exception:
                     text += "🗄 База данных: ❌ Ошибка\n"
                 await edit(text, parse_mode="HTML", reply_markup=back_kb)
+                await callback.answer()
                 return
 
             if action == "events_all":
                 ch = await self._get_admin_channel(user_id)
                 if not ch:
                     await edit("❌ У вас нет канала с активной подпиской.", reply_markup=back_kb)
+                    await callback.answer()
                     return
                 async with async_session_factory() as session:
                     svc = EventService(session)
                     events = await svc.list_all(channel_id=ch.id)
                 if not events:
                     await edit("Нет мероприятий.", reply_markup=back_kb)
+                    await callback.answer()
                     return
                 # Сохраняем ID событий в state для пагинации
                 event_ids = [str(e.id) for e in events]
                 await state.update_data(admin_events=event_ids)
                 text, pag_kb = await self._send_admin_event_page(events, page=0)
                 await edit(text, parse_mode="HTML", reply_markup=pag_kb)
+                await callback.answer()
                 return
                 ch = await self._get_admin_channel(user_id)
                 if not ch:
                     await edit("❌ У вас нет канала с активной подпиской.", reply_markup=back_kb)
+                    await callback.answer()
                     return
                 async with async_session_factory() as session:
                     svc = EventService(session)
                     events = await svc.list_upcoming(channel_id=ch.id)
                 if not events:
                     await edit("Нет активных мероприятий для анонса.", reply_markup=back_kb)
+                    await callback.answer()
                     return
                 posted = 0
                 for ev in events:
@@ -2191,6 +2208,7 @@ class TelegramBot(PlatformBot):
                     except Exception as e:
                         logger.error("Ошибка репоста %s: %s", ev.id, e)
                 await edit(f"✅ Анонсы перепощены в канал: {posted}/{len(events)}", reply_markup=back_kb)
+                await callback.answer()
                 return
 
             if action == "my_channels":
@@ -2199,6 +2217,7 @@ class TelegramBot(PlatformBot):
                     channels = await channel_svc.get_channels_by_admin(str(user_id))
                 if not channels:
                     await edit("У вас нет зарегистрированных каналов.", reply_markup=back_kb)
+                    await callback.answer()
                     return
                 lines = ["📢 <b>Ваши каналы:</b>\n"]
                 for ch in channels:
@@ -2211,6 +2230,7 @@ class TelegramBot(PlatformBot):
                         f"   {status}{until}\n"
                     )
                 await edit("\n".join(lines), parse_mode="HTML", reply_markup=back_kb)
+                await callback.answer()
                 return
 
             # ─── FSM: create_event ────────────────────────────────────
@@ -2218,6 +2238,7 @@ class TelegramBot(PlatformBot):
                 ch = await self._get_admin_channel(user_id)
                 if not ch:
                     await edit("❌ У вас нет канала с активной подпиской.", reply_markup=back_kb)
+                    await callback.answer()
                     return
                 await state.update_data(channel_id=ch.id)
                 await state.set_state(CreateEvent.title)
@@ -2225,6 +2246,7 @@ class TelegramBot(PlatformBot):
                     "📝 Введите <b>название</b> мероприятия:",
                     parse_mode="HTML",
                 )
+                await callback.answer()
                 return
 
             # ─── FSM: broadcast ──────────────────────────────────────
@@ -2236,6 +2258,7 @@ class TelegramBot(PlatformBot):
                     "Или отправьте /cancel для отмены.",
                     parse_mode="HTML",
                 )
+                await callback.answer()
                 return
 
             # ─── FSM для кнопок, требующих ввод параметра ──────
@@ -2251,6 +2274,7 @@ class TelegramBot(PlatformBot):
                 await state.update_data(admin_action=action)
                 await state.set_state(AwaitingAdminInput.text)
                 await callback.message.answer(input_actions[action], parse_mode="HTML")
+                await callback.answer()
                 return
 
             await callback.answer("Неизвестная команда", show_alert=True)
