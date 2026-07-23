@@ -1233,8 +1233,7 @@ class TelegramBot(PlatformBot):
         if "title" in data:
             lines.append(f"📌 Название: {data['title']}")
         if "description" in data and data["description"]:
-            desc = data["description"][:50] + "…" if len(data["description"]) > 50 else data["description"]
-            lines.append(f"📖 Описание: {desc}")
+            lines.append(f"📖 Описание: {data['description']}")
         if "date" in data:
             d = datetime.fromisoformat(data["date"])
             lines.append(f"📅 Дата: {d.strftime('%d.%m.%Y %H:%M')}")
@@ -1285,6 +1284,7 @@ class TelegramBot(PlatformBot):
         )
 
     async def fsm_description(self, message: types.Message, state: FSMContext):
+        await state.update_data(description=message.text.strip())
         data = await state.get_data()
         header = await self._fsm_header(data)
         await state.set_state(CreateEvent.date)

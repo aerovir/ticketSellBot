@@ -687,3 +687,59 @@ class TestAdminMenuSelectScope:
             await telegram_bot.cmd_callback(mock_callback, mock_state)
 
         mock_callback.answer.assert_awaited_once()
+
+
+# ═══════════════════════════════════════════════════════════════
+# FSM Event Creation — Phase 1
+# ═══════════════════════════════════════════════════════════════
+
+class TestFsmEventCreation:
+    """Phase 1: FSM создание мероприятия — баги с описанием."""
+
+    async def test_fsm_description_saves_text(self, telegram_bot, mock_message):
+        """fsm_description сохраняет введённый текст описания в state."""
+        mock_message.text = "Тестовое описание мероприятия для проверки сохранения"
+        mock_state = AsyncMock()
+
+        with patch.object(telegram_bot, "_fsm_header", new_callable=AsyncMock, return_value=""):
+            await telegram_bot.fsm_description(mock_message, mock_state)
+
+        mock_state.update_data.assert_awaited_with(
+            description="Тестовое описание мероприятия для проверки сохранения"
+        )
+
+    async def test_fsm_description_sets_date_state(self, telegram_bot, mock_message):
+        """fsm_description переключает состояние на CreateEvent.date."""
+        mock_message.text = "Описание"
+        mock_state = AsyncMock()
+        mock_state.set_state = AsyncMock()
+
+        with patch.object(telegram_bot, "_fsm_header", new_callable=AsyncMock, return_value=""):
+            await telegram_bot.fsm_description(mock_message, mock_state)
+
+        mock_state.set_state.assert_awaited_once()
+
+    async def test_fsm_header_long_description(self, telegram_bot):
+        """_fsm_header не обрезает длинное описание (>= 50 символов)."""
+        long_desc = (
+            "Это очень длинное описание тестового мероприятия, "
+            "которое должно отображаться полностью без обрезания до 50 символов."
+        )
+        data = {
+            "title": "Тестовое мероприятие",
+            "description": long_desc,
+        }
+
+        header = await telegram_bot._fsm_header(data)
+
+        assert long_desc in header
+        assert "…" not in header  # не должно быть обрезано
+
+    async def test_fsm_header_without_description(self, telegram_bot):
+        """_fsm_header не падает, если description отсутствует в data."""
+        data = {"title": "Мероприятие", "price": 100}
+
+        header = await telegram_bot._fsm_header(data)
+
+        assert "📌 Название: Мероприятие" in header
+        assert "💰 Цена:" in header
