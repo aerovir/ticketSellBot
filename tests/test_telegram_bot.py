@@ -743,3 +743,90 @@ class TestFsmEventCreation:
 
         assert "📌 Название: Мероприятие" in header
         assert "💰 Цена:" in header
+
+
+# ═══════════════════════════════════════════════════════════════
+# Format Event Text — Phase 2
+# ═══════════════════════════════════════════════════════════════
+
+def _make_mock_event(**kwargs) -> Mock:
+    """Создать mock Event с полями по умолчанию."""
+    e = Mock()
+    e.id = kwargs.get("id", uuid.uuid4())
+    e.title = kwargs.get("title", "Тестовое мероприятие")
+    e.description = kwargs.get("description", "Описание тестового мероприятия")
+    e.location = kwargs.get("location", "Москва, ул. Тверская")
+    e.price = kwargs.get("price", 1500.0)
+    e.available_tickets = kwargs.get("available_tickets", 50)
+    e.total_tickets = kwargs.get("total_tickets", 100)
+    e.is_active = kwargs.get("is_active", True)
+    # Mock the date with strftime
+    e.date = Mock()
+    e.date.strftime = Mock(return_value="25.12.2026 19:00")
+    return e
+
+
+class TestFormatEventText:
+    """Phase 2: Унифицированный _format_event_text."""
+
+    async def test_format_full(self, telegram_bot):
+        """_format_event_text(event, 'full') — полный формат для анонса/деталей."""
+        event = _make_mock_event(
+            title="Концерт",
+            description="Лучшие хиты",
+            location="Клуб «Звук»",
+            price=2000,
+            available_tickets=30,
+            total_tickets=50,
+        )
+        text = telegram_bot._format_event_text(event, "full")
+
+        assert "🎫 <b>Концерт</b>" in text
+        assert "Лучшие хиты" in text
+        assert "25.12.2026 19:00" in text
+        assert "Клуб «Звук»" in text
+        assert "2000₽" in text
+        assert "30/50" in text or "30" in text
+
+    async def test_format_full_no_description(self, telegram_bot):
+        """_format_event_text(event, 'full') — без описания."""
+        event = _make_mock_event(description="")
+        text = telegram_bot._format_event_text(event, "full")
+        assert "Описание отсутствует" in text or "🎫" in text
+
+    async def test_format_full_no_location(self, telegram_bot):
+        """_format_event_text(event, 'full') — без места."""
+        event = _make_mock_event(location=None)
+        text = telegram_bot._format_event_text(event, "full")
+        assert "Не указано" in text or "📍" not in text or "📍" in text
+
+    async def test_format_short(self, telegram_bot):
+        """_format_event_text(event, 'short') — краткий формат для списка."""
+        event = _make_mock_event(title="Вебинар", price=0, available_tickets=10, total_tickets=20)
+        text = telegram_bot._format_event_text(event, "short")
+
+        assert "Вебинар" in text
+        assert "25.12.2026" in text
+
+    async def test_format_admin(self, telegram_bot):
+        """_format_event_text(event, 'admin') — админ-формат для панели/списка."""
+        event = _make_mock_event(title="Админ-ивент", is_active=True)
+        text = telegram_bot._format_event_text(event, "admin")
+
+        assert "Админ-ивент" in text
+        assert "🟢" in text or "Активно" in text
+
+    async def test_format_admin_inactive(self, telegram_bot):
+        """_format_event_text(event, 'admin') — неактивное мероприятие."""
+        event = _make_mock_event(title="Отключено", is_active=False)
+        text = telegram_bot._format_event_text(event, "admin")
+
+        assert "Отключено" in text
+        assert "🔴" in text
+
+    async def test_format_unknown_mode(self, telegram_bot):
+        """_format_event_text с неизвестным mode не падает."""
+        event = _make_mock_event()
+        text = telegram_bot._format_event_text(event, "unknown")
+        assert isinstance(text, str)
+        assert len(text) > 0

@@ -32,23 +32,19 @@ class ChannelManager:
         self.bot = bot
         self.bot_username = bot_username
 
-    async def post_event_announcement(self, event: Event, channel_telegram_id: str):
-        """Отправляет анонс мероприятия в указанный канал с inline-кнопками."""
-        date_str = event.date.strftime("%d.%m.%Y %H:%M")
-        text = (
-            f"🎫 <b>{event.title}</b>\n\n"
-            f"{event.description or 'Описание отсутствует'}\n\n"
-            f"📅 {date_str}\n"
-            f"📍 {event.location or 'Не указано'}\n"
-            f"💰 {event.price:.0f}₽\n"
-            f"🎟 Билетов: {event.available_tickets}/{event.total_tickets}"
-        )
+    async def post_event_announcement(self, text: str, event_id: UUID, channel_telegram_id: str):
+        """Отправляет анонс мероприятия в указанный канал с inline-кнопками.
 
+        Args:
+            text: Готовый форматированный текст анонса (HTML).
+            event_id: ID мероприятия для callback_data кнопки покупки.
+            channel_telegram_id: Куда отправлять.
+        """
         # Быстрая покупка — единственная inline-кнопка в анонсе.
         # Остальные действия — через Menu Button в личных сообщениях (/events, /my_tickets, /admin).
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎟 Купить", callback_data=f"channel_buy:{event.id}"),
+                InlineKeyboardButton(text="🎟 Купить", callback_data=f"channel_buy:{event_id}"),
             ],
         ])
 
@@ -64,9 +60,9 @@ class ChannelManager:
         except Exception as e:
             logger.error("Ошибка отправки анонса в канал %s: %s", channel_telegram_id, e)
 
-    async def post_event_announcement_for_channel(self, event: Event, channel: Channel):
+    async def post_event_announcement_for_channel(self, text: str, event_id: UUID, channel: Channel):
         """Удобная обёртка: постит анонс в telegram_channel_id канала."""
-        await self.post_event_announcement(event, channel.telegram_channel_id)
+        await self.post_event_announcement(text, event_id, channel.telegram_channel_id)
 
     async def post_events_list(self, events: list[Event], channel_telegram_id: str):
         """Отправляет список предстоящих мероприятий в указанный канал."""

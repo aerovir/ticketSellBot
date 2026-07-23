@@ -205,13 +205,7 @@ class TelegramBot(PlatformBot):
 
         lines = [f"🎫 <b>Мероприятия</b> (стр. {page + 1}/{total_pages}):\n"]
         for e in page_events:
-            date_str = e.date.strftime("%d.%m.%Y %H:%M")
-            lines.append(
-                f"📌 <b>{e.title}</b>\n"
-                f"📅 {date_str}\n"
-                f"📍 {e.location or 'Не указано'}\n"
-                f"💰 {e.price:.0f}₽ | Осталось: {e.available_tickets}/{e.total_tickets}\n"
-            )
+            lines.append(self._format_event_text(e, "short"))
 
         # Клавиатура с навигацией
         kb_rows = []
@@ -285,15 +279,7 @@ class TelegramBot(PlatformBot):
 
     async def _send_event_detail(self, send_method, event):
         """Отправить детали мероприятия с inline-кнопками."""
-        date_str = event.date.strftime("%d.%m.%Y %H:%M")
-        text = (
-            f"🎫 <b>{event.title}</b>\n\n"
-            f"{event.description or 'Описание отсутствует'}\n\n"
-            f"📅 {date_str}\n"
-            f"📍 {event.location or 'Не указано'}\n"
-            f"💰 {event.price:.0f}₽\n"
-            f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}"
-        )
+        text = self._format_event_text(event, "full")
 
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -1245,6 +1231,53 @@ class TelegramBot(PlatformBot):
             lines.append(f"🎟 Билетов: {data['tickets']}")
         return "\n".join(lines) + "\n\n" if lines else ""
 
+    # ─── Унифицированное форматирование мероприятий ───────────────────
+
+    def _format_event_text(self, event, mode: str = "full") -> str:
+        """Унифицированное форматирование текста мероприятия.
+
+        Args:
+            event: Event (SQLAlchemy model или Mock с теми же атрибутами)
+            mode: "full" — анонс/детали пользователя,
+                  "short" — пункт списка,
+                  "admin" — админ-панель/список
+
+        Returns:
+            str: форматированный текст (HTML-safe для parse_mode=HTML)
+        """
+        date_str = event.date.strftime("%d.%m.%Y %H:%M")
+
+        if mode == "short":
+            return (
+                f"📌 <b>{event.title}</b>\n"
+                f"📅 {date_str}\n"
+                f"📍 {event.location or 'Не указано'}\n"
+                f"💰 {event.price:.0f}₽ | Осталось: {event.available_tickets}/{event.total_tickets}\n"
+            )
+
+        if mode == "admin":
+            status_icon = "🟢" if event.is_active else "🔴"
+            status_text = "Активно" if event.is_active else "Отключено"
+            return (
+                f"{status_icon} <b>{event.title}</b>\n"
+                f"{event.description or 'Описание отсутствует'}\n\n"
+                f"📅 {date_str}\n"
+                f"📍 {event.location or 'Не указано'}\n"
+                f"💰 {event.price:.0f}₽\n"
+                f"🎟 Осталось: {event.available_tickets}/{event.total_tickets}\n"
+                f"{status_icon} {status_text}"
+            )
+
+        # mode == "full" (по умолчанию)
+        return (
+            f"🎫 <b>{event.title}</b>\n\n"
+            f"{event.description or 'Описание отсутствует'}\n\n"
+            f"📅 {date_str}\n"
+            f"📍 {event.location or 'Не указано'}\n"
+            f"💰 {event.price:.0f}₽\n"
+            f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}"
+        )
+
     async def admin_create_event(self, message: types.Message, state: FSMContext):
         """Start the create-event wizard."""
         # Get admin's channel (проверяет права через Telegram API внутри)
@@ -1423,17 +1456,9 @@ class TelegramBot(PlatformBot):
         page = max(0, min(page, total_pages - 1))
         e = events[page]
 
-        event_status = "🟢 Активно" if e.is_active else "🔴 Отключено"
-        date_str = e.date.strftime("%d.%m.%Y %H:%M")
         text = (
             f"🎫 <b>Все мероприятия</b> ({page + 1}/{total_pages})\n\n"
-            f"{'🟢' if e.is_active else '🔴'} <b>{e.title}</b>\n"
-            f"{e.description or 'Описание отсутствует'}\n\n"
-            f"📅 {date_str}\n"
-            f"📍 {e.location or 'Не указано'}\n"
-            f"💰 {e.price:.0f}₽\n"
-            f"🎟 Осталось: {e.available_tickets}/{e.total_tickets}\n"
-            f"{event_status}"
+            f"{self._format_event_text(e, 'admin')}"
         )
 
         kb_rows = []
@@ -1594,7 +1619,8 @@ class TelegramBot(PlatformBot):
         posted = 0
         for event in events:
             try:
-                await self.channel.post_event_announcement(event, channel.telegram_channel_id)
+                text = self._format_event_text(event, "full")
+                await self.channel.post_event_announcement(text, event.id, channel.telegram_channel_id)
                 posted += 1
             except Exception as e:
                 logger.error("Ошибка репоста %s: %s", event.id, e)
@@ -2172,7 +2198,8 @@ class TelegramBot(PlatformBot):
                 posted = 0
                 for ev in events:
                     try:
-                        await self.channel.post_event_announcement(ev, ch.telegram_channel_id)
+                        text = self._format_event_text(ev, "full")
+                        await self.channel.post_event_announcement(text, ev.id, ch.telegram_channel_id)
                         posted += 1
                     except Exception as e:
                         logger.error("Ошибка репоста %s: %s", ev.id, e)
@@ -2367,13 +2394,7 @@ class TelegramBot(PlatformBot):
 
         lines = ["🎫 <b>Предстоящие мероприятия:</b>\n"]
         for e in events:
-            date_str = e.date.strftime("%d.%m.%Y %H:%M")
-            lines.append(
-                f"📌 <b>{e.title}</b>\n"
-                f"📅 {date_str}\n"
-                f"📍 {e.location or 'Не указано'}\n"
-                f"💰 {e.price:.0f}₽ | Осталось: {e.available_tickets}/{e.total_tickets}\n"
-            )
+            lines.append(self._format_event_text(e, "short"))
 
         lines.append("\nℹ️ Купить билет — откройте меню бота ☰ или нажмите 🎟 Купить в анонсе.")
         await channel_post.answer("\n".join(lines), parse_mode="HTML")
@@ -2399,16 +2420,10 @@ class TelegramBot(PlatformBot):
             await channel_post.answer("Мероприятие не найдено.")
             return
 
-        date_str = event.date.strftime("%d.%m.%Y %H:%M")
         text = (
-            f"🎫 <b>{event.title}</b>\n\n"
-            f"{event.description or 'Описание отсутствует'}\n\n"
-            f"📅 {date_str}\n"
-            f"📍 {event.location or 'Не указано'}\n"
-            f"💰 {event.price:.0f}₽\n"
-            f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}\n\n"
-            f"👇 Для покупки откройте меню бота ☰ "
-            f"или нажмите 🎟 Купить в анонсе канала."
+            self._format_event_text(event, "full") + "\n\n"
+            "👇 Для покупки откройте меню бота ☰ "
+            "или нажмите 🎟 Купить в анонсе канала."
         )
 
         await channel_post.answer(text, parse_mode="HTML")
@@ -2523,14 +2538,9 @@ class TelegramBot(PlatformBot):
         edit_message: types.Message | None = None,
     ):
         """Отправить или обновить панель управления мероприятием в ЛС админа."""
-        date_str = event.date.strftime("%d.%m.%Y %H:%M")
-        status = "🟢 Активно" if event.is_active else "🔴 Отключено"
         header = (
-            f"🎫 <b>{event.title}</b>\n"
-            f"📅 {date_str}\n"
-            f"🎟 {event.available_tickets}/{event.total_tickets}\n"
-            f"{status}\n\n"
-            f"<b>Выберите действие:</b>"
+            self._format_event_text(event, "admin") + "\n\n"
+            "<b>Выберите действие:</b>"
         )
 
         rows = [
@@ -2716,7 +2726,8 @@ class TelegramBot(PlatformBot):
                     return
 
             try:
-                await self.channel.post_event_announcement(event, channel_obj.telegram_channel_id)
+                text = self._format_event_text(event, "full")
+                await self.channel.post_event_announcement(text, event.id, channel_obj.telegram_channel_id)
                 await callback.answer("✅ Анонс перепощен в канал!", show_alert=True)
             except Exception:
                 await callback.answer("❌ Ошибка репоста.", show_alert=True)
@@ -2792,7 +2803,8 @@ class TelegramBot(PlatformBot):
                 channel_svc = ChannelService(session)
                 channel = await channel_svc.get_by_id(event.channel_id)
                 if channel:
-                    await self.channel.post_event_announcement(event, channel.telegram_channel_id)
+                    text = self._format_event_text(event, "full")
+                    await self.channel.post_event_announcement(text, event.id, channel.telegram_channel_id)
 
     # ═══════════════════════════════════════════════════════
     # ЗАПУСК / ОСТАНОВКА
