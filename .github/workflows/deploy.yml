@@ -6,7 +6,7 @@ on:
   workflow_dispatch:  # ручной запуск
 
 env:
-  COMPOSE_FILES: -f docker-compose.yml -f deploy/docker-compose.beget.yml
+  COMPOSE_FILES: -f docker-compose.yml -f deploy/docker-compose.beget.yml -f deploy/docker-compose.monitoring.yml
 
 jobs:
   test:
@@ -96,6 +96,13 @@ jobs:
           DEBUG=false
           ENVEOF
           echo "✅ .env.max создан"
+
+      - name: 📋 Создать .env.monitoring из секретов
+        run: |
+          cat > .env.monitoring << 'ENVEOF'
+          GRAFANA_ADMIN_PASSWORD=${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          ENVEOF
+          echo "✅ .env.monitoring создан"
 
       - name: 🛑 Остановить старые контейнеры
         run: |
@@ -241,6 +248,13 @@ jobs:
         run: |
           docker compose ${{ env.COMPOSE_FILES }} up -d telegram
           echo "✅ Telegram бот запущен"
+
+      - name: 📊 Запустить мониторинг (Loki + Promtail + Grafana)
+        env:
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+        run: |
+          docker compose ${{ env.COMPOSE_FILES }} up -d loki promtail grafana
+          echo "✅ Мониторинг запущен"
 
       - name: 🚀 Запустить VK бота (если есть токен)
         env:

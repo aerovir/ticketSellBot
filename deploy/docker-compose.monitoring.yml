@@ -1,0 +1,33 @@
+services:
+  loki:
+    image: grafana/loki:3.0
+    container_name: ticketbot-loki
+    restart: unless-stopped
+    volumes:
+      - loki-data:/loki
+
+  promtail:
+    image: grafana/promtail:3.0
+    container_name: ticketbot-promtail
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./deploy/promtail-config.yml:/etc/promtail/config.yml
+
+  grafana:
+    image: grafana/grafana:11.0
+    container_name: ticketbot-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/datasources.yml:/etc/grafana/provisioning/datasources/loki.yml
+
+volumes:
+  loki-data:
+  grafana-data:
