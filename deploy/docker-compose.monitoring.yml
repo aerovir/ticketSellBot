@@ -1,13 +1,13 @@
 services:
   loki:
-    image: grafana/loki:3.0
+    image: grafana/loki:latest
     container_name: ticketbot-loki
     restart: unless-stopped
     volumes:
       - loki-data:/loki
 
   promtail:
-    image: grafana/promtail:3.0
+    image: grafana/promtail:latest
     container_name: ticketbot-promtail
     restart: unless-stopped
     volumes:
@@ -15,7 +15,7 @@ services:
       - ./deploy/promtail-config.yml:/etc/promtail/config.yml
 
   grafana:
-    image: grafana/grafana:11.0
+    image: grafana/grafana:latest
     container_name: ticketbot-grafana
     restart: unless-stopped
     ports:
