@@ -132,14 +132,19 @@ jobs:
       - name: 🗄️ Создать роли PostgreSQL
         run: |
           docker compose ${{ env.COMPOSE_FILES }} exec -T db bash -c "
-          psql -U postgres -d ticketbot <<-EOSQL
+          psql -U postgres <<-EOSQL
+            -- Создать БД ticketbot, если её нет (volume мог быть очищен)
+            SELECT 'CREATE DATABASE ticketbot'
+            WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ticketbot')\\gexec
+
+            CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'tg_user') THEN
                 CREATE ROLE tg_user WITH LOGIN PASSWORD '${{ secrets.DB_PASSWORD_TG }}';
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO tg_user;
-            GRANT USAGE, CREATE ON SCHEMA public TO tg_user;
 
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'vk_user') THEN
@@ -147,7 +152,6 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO vk_user;
-            GRANT USAGE, CREATE ON SCHEMA public TO vk_user;
 
             DO \\\$\\\$ BEGIN
               IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'max_user') THEN
@@ -155,9 +159,15 @@ jobs:
               END IF;
             END \\\$\\\$;
             GRANT CONNECT ON DATABASE ticketbot TO max_user;
-            GRANT USAGE, CREATE ON SCHEMA public TO max_user;
+
             SELECT rolname FROM pg_catalog.pg_roles WHERE rolname IN ('tg_user', 'vk_user', 'max_user');
           EOSQL
+          # Переключиться на ticketbot для GRANT на схему public
+          psql -U postgres -d ticketbot <<-EOSQL2
+            GRANT USAGE, CREATE ON SCHEMA public TO tg_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO vk_user;
+            GRANT USAGE, CREATE ON SCHEMA public TO max_user;
+          EOSQL2
           "
           echo "✅ Роли PostgreSQL созданы"
 
