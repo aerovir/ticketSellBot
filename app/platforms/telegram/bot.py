@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -1268,6 +1269,21 @@ class TelegramBot(PlatformBot):
             lines.append(f"{icon} Афиша: загружена")
         return "\n".join(lines) + "\n\n" if lines else ""
 
+    async def _edit_or_send(self, callback: types.CallbackQuery, text: str, **kwargs):
+        """Редактировать сообщение колбэка или заменить если это медиа.
+
+        Если колбэк пришёл с медиа-сообщения (фото/видео с кнопками),
+        edit_text() упадёт с ошибкой — тогда удаляем медиа и шлём новое.
+        """
+        try:
+            await callback.message.edit_text(text, **kwargs)
+        except TelegramBadRequest as e:
+            if "there is no text in the message to edit" in str(e):
+                await callback.message.delete()
+                await callback.message.answer(text, **kwargs)
+            else:
+                raise
+
     # ─── Унифицированное форматирование мероприятий ───────────────────
 
     def _format_event_text(self, event, mode: str = "full") -> str:
@@ -2127,7 +2143,8 @@ class TelegramBot(PlatformBot):
             fsm_data = await state.get_data()
             # Проверяем, что state не потерян (например, после рестарта бота)
             if not fsm_data or "date" not in fsm_data:
-                await callback.message.edit_text(
+                await self._edit_or_send(
+                    callback,
                     "❌ Сессия создания мероприятия истекла. Начните заново: /create_event"
                 )
                 await state.clear()
@@ -2153,14 +2170,16 @@ class TelegramBot(PlatformBot):
                         event.media_type = fsm_data["media_type"]
                     await session.commit()
             except Exception as e:
-                await callback.message.edit_text(
+                await self._edit_or_send(
+                    callback,
                     f"❌ Ошибка при создании мероприятия: {e}"
                 )
                 await state.clear()
                 return
 
             await state.clear()
-            await callback.message.edit_text(
+            await self._edit_or_send(
+                callback,
                 f"✅ Мероприятие «{event.title}» создано!\n"
                 f"Оно сохранено как черновик. Чтобы опубликовать — "
                 f"используйте панель управления мероприятием.",
@@ -2172,7 +2191,7 @@ class TelegramBot(PlatformBot):
         if data == "admin:cancel_create":
             await callback.answer()
             await state.clear()
-            await callback.message.edit_text("❌ Создание отменено.")
+            await self._edit_or_send(callback, "❌ Создание отменено.")
             return
 
         # ─── Админ-меню: навигация по кнопкам ───────────
