@@ -21,6 +21,9 @@ Thumbs.db
 # Docker
 .dockerignore
 
+# Deploy secrets (SSH, etc.)
+deploy/.env.ssh
+
 # Claude Code
 .claude/agents/
 .claude/worktrees/

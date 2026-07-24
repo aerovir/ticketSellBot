@@ -78,20 +78,27 @@ deploy-beget: ## Полный деплой на Beget
 	@echo "✅ Деплой Telegram на Beget завершён"
 
 # ─── Логи через SSH на VPS ──────────────────────────
+# Переменные можно задать в deploy/.env.ssh (см. .env.ssh.example)
+# или через environment: make logs-app SSH_HOST=vps PROJ_DIR=...
+SSH_HOST ?= vps
+PROJ_DIR ?= /home/user/actions-runner/_work/ticketSellBot/ticketSellBot
+COMPOSE_FILES ?= -f docker-compose.yml -f deploy/docker-compose.beget.yml -f deploy/docker-compose.monitoring.yml
 
-PROJ_DIR=/home/user/actions-runner/_work/ticketSellBot/ticketSellBot
-COMPOSE_FILES=-f docker-compose.yml -f deploy/docker-compose.beget.yml -f deploy/docker-compose.monitoring.yml
+# Пытаемся загрузить .env.ssh если он есть
+ifneq (,$(wildcard .env.ssh))
+    include .env.ssh
+endif
 
 logs-app: ## Бизнес-логи (event_type) с VPS. LINES=30 — последние N строк
 	@lines=${LINES:-50}; \
-	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram | grep event_type || echo "(нет event_type-логов)"'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram | grep event_type || echo "(нет event_type-логов)"'
 
 logs-raw: ## Сырые логи telegram-бота с VPS. LINES=50 — последние N строк
 	@lines=${LINES:-50}; \
-	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram'
 
 logs-health: ## Статус контейнеров на VPS
-	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps'
 
 logs-monitor: ## Статус мониторинга (Loki, Promtail, Grafana) на VPS
-	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps loki promtail grafana'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps loki promtail grafana'
