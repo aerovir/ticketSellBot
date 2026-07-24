@@ -91,3 +91,4 @@
 | 66 | Feat: структурированное JSON-логирование поведения пользователя (app/core/logging_config.py) | ✅ done | 2026-07-24 | — |
 | 67 | Feat: логирование сервисного слоя — EventService, TicketService, ChannelService, UserService | ✅ done | 2026-07-24 | — |
 | 68 | Feat: логирование ключевых хендлеров Telegram-бота (start, buy, callback, chat_member) | ✅ done | 2026-07-24 | — |
+| 69 | Feat: управление публикацией мероприятия — поле is_published, черновики, кнопка Опубликовать | ✅ done | 2026-07-24 | — |

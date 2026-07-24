@@ -1288,14 +1288,16 @@ class TelegramBot(PlatformBot):
         if mode == "admin":
             status_icon = "🟢" if event.is_active else "🔴"
             status_text = "Активно" if event.is_active else "Отключено"
+            publish_icon = "📢" if event.is_published else "📝"
+            publish_text = "Опубликовано" if event.is_published else "Черновик"
             return (
-                f"{status_icon} <b>{event.title}</b>\n"
+                f"{publish_icon} <b>{event.title}</b>\n"
                 f"{event.description or 'Описание отсутствует'}\n\n"
                 f"📅 {date_str}\n"
                 f"📍 {event.location or 'Не указано'}\n"
                 f"💰 {event.price:.0f}₽\n"
                 f"🎟 Осталось: {event.available_tickets}/{event.total_tickets}\n"
-                f"{status_icon} {status_text}"
+                f"{status_icon} {status_text} | {publish_icon} {publish_text}"
             )
 
         # mode == "full" (по умолчанию)
@@ -2060,15 +2062,10 @@ class TelegramBot(PlatformBot):
             await state.clear()
             await callback.message.edit_text(
                 f"✅ Мероприятие «{event.title}» создано!\n"
-                f"Анонс будет отправлен в канал.",
+                f"Оно сохранено как черновик. Чтобы опубликовать — "
+                f"используйте панель управления мероприятием.",
                 parse_mode="HTML",
             )
-            # Анонс отправляем после всего — если упадёт, пользователь
-            # уже получил подтверждение
-            try:
-                await self.post_announcement(event.id)
-            except Exception as e:
-                logger.error("Ошибка отправки анонса для %s: %s", event.id, e)
             return
 
         # ─── Админ: отмена создания ─────────────────────
@@ -2595,24 +2592,30 @@ class TelegramBot(PlatformBot):
             "<b>Выберите действие:</b>"
         )
 
-        rows = [
-            [
-                InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{event.id}"),
-                InlineKeyboardButton(
-                    text="⏸ Отключить" if event.is_active else "▶ Включить",
-                    callback_data=f"ch_admin:toggle:{event.id}",
-                ),
-            ],
-            [
-                InlineKeyboardButton(text="🔄 Репост анонса", callback_data=f"ch_admin:repost:{event.id}"),
-            ],
-            [
-                InlineKeyboardButton(text="🗑 Удалить мероприятие", callback_data=f"ch_admin:delete:{event.id}"),
-            ],
-            [
-                InlineKeyboardButton(text="❌ Закрыть панель", callback_data="ch_admin:close"),
-            ],
-        ]
+        rows = []
+
+        # Кнопка публикации — только для черновиков
+        if not event.is_published:
+            rows.append([
+                InlineKeyboardButton(text="📢 Опубликовать в канал", callback_data=f"ch_admin:publish:{event.id}"),
+            ])
+
+        rows.append([
+            InlineKeyboardButton(text="📊 Статистика", callback_data=f"ch_admin:stats:{event.id}"),
+            InlineKeyboardButton(
+                text="⏸ Отключить" if event.is_active else "▶ Включить",
+                callback_data=f"ch_admin:toggle:{event.id}",
+            ),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="🔄 Репост анонса", callback_data=f"ch_admin:repost:{event.id}"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="🗑 Удалить мероприятие", callback_data=f"ch_admin:delete:{event.id}"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="❌ Закрыть панель", callback_data="ch_admin:close"),
+        ])
 
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2742,6 +2745,41 @@ class TelegramBot(PlatformBot):
             ])
             await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_kb)
             await callback.answer()
+            return
+
+        # ─── Опубликовать в канал ──────────────────────────
+        if action == "publish" and event_id:
+            async with async_session_factory() as session:
+                svc = EventService(session)
+                event = await svc.get_by_id(event_id)
+                if not event:
+                    await callback.answer("❌ Мероприятие не найдено.", show_alert=True)
+                    return
+                if event.is_published:
+                    await callback.answer("✅ Уже опубликовано.", show_alert=True)
+                    return
+
+                # Публикуем (сначала сохраняем статус)
+                event.is_published = True
+                await session.commit()
+
+            # Отправляем анонс в канал (отдельная сессия)
+            try:
+                await self.post_announcement(event_id)
+                await callback.answer("✅ Анонс опубликован в канале!", show_alert=True)
+            except Exception as e:
+                logger.error("Ошибка отправки анонса при публикации %s: %s", event_id, e)
+                await callback.answer(
+                    "⚠️ Мероприятие отмечено как опубликованное, "
+                    "но анонс не отправился. Используйте «🔄 Репост анонса».",
+                    show_alert=True,
+                )
+
+            # Обновить панель (is_published уже True в БД)
+            event.is_published = True
+            await self._send_ch_admin_panel(
+                callback.from_user.id, event, edit_message=callback.message,
+            )
             return
 
         # ─── Включить / Отключить ─────────────────────────

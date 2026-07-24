@@ -135,6 +135,8 @@ async def sample_event(db_session: AsyncSession, sample_channel: Channel) -> Eve
         total_tickets=100,
         channel_id=sample_channel.id,
     )
+    event.is_published = True
+    await db_session.flush()
     return event
 
 
@@ -151,6 +153,8 @@ async def sample_past_event(db_session: AsyncSession, sample_channel: Channel) -
         total_tickets=10,
         channel_id=sample_channel.id,
     )
+    event.is_published = True
+    await db_session.flush()
     return event
 
 

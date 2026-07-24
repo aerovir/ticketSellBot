@@ -58,6 +58,7 @@ async def seed():
                 total_tickets=500,
                 available_tickets=500,
                 is_active=True,
+                is_published=True,
                 channel_id=default_channel.id,
             ),
             Event(
@@ -69,6 +70,7 @@ async def seed():
                 total_tickets=200,
                 available_tickets=200,
                 is_active=True,
+                is_published=True,
                 channel_id=default_channel.id,
             ),
             Event(
@@ -80,6 +82,7 @@ async def seed():
                 total_tickets=300,
                 available_tickets=300,
                 is_active=True,
+                is_published=True,
                 channel_id=default_channel.id,
             ),
             Event(
@@ -91,6 +94,7 @@ async def seed():
                 total_tickets=1000,
                 available_tickets=1000,
                 is_active=True,
+                is_published=True,
                 channel_id=default_channel.id,
             ),
             Event(
@@ -102,6 +106,7 @@ async def seed():
                 total_tickets=50,
                 available_tickets=50,
                 is_active=True,
+                is_published=True,
                 channel_id=default_channel.id,
             ),
             Event(
@@ -113,6 +118,7 @@ async def seed():
                 total_tickets=400,
                 available_tickets=400,
                 is_active=True,
+                is_published=True,
                 channel_id=default_channel.id,
             ),
         ]

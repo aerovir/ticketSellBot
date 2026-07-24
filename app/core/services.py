@@ -338,12 +338,12 @@ class EventService:
         self.session = session
 
     async def list_upcoming(self, channel_id: uuid.UUID | None = None) -> list[Event]:
-        """Get all active events that haven't passed yet, optionally filtered by channel."""
+        """Get all active, published events that haven't passed yet, optionally filtered by channel."""
         now = datetime.now(timezone.utc)
         stmt = (
             select(Event)
             .where(
-                and_(Event.is_active == True, Event.date >= now)
+                and_(Event.is_active == True, Event.is_published == True, Event.date >= now)
             )
             .order_by(Event.date.asc())
         )
