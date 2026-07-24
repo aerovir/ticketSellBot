@@ -88,3 +88,6 @@
 | 63 | Fix: /subscribe существующего канала не синхронизирует админов (прочерк в списке каналов) | ✅ done | 2026-07-18 | — |
 | 64 | Feat: улучшение диалога создания мероприятия — _fsm_header, inline-кнопка Пропустить, новые формулировки | ✅ done | 2026-07-18 | — |
 | 65 | Feat: _format_event_text — унифицированное форматирование мероприятий (Phase 2) | ✅ done | 2026-07-23 | `a0835d0` |
+| 66 | Feat: структурированное JSON-логирование поведения пользователя (app/core/logging_config.py) | ✅ done | 2026-07-24 | — |
+| 67 | Feat: логирование сервисного слоя — EventService, TicketService, ChannelService, UserService | ✅ done | 2026-07-24 | — |
+| 68 | Feat: логирование ключевых хендлеров Telegram-бота (start, buy, callback, chat_member) | ✅ done | 2026-07-24 | — |

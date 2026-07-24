@@ -6,16 +6,16 @@ Entry point для MAX бота (заглушка).
     python -m bot.max
 """
 import asyncio
-import logging
 
 from app.config import settings
 from app.core.database import init_db, close_db
+from app.core.logging_config import setup_logging
 
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+logger = setup_logging(
+    "ticketbot.max",
+    extra_fields={"platform": "max"},
+    debug=settings.debug,
 )
-logger = logging.getLogger("ticketbot.max")
 
 
 async def main():

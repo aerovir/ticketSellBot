@@ -1,4 +1,6 @@
 import uuid
+import logging
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -7,6 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType
 from app.core.schemas import EventOut, EventShortOut, TicketOut, UserOut
+
+logger = logging.getLogger("ticketbot.services")
+
+
+def _ms(start: float) -> int:
+    """Convert perf_counter start to integer milliseconds."""
+    return int((time.perf_counter() - start) * 1000)
 
 
 # ─── User Service ────────────────────────────────────────────────────────────
@@ -17,6 +26,7 @@ class UserService:
 
     async def get_or_create(self, platform: PlatformType, platform_user_id: str, name: Optional[str] = None) -> User:
         """Find existing user by platform+id, or create a new one."""
+        start = time.perf_counter()
         stmt = select(User).where(
             and_(User.platform == platform, User.platform_user_id == platform_user_id)
         )
@@ -31,6 +41,21 @@ class UserService:
             )
             self.session.add(user)
             await self.session.flush()
+            logger.info("", extra={
+                "event_type": "user.created",
+                "platform": platform.value,
+                "user_id": platform_user_id,
+                "status": "success",
+                "duration_ms": _ms(start),
+            })
+        else:
+            logger.info("", extra={
+                "event_type": "user.found",
+                "platform": platform.value,
+                "user_id": platform_user_id,
+                "status": "success",
+                "duration_ms": _ms(start),
+            })
 
         return user
 
@@ -58,6 +83,7 @@ class ChannelService:
         title: str | None = None,
     ) -> Channel:
         """Create a new channel record."""
+        start = time.perf_counter()
         channel = Channel(
             telegram_channel_id=telegram_channel_id,
             title=title,
@@ -66,26 +92,65 @@ class ChannelService:
         )
         self.session.add(channel)
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "channel.created",
+            "channel_id": str(channel.id),
+            "telegram_channel_id": telegram_channel_id,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return channel
 
     async def activate_subscription(self, channel_id: uuid.UUID, duration_days: int = 30) -> Channel | None:
         """Manually activate subscription for a channel."""
+        start = time.perf_counter()
         channel = await self.session.get(Channel, channel_id)
         if channel is None:
+            logger.warning("", extra={
+                "event_type": "subscription.activate_failed",
+                "channel_id": str(channel_id),
+                "status": "error",
+                "error": "Channel not found",
+                "duration_ms": _ms(start),
+            })
             return None
         channel.is_subscription_active = True
         channel.subscription_until = datetime.now(timezone.utc) + timedelta(days=duration_days)
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "subscription.activated",
+            "channel_id": str(channel.id),
+            "telegram_channel_id": channel.telegram_channel_id,
+            "duration_days": duration_days,
+            "subscription_until": channel.subscription_until.isoformat(),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return channel
 
     async def deactivate_subscription(self, channel_id: uuid.UUID) -> Channel | None:
         """Deactivate subscription."""
+        start = time.perf_counter()
         channel = await self.session.get(Channel, channel_id)
         if channel is None:
+            logger.warning("", extra={
+                "event_type": "subscription.deactivate_failed",
+                "channel_id": str(channel_id),
+                "status": "error",
+                "error": "Channel not found",
+                "duration_ms": _ms(start),
+            })
             return None
         channel.is_subscription_active = False
         channel.subscription_until = None
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "subscription.deactivated",
+            "channel_id": str(channel.id),
+            "telegram_channel_id": channel.telegram_channel_id,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return channel
 
     async def is_subscription_valid(self, channel_id: uuid.UUID) -> bool:
@@ -100,6 +165,12 @@ class ChannelService:
             channel.is_subscription_active = False
             channel.subscription_until = None
             await self.session.flush()
+            logger.info("", extra={
+                "event_type": "subscription.auto_expired",
+                "channel_id": str(channel.id),
+                "telegram_channel_id": channel.telegram_channel_id,
+                "status": "success",
+            })
             return False
         return True
 
@@ -149,8 +220,17 @@ class ChannelService:
         Raises:
             ValueError: если канал с таким channel_telegram_id не найден.
         """
+        start = time.perf_counter()
         channel = await self.get_by_telegram_id(channel_telegram_id)
         if not channel:
+            logger.warning("", extra={
+                "event_type": "channel.change_admin_failed",
+                "telegram_channel_id": channel_telegram_id,
+                "new_admin_id": new_admin_id,
+                "status": "error",
+                "error": "Channel not found",
+                "duration_ms": _ms(start),
+            })
             raise ValueError(f"Канал {channel_telegram_id} не найден")
 
         admin_svc = ChannelAdminService(self.session)
@@ -158,6 +238,16 @@ class ChannelService:
         await admin_svc.sync_admins(channel.id, [new_admin_id])
         channel.admin_telegram_user_id = new_admin_id
         await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "channel.admin_changed",
+            "channel_id": str(channel.id),
+            "telegram_channel_id": channel.telegram_channel_id,
+            "old_admin_ids": old_admin_ids,
+            "new_admin_id": new_admin_id,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
 
         return channel, old_admin_ids
 
@@ -179,17 +269,22 @@ class ChannelAdminService:
 
         Удаляет отсутствующих, добавляет новых, существующих не трогает.
         """
+        start = time.perf_counter()
         existing = await self.get_admin_ids(channel_id)
         existing_set = set(existing)
         new_set = set(admin_ids)
 
         # Добавить новых
+        added = []
         for uid in new_set - existing_set:
             self.session.add(ChannelAdmin(channel_id=channel_id, telegram_user_id=uid))
+            added.append(uid)
 
         # Удалить отсутствующих
+        removed = []
         to_remove = existing_set - new_set
         if to_remove:
+            removed = list(to_remove)
             stmt = delete(ChannelAdmin).where(
                 ChannelAdmin.channel_id == channel_id,
                 ChannelAdmin.telegram_user_id.in_(to_remove),
@@ -198,6 +293,16 @@ class ChannelAdminService:
 
         await self.session.flush()
 
+        if added or removed:
+            logger.info("", extra={
+                "event_type": "channel_admins.synced",
+                "channel_id": str(channel_id),
+                "added": added,
+                "removed": removed,
+                "status": "success",
+                "duration_ms": _ms(start),
+            })
+
     async def user_is_admin(self, channel_id: uuid.UUID, telegram_user_id: str) -> bool:
         """Проверить, является ли пользователь админом канала."""
         stmt = select(ChannelAdmin).where(
@@ -205,16 +310,25 @@ class ChannelAdminService:
             ChannelAdmin.telegram_user_id == telegram_user_id,
         ).limit(1)
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none() is not None
+        is_admin = result.scalar_one_or_none() is not None
+        return is_admin
 
     async def remove_admin(self, channel_id: uuid.UUID, telegram_user_id: str):
         """Удалить пользователя из админов канала."""
+        start = time.perf_counter()
         stmt = delete(ChannelAdmin).where(
             ChannelAdmin.channel_id == channel_id,
             ChannelAdmin.telegram_user_id == telegram_user_id,
         )
         await self.session.execute(stmt)
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "channel_admin.removed",
+            "channel_id": str(channel_id),
+            "user_id": telegram_user_id,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
 
 
 # ─── Event Service ───────────────────────────────────────────────────────────
@@ -249,6 +363,7 @@ class EventService:
     async def create(self, title: str, description: Optional[str], date: datetime,
                      location: Optional[str], price: float,
                      total_tickets: int, channel_id: uuid.UUID) -> Event:
+        start = time.perf_counter()
         event = Event(
             title=title,
             description=description,
@@ -262,6 +377,16 @@ class EventService:
         )
         self.session.add(event)
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "event.created",
+            "event_id": str(event.id),
+            "event_title": title,
+            "channel_id": str(channel_id),
+            "price": price,
+            "total_tickets": total_tickets,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return event
 
     # ─── Admin methods ───────────────────────────────────────────────────
@@ -277,12 +402,24 @@ class EventService:
 
     async def update(self, event_id: uuid.UUID, **data) -> Event | None:
         """Partially update an event. Returns updated event or None."""
+        start = time.perf_counter()
         event = await self.session.get(Event, event_id)
         if event is None:
+            logger.warning("", extra={
+                "event_type": "event.update_failed",
+                "event_id": str(event_id),
+                "status": "error",
+                "error": "Event not found",
+                "duration_ms": _ms(start),
+            })
             return None
 
+        changed = {}
         for key, value in data.items():
             if hasattr(event, key):
+                old = getattr(event, key)
+                if old != value:
+                    changed[key] = {"from": str(old), "to": str(value)}
                 setattr(event, key, value)
 
         # Sync available_tickets when total_tickets changes
@@ -293,26 +430,65 @@ class EventService:
             event.available_tickets = max(0, event.available_tickets + diff)
 
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "event.updated",
+            "event_id": str(event.id),
+            "event_title": event.title,
+            "changed": changed,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return event
 
     async def set_active(self, event_id: uuid.UUID, is_active: bool) -> Event | None:
         """Enable or disable an event. Returns updated event or None."""
+        start = time.perf_counter()
         event = await self.session.get(Event, event_id)
         if event is None:
+            logger.warning("", extra={
+                "event_type": "event.toggle_failed",
+                "event_id": str(event_id),
+                "status": "error",
+                "error": "Event not found",
+                "duration_ms": _ms(start),
+            })
             return None
         event.is_active = is_active
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "event.toggled",
+            "event_id": str(event.id),
+            "event_title": event.title,
+            "is_active": is_active,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return event
 
     async def soft_delete(self, event_id: uuid.UUID) -> Event | None:
         """Soft delete an event — hides it from all lists.
         Sets is_active=False and deleted_at=now()."""
+        start = time.perf_counter()
         event = await self.session.get(Event, event_id)
         if event is None:
+            logger.warning("", extra={
+                "event_type": "event.delete_failed",
+                "event_id": str(event_id),
+                "status": "error",
+                "error": "Event not found",
+                "duration_ms": _ms(start),
+            })
             return None
         event.is_active = False
         event.deleted_at = datetime.now(timezone.utc)
         await self.session.flush()
+        logger.info("", extra={
+            "event_type": "event.deleted",
+            "event_id": str(event.id),
+            "event_title": event.title,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return event
 
     async def get_event_stats(self, event_id: uuid.UUID) -> dict:
@@ -356,14 +532,50 @@ class TicketService:
 
     async def buy_ticket(self, user_id: uuid.UUID, event_id: uuid.UUID) -> Ticket:
         """Purchase a ticket for an event."""
+        start = time.perf_counter()
         event = await self.session.get(Event, event_id)
         if event is None:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "status": "error",
+                "error": "Event not found",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Мероприятие не найдено")
         if not event.is_active:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Event not active",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Мероприятие неактивно")
         if event.date < datetime.now(timezone.utc):
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Event already passed",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Мероприятие уже прошло")
         if event.available_tickets <= 0:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Sold out",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Билеты закончились")
 
         # Check if user already has an active ticket for this event
@@ -376,6 +588,15 @@ class TicketService:
         )
         existing = await self.session.execute(existing_stmt)
         if existing.scalar_one_or_none() is not None:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Already has ticket",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("У вас уже есть активный билет на это мероприятие")
 
         # Create ticket
@@ -399,6 +620,19 @@ class TicketService:
         self.session.add(payment)
 
         await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "ticket.purchased",
+            "ticket_id": str(ticket.id),
+            "event_id": str(event_id),
+            "event_title": event.title,
+            "user_id": str(user_id),
+            "amount": float(event.price),
+            "payment_status": "completed",
+            "platform": "telegram",
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return ticket
 
     async def buy_ticket_webapp(self, user_id: uuid.UUID, event_id: uuid.UUID) -> dict:
@@ -408,14 +642,50 @@ class TicketService:
         status=pending (for future YooKassa integration) and returns
         a dict for the API response.
         """
+        start = time.perf_counter()
         event = await self.session.get(Event, event_id)
         if event is None:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_webapp_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "status": "error",
+                "error": "Event not found",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Мероприятие не найдено")
         if not event.is_active:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_webapp_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Event not active",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Мероприятие неактивно")
         if event.date < datetime.now(timezone.utc):
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_webapp_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Event already passed",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Мероприятие уже прошло")
         if event.available_tickets <= 0:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_webapp_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Sold out",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Билеты закончились")
 
         # Check if user already has an active ticket for this event
@@ -428,6 +698,15 @@ class TicketService:
         )
         existing = await self.session.execute(existing_stmt)
         if existing.scalar_one_or_none() is not None:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_webapp_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Already has ticket",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("У вас уже есть активный билет на это мероприятие")
 
         # Create ticket
@@ -452,6 +731,19 @@ class TicketService:
 
         await self.session.flush()
 
+        logger.info("", extra={
+            "event_type": "ticket.purchased_webapp",
+            "ticket_id": str(ticket.id),
+            "event_id": str(event_id),
+            "event_title": event.title,
+            "user_id": str(user_id),
+            "amount": float(event.price),
+            "payment_status": "pending",
+            "platform": "web",
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+
         return {
             "ticket_id": str(ticket.id),
             "event_title": event.title,
@@ -464,12 +756,37 @@ class TicketService:
 
     async def cancel_ticket(self, ticket_id: uuid.UUID, user_id: uuid.UUID) -> Ticket:
         """Cancel a ticket (refund)."""
+        start = time.perf_counter()
         ticket = await self.session.get(Ticket, ticket_id)
         if ticket is None:
+            logger.warning("", extra={
+                "event_type": "ticket.cancel_failed",
+                "ticket_id": str(ticket_id),
+                "user_id": str(user_id),
+                "status": "error",
+                "error": "Ticket not found",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Билет не найден")
         if ticket.user_id != user_id:
+            logger.warning("", extra={
+                "event_type": "ticket.cancel_failed",
+                "ticket_id": str(ticket_id),
+                "user_id": str(user_id),
+                "status": "error",
+                "error": "Not owner",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Это не ваш билет")
         if ticket.status == TicketStatus.refunded:
+            logger.warning("", extra={
+                "event_type": "ticket.cancel_failed",
+                "ticket_id": str(ticket_id),
+                "user_id": str(user_id),
+                "status": "error",
+                "error": "Already refunded",
+                "duration_ms": _ms(start),
+            })
             raise ValueError("Билет уже возвращён")
 
         # Mark ticket as refunded
@@ -488,6 +805,63 @@ class TicketService:
             payment.status = PaymentStatus.refunded
 
         await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "ticket.cancelled",
+            "ticket_id": str(ticket_id),
+            "event_id": str(ticket.event_id),
+            "event_title": event.title if event else "",
+            "user_id": str(user_id),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return ticket
+
+    async def admin_cancel_ticket(self, ticket_id: uuid.UUID) -> Ticket:
+        """Cancel any ticket by admin (no ownership check)."""
+        start = time.perf_counter()
+        ticket = await self.session.get(Ticket, ticket_id)
+        if ticket is None:
+            logger.warning("", extra={
+                "event_type": "ticket.admin_cancel_failed",
+                "ticket_id": str(ticket_id),
+                "status": "error",
+                "error": "Ticket not found",
+                "duration_ms": _ms(start),
+            })
+            raise ValueError("Билет не найден")
+        if ticket.status == TicketStatus.refunded:
+            logger.warning("", extra={
+                "event_type": "ticket.admin_cancel_failed",
+                "ticket_id": str(ticket_id),
+                "status": "error",
+                "error": "Already refunded",
+                "duration_ms": _ms(start),
+            })
+            raise ValueError("Билет уже возвращён")
+
+        ticket.status = TicketStatus.refunded
+
+        event = await self.session.get(Event, ticket.event_id)
+        if event:
+            event.available_tickets += 1
+
+        payment_stmt = select(Payment).where(Payment.ticket_id == ticket_id)
+        payment_result = await self.session.execute(payment_stmt)
+        payment = payment_result.scalar_one_or_none()
+        if payment:
+            payment.status = PaymentStatus.refunded
+
+        await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "ticket.admin_cancelled",
+            "ticket_id": str(ticket_id),
+            "event_id": str(ticket.event_id),
+            "event_title": event.title if event else "",
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return ticket
 
     async def get_user_tickets(self, user_id: uuid.UUID, channel_id: uuid.UUID | None = None) -> list[dict]:
@@ -515,29 +889,6 @@ class TicketService:
         return tickets
 
     # ─── Admin methods ───────────────────────────────────────────────────
-
-    async def admin_cancel_ticket(self, ticket_id: uuid.UUID) -> Ticket:
-        """Cancel any ticket by admin (no ownership check)."""
-        ticket = await self.session.get(Ticket, ticket_id)
-        if ticket is None:
-            raise ValueError("Билет не найден")
-        if ticket.status == TicketStatus.refunded:
-            raise ValueError("Билет уже возвращён")
-
-        ticket.status = TicketStatus.refunded
-
-        event = await self.session.get(Event, ticket.event_id)
-        if event:
-            event.available_tickets += 1
-
-        payment_stmt = select(Payment).where(Payment.ticket_id == ticket_id)
-        payment_result = await self.session.execute(payment_stmt)
-        payment = payment_result.scalar_one_or_none()
-        if payment:
-            payment.status = PaymentStatus.refunded
-
-        await self.session.flush()
-        return ticket
 
     async def get_event_tickets(self, event_id: uuid.UUID) -> list[dict]:
         """Get all tickets for a specific event (admin view)."""

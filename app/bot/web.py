@@ -8,13 +8,17 @@ Reads settings from .env / environment variables (web_host, web_port).
 """
 
 import asyncio
-import logging
 
 import uvicorn
 
 from app.config import settings
+from app.core.logging_config import setup_logging
 
-logger = logging.getLogger("ticketbot.web")
+logger = setup_logging(
+    "ticketbot.web",
+    extra_fields={"platform": "web"},
+    debug=settings.debug,
+)
 
 
 def main():

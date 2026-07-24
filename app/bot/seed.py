@@ -6,14 +6,13 @@ Seed script — заполняет БД тестовыми мероприяти�
 """
 
 import asyncio
-import logging
 from datetime import datetime, timezone, timedelta
 
 from app.core.database import async_session_factory, init_db, close_db
 from app.core.models import Event, Channel
+from app.core.logging_config import setup_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("seed")
+logger = setup_logging("seed", debug=False)
 
 
 async def seed():

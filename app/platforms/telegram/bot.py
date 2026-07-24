@@ -159,12 +159,27 @@ class TelegramBot(PlatformBot):
         if payload and payload.startswith("buy_"):
             try:
                 event_id = UUID(payload[4:])  # убираем "buy_"
+                logger.info("", extra={
+                    "event_type": "user.deep_link_buy",
+                    "user_id": str(message.from_user.id),
+                    "event_id": payload[4:],
+                    "platform": "telegram",
+                    "status": "success",
+                })
                 await self._do_buy_ticket(message, event_id)
                 return
             except (ValueError, IndexError):
                 pass
 
         await self._get_user_id(message)
+
+        logger.info("", extra={
+            "event_type": "user.started",
+            "user_id": str(message.from_user.id),
+            "payload": payload or "",
+            "platform": "telegram",
+            "status": "success",
+        })
 
         # Установить Menu Button под роль пользователя
         await self._update_user_commands(message.from_user.id)
@@ -247,6 +262,14 @@ class TelegramBot(PlatformBot):
                     parse_mode="HTML",
                 )
             except ValueError as e:
+                logger.warning("", extra={
+                    "event_type": "ticket.purchase_failed_ui",
+                    "user_id": str(message.from_user.id),
+                    "event_id": str(event_id),
+                    "error": str(e),
+                    "platform": "telegram",
+                    "status": "error",
+                })
                 await message.answer(f"❌ {e}")
 
     async def cmd_event(self, message: types.Message):
@@ -307,6 +330,13 @@ class TelegramBot(PlatformBot):
                 reply_markup=kb,
             )
             return
+        logger.info("", extra={
+            "event_type": "user.buy_command",
+            "user_id": str(message.from_user.id),
+            "event_id": args[1] if len(args) > 1 else "",
+            "platform": "telegram",
+            "status": "success",
+        })
 
         try:
             event_id = UUID(args[1])
@@ -1795,7 +1825,14 @@ class TelegramBot(PlatformBot):
 
         # Bot was added to a channel (в каналах бот всегда администратор)
         if chat_member.new_chat_member.status in ("member", "administrator"):
-            logger.info("Бот добавлен в канал %s пользователем %s", chat.id, adder_id)
+            logger.info("", extra={
+                "event_type": "bot.added_to_channel",
+                "channel_id": str(chat.id),
+                "channel_title": chat.title or "",
+                "adder_id": adder_id,
+                "platform": "telegram",
+                "status": "success",
+            })
 
             # Получить список всех админов канала через Telegram API
             admin_ids: list[str] = []
@@ -1904,13 +1941,28 @@ class TelegramBot(PlatformBot):
 
         # Bot was removed from a channel
         elif chat_member.new_chat_member.status in ("left", "kicked"):
-            logger.info("Бот удалён из канала %s", chat.id)
+            logger.info("", extra={
+                "event_type": "bot.removed_from_channel",
+                "channel_id": str(chat.id),
+                "channel_title": chat.title or "",
+                "platform": "telegram",
+                "status": "success",
+            })
 
     # ─── Callback-запросы (инлайн-кнопки) ────────────────────────────────
 
     async def cmd_callback(self, callback: types.CallbackQuery, state: FSMContext):
         """Handle all callback queries."""
         data = callback.data
+        user_id = str(callback.from_user.id) if callback.from_user else "unknown"
+
+        logger.info("", extra={
+            "event_type": "callback.received",
+            "callback_data": data[:80],
+            "user_id": user_id,
+            "platform": "telegram",
+            "status": "success",
+        })
 
         # ─── Канал: покупка билета (из анонса) ──────────
         if data.startswith("channel_buy:"):
