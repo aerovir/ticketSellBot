@@ -53,6 +53,7 @@ class CreateEvent(StatesGroup):
     location = State()
     price = State()
     tickets = State()
+    media = State()
     confirm = State()
 
 
@@ -116,6 +117,9 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.fsm_location, CreateEvent.location)
         self.dp.message.register(self.fsm_price, CreateEvent.price)
         self.dp.message.register(self.fsm_tickets, CreateEvent.tickets)
+        self.dp.message.register(self.fsm_media, CreateEvent.media, F.photo | F.video)
+        # Если прислали не фото/видео на шаге media — перенаправить на тот же хендлер
+        self.dp.message.register(self.fsm_media, CreateEvent.media)
 
         # Отмена во время FSM
         self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(CreateEvent))
@@ -1259,6 +1263,9 @@ class TelegramBot(PlatformBot):
             lines.append(f"💰 Цена: {data['price']:.0f}₽")
         if "tickets" in data:
             lines.append(f"🎟 Билетов: {data['tickets']}")
+        if "media_file_id" in data and data["media_file_id"]:
+            icon = "🖼" if data.get("media_type") == "photo" else "🎬"
+            lines.append(f"{icon} Афиша: загружена")
         return "\n".join(lines) + "\n\n" if lines else ""
 
     # ─── Унифицированное форматирование мероприятий ───────────────────
@@ -1290,6 +1297,9 @@ class TelegramBot(PlatformBot):
             status_text = "Активно" if event.is_active else "Отключено"
             publish_icon = "📢" if event.is_published else "📝"
             publish_text = "Опубликовано" if event.is_published else "Черновик"
+            media_icon = "🖼" if event.media_telegram_file_id else "—"
+            media_type_label = " 🎬" if event.media_type == "video" else ""
+            media_text = f"Афиша: {media_icon}{media_type_label}" if event.media_telegram_file_id else "Афиша: —"
             return (
                 f"{publish_icon} <b>{event.title}</b>\n"
                 f"{event.description or 'Описание отсутствует'}\n\n"
@@ -1297,7 +1307,8 @@ class TelegramBot(PlatformBot):
                 f"📍 {event.location or 'Не указано'}\n"
                 f"💰 {event.price:.0f}₽\n"
                 f"🎟 Осталось: {event.available_tickets}/{event.total_tickets}\n"
-                f"{status_icon} {status_text} | {publish_icon} {publish_text}"
+                f"{status_icon} {status_text} | {publish_icon} {publish_text}\n"
+                f"{media_text}"
             )
 
         # mode == "full" (по умолчанию)
@@ -1323,7 +1334,7 @@ class TelegramBot(PlatformBot):
         await state.set_state(CreateEvent.title)
         kb = self._fsm_cancel_kb()
         await message.answer(
-            "📝 <b>Создание мероприятия</b> (шаг 1/6)\n\n"
+            "📝 <b>Создание мероприятия</b> (шаг 1/7)\n\n"
             "Введите <b>название</b> мероприятия.",
             parse_mode="HTML",
             reply_markup=kb,
@@ -1453,13 +1464,55 @@ class TelegramBot(PlatformBot):
             )
             return
         data = await state.update_data(tickets=tickets)
+        await state.set_state(CreateEvent.media)
+        data = await state.get_data()
+        header = await self._fsm_header(data)
+        kb = self._fsm_cancel_kb([
+            [InlineKeyboardButton(text="➡️ Пропустить", callback_data="fsm_skip:media")],
+        ])
+        await message.answer(
+            f"{header}🖼 Отправьте <b>изображение или видео</b> для афиши.\n\n"
+            "Это будет показано в анонсе канала.\n"
+            "Или нажмите «Пропустить».",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+
+    async def fsm_media(self, message: types.Message, state: FSMContext):
+        """Обработчик загрузки афиши (фото или видео)."""
+        data = await state.get_data()
+        existing_header = await self._fsm_header(data)
+
+        if message.photo:
+            file_id = message.photo[-1].file_id
+            media_type = "photo"
+        elif message.video:
+            file_id = message.video.file_id
+            media_type = "video"
+        else:
+            kb = self._fsm_cancel_kb([
+                [InlineKeyboardButton(text="➡️ Пропустить", callback_data="fsm_skip:media")],
+            ])
+            await message.answer(
+                f"{existing_header}❌ Пожалуйста, отправьте <b>изображение</b> или <b>видео</b>.\n"
+                "Или нажмите «Пропустить».",
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+            return
+
+        await state.update_data(media_file_id=file_id, media_type=media_type)
         await state.set_state(CreateEvent.confirm)
 
-        # Показать сводку
+        # Показать сводку с подтверждением
+        data = await state.get_data()
+        header = await self._fsm_header(data)
         date = datetime.fromisoformat(data["date"])
         date_str = date.strftime("%d.%m.%Y %H:%M")
         desc = data.get("description") or "—"
         loc = data.get("location") or "—"
+
+        media_icon = "🖼" if media_type == "photo" else "🎬"
         summary = (
             f"📝 <b>Проверьте данные:</b>\n\n"
             f"📌 Название: {data['title']}\n"
@@ -1467,7 +1520,8 @@ class TelegramBot(PlatformBot):
             f"📅 Дата: {date_str}\n"
             f"📍 Место: {loc}\n"
             f"💰 Цена: {data['price']:.0f}₽\n"
-            f"🎟 Билетов: {data['tickets']}\n\n"
+            f"🎟 Билетов: {data['tickets']}\n"
+            f"{media_icon} Афиша: загружена\n\n"
             f"✅ <b>Подтвердите создание</b> или нажмите «Отмена»."
         )
         kb = InlineKeyboardMarkup(
@@ -1478,7 +1532,21 @@ class TelegramBot(PlatformBot):
                 ]
             ]
         )
-        await message.answer(summary, parse_mode="HTML", reply_markup=kb)
+
+        if media_type == "photo":
+            await message.answer_photo(
+                photo=file_id,
+                caption=summary,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+        else:
+            await message.answer_video(
+                video=file_id,
+                caption=summary,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
 
     # ─── /events_all ─────────────────────────────────────────────────────
 
@@ -1652,7 +1720,7 @@ class TelegramBot(PlatformBot):
         for event in events:
             try:
                 text = self._format_event_text(event, "full")
-                await self.channel.post_event_announcement(text, event.id, channel.telegram_channel_id)
+                await self.channel.post_event_announcement(text, event.id, channel.telegram_channel_id, event=event)
                 posted += 1
             except Exception as e:
                 logger.error("Ошибка репоста %s: %s", event.id, e)
@@ -2019,6 +2087,34 @@ class TelegramBot(PlatformBot):
                         "Например: <code>1500</code> или <code>0</code> для бесплатного.",
                         parse_mode="HTML",
                     )
+                elif field == "media":
+                    await state.set_state(CreateEvent.confirm)
+                    data_dict = await state.get_data()
+                    header = await self._fsm_header(data_dict)
+                    date = datetime.fromisoformat(data_dict["date"])
+                    date_str = date.strftime("%d.%m.%Y %H:%M")
+                    desc = data_dict.get("description") or "—"
+                    loc = data_dict.get("location") or "—"
+                    summary = (
+                        f"📝 <b>Проверьте данные:</b>\n\n"
+                        f"📌 Название: {data_dict['title']}\n"
+                        f"📖 Описание: {desc}\n"
+                        f"📅 Дата: {date_str}\n"
+                        f"📍 Место: {loc}\n"
+                        f"💰 Цена: {data_dict['price']:.0f}₽\n"
+                        f"🎟 Билетов: {data_dict['tickets']}\n"
+                        f"🖼 Афиша: нет\n\n"
+                        f"✅ <b>Подтвердите создание</b> или нажмите «Отмена»."
+                    )
+                    kb = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin:confirm_create"),
+                                InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel_create"),
+                            ]
+                        ]
+                    )
+                    await callback.message.edit_text(summary, parse_mode="HTML", reply_markup=kb)
             await callback.answer()
             return
 
@@ -2051,6 +2147,10 @@ class TelegramBot(PlatformBot):
                         total_tickets=fsm_data["tickets"],
                         channel_id=fsm_data["channel_id"],
                     )
+                    # Сохраняем медиа-афишу, если загружена
+                    if fsm_data.get("media_file_id"):
+                        event.media_telegram_file_id = fsm_data["media_file_id"]
+                        event.media_type = fsm_data["media_type"]
                     await session.commit()
             except Exception as e:
                 await callback.message.edit_text(
@@ -2248,7 +2348,7 @@ class TelegramBot(PlatformBot):
                 for ev in events:
                     try:
                         text = self._format_event_text(ev, "full")
-                        await self.channel.post_event_announcement(text, ev.id, ch.telegram_channel_id)
+                        await self.channel.post_event_announcement(text, ev.id, ch.telegram_channel_id, event=ev)
                         posted += 1
                     except Exception as e:
                         logger.error("Ошибка репоста %s: %s", ev.id, e)
@@ -2817,7 +2917,7 @@ class TelegramBot(PlatformBot):
 
             try:
                 text = self._format_event_text(event, "full")
-                await self.channel.post_event_announcement(text, event.id, channel_obj.telegram_channel_id)
+                await self.channel.post_event_announcement(text, event.id, channel_obj.telegram_channel_id, event=event)
                 await callback.answer("✅ Анонс перепощен в канал!", show_alert=True)
             except Exception:
                 await callback.answer("❌ Ошибка репоста.", show_alert=True)
@@ -2894,7 +2994,7 @@ class TelegramBot(PlatformBot):
                 channel = await channel_svc.get_by_id(event.channel_id)
                 if channel:
                     text = self._format_event_text(event, "full")
-                    await self.channel.post_event_announcement(text, event.id, channel.telegram_channel_id)
+                    await self.channel.post_event_announcement(text, event.id, channel.telegram_channel_id, event=event)
 
     # ═══════════════════════════════════════════════════════
     # ЗАПУСК / ОСТАНОВКА

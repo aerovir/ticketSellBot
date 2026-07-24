@@ -92,3 +92,4 @@
 | 67 | Feat: логирование сервисного слоя — EventService, TicketService, ChannelService, UserService | ✅ done | 2026-07-24 | — |
 | 68 | Feat: логирование ключевых хендлеров Telegram-бота (start, buy, callback, chat_member) | ✅ done | 2026-07-24 | — |
 | 69 | Feat: управление публикацией мероприятия — поле is_published, черновики, кнопка Опубликовать | ✅ done | 2026-07-24 | — |
+| 70 | Feat: афиша мероприятия (медиа-файлы через Telegram File Server) | ✅ done | 2026-07-24 | — |

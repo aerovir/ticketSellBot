@@ -32,22 +32,51 @@ class ChannelManager:
         self.bot = bot
         self.bot_username = bot_username
 
-    async def post_event_announcement(self, text: str, event_id: UUID, channel_telegram_id: str):
+    async def post_event_announcement(self, text: str, event_id: UUID, channel_telegram_id: str, event: Event | None = None):
         """Отправляет анонс мероприятия в указанный канал с inline-кнопками.
+
+        Если у мероприятия есть афиша (media_telegram_file_id) — отправляет
+        её как фото или видео с текстом в caption.
 
         Args:
             text: Готовый форматированный текст анонса (HTML).
             event_id: ID мероприятия для callback_data кнопки покупки.
             channel_telegram_id: Куда отправлять.
+            event: Объект мероприятия (нужен для медиа). Если не передан —
+                   отправляет только текст.
         """
-        # Быстрая покупка — единственная inline-кнопка в анонсе.
-        # Остальные действия — через Menu Button в личных сообщениях (/events, /my_tickets, /admin).
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="🎟 Купить", callback_data=f"channel_buy:{event_id}"),
             ],
         ])
 
+        # Если передан event с афишей — отправляем фото/видео
+        if event and event.media_telegram_file_id:
+            try:
+                if event.media_type == "video":
+                    await self.bot.send_video(
+                        chat_id=channel_telegram_id,
+                        video=event.media_telegram_file_id,
+                        caption=text,
+                        parse_mode="HTML",
+                        reply_markup=kb,
+                    )
+                else:
+                    await self.bot.send_photo(
+                        chat_id=channel_telegram_id,
+                        photo=event.media_telegram_file_id,
+                        caption=text,
+                        parse_mode="HTML",
+                        reply_markup=kb,
+                    )
+                logger.info("Анонс (с медиа) отправлен в канал %s", channel_telegram_id)
+                return
+            except Exception as e:
+                logger.error("Ошибка отправки анонса с медиа в канал %s: %s", channel_telegram_id, e)
+                # Падаем в send_message, если медиа не отправилось
+
+        # Fallback: текстовый анонс без медиа
         try:
             await self.bot.send_message(
                 chat_id=channel_telegram_id,
@@ -56,7 +85,7 @@ class ChannelManager:
                 disable_web_page_preview=True,
                 reply_markup=kb,
             )
-            logger.info("Анонс отправлен в канал %s: %s", channel_telegram_id, event.title)
+            logger.info("Анонс отправлен в канал %s", channel_telegram_id)
         except Exception as e:
             logger.error("Ошибка отправки анонса в канал %s: %s", channel_telegram_id, e)
 

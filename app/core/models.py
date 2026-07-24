@@ -89,6 +89,8 @@ class Event(Base):
     available_tickets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    media_telegram_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    media_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "photo" или "video"
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
