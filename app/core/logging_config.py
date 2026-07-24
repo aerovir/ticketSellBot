@@ -76,19 +76,6 @@ class CompactJsonFormatter(logging.Formatter):
         return json.dumps(log_entry, ensure_ascii=False, default=str)
 
 
-class EventTypeFilter(logging.Filter):
-    """Добавляет event_type по умолчанию, если не указан."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if not hasattr(record, "event_type"):
-            record.event_type = ""
-        if not hasattr(record, "status"):
-            record.status = ""
-        if not hasattr(record, "platform"):
-            record.platform = ""
-        return True
-
-
 def setup_logging(
     logger_name: str = "ticketbot",
     extra_fields: dict | None = None,
@@ -108,7 +95,6 @@ def setup_logging(
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
-    handler.addFilter(EventTypeFilter())
 
     # Настраиваем корневой логгер
     root_logger = logging.getLogger()
