@@ -76,3 +76,22 @@ deploy-beget: ## Полный деплой на Beget
 		seed 2>/dev/null || true
 	docker compose -f ../docker-compose.yml -f docker-compose.beget.yml up -d telegram
 	@echo "✅ Деплой Telegram на Beget завершён"
+
+# ─── Логи через SSH на VPS ──────────────────────────
+
+PROJ_DIR=/home/user/actions-runner/_work/ticketSellBot/ticketSellBot
+COMPOSE_FILES=-f docker-compose.yml -f deploy/docker-compose.beget.yml -f deploy/docker-compose.monitoring.yml
+
+logs-app: ## Бизнес-логи (event_type) с VPS. LINES=30 — последние N строк
+	@lines=${LINES:-50}; \
+	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram | grep event_type || echo "(нет event_type-логов)"'
+
+logs-raw: ## Сырые логи telegram-бота с VPS. LINES=50 — последние N строк
+	@lines=${LINES:-50}; \
+	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram'
+
+logs-health: ## Статус контейнеров на VPS
+	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps'
+
+logs-monitor: ## Статус мониторинга (Loki, Promtail, Grafana) на VPS
+	ssh vps 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps loki promtail grafana'
