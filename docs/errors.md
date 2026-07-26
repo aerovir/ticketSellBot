@@ -693,3 +693,32 @@
   - `test_admin_ev_page_pagination`
 
 - **Связанные ошибки:** #038 (логировал ошибку `list_channels`, но не устранил корень)
+
+---
+
+## 040 — При активации подписки на новый канал админы не синхронизируются (прочерк в списке)
+
+- **Дата:** 2026-07-26
+- **Статус:** ✅ Исправлено
+- **Описание:** Super-admin подписывает канал через `/subscribe @channel 30` (или FSM-кнопку «Подписать»). Канал создаётся в БД, но при просмотре «📋 Список каналов» у канала в графе «Админы» стоит прочерк. Админ канала не может управлять мероприятиями.
+- **Анализ:**
+  - **Подтверждено (`app/platforms/telegram/bot.py:1154-1166`):**
+    - При создании канала через подписку (else-ветка, когда канала нет в БД по @username) код создаёт канал, активирует подписку, но НЕ вызывает `get_chat_administrators` + `sync_admins`.
+    - Аналогичная проблема во втором else-блоке в `admin_subscribe()` (строка 1915-1929).
+    - В `if channel:`-ветках (канал уже есть в БД) синхронизация админов есть.
+    - Логи: `subscription.activated` есть, `channel_admins.synced` нет.
+- **Исправление (подтверждено: `app/platforms/telegram/bot.py:1154-1166` и `1915-1929`):**
+  В обе else-ветки добавлен блок:
+  ```python
+  admin_svc = ChannelAdminService(session)
+  try:
+      admins = await self.bot.get_chat_administrators(chat_id=channel_telegram_id)
+      admin_ids = [str(a.user.id) for a in admins
+                   if a.status in ("creator", "administrator") and not a.user.is_bot]
+      if admin_ids:
+          await admin_svc.sync_admins(channel.id, admin_ids)
+          channel.admin_telegram_user_id = admin_ids[0]
+  except Exception:
+      pass  # бот не в канале — норм, сообщение подскажет
+  ```
+- **Связанные ошибки:** нет

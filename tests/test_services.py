@@ -107,6 +107,57 @@ class TestChannelService:
 
         assert set(old_admins) == {"test_12345", "second_admin"}
 
+    async def test_channel_activated_then_admin_synced(self, db_session):
+        """Канал создан и активирован — админ добавляется через sync_admins.
+
+        Симуляция: суперадмин подписывает новый канал (бота нет в БД).
+        Канал создаётся, активируется. Если бот в канале — админы
+        синхронизируются. Проверяем, что после sync_admins админ виден.
+        """
+        svc = ChannelService(db_session)
+        admin_svc = ChannelAdminService(db_session)
+
+        channel = await svc.create(
+            telegram_channel_id="@test_new_ch_sub",
+            admin_telegram_user_id="",
+            title="New via subscribe",
+        )
+        await svc.activate_subscription(
+            channel.id, duration_days=30, tier=SubscriptionTier.pro,
+        )
+        await db_session.commit()
+
+        # Синхронизация админов (что и должна делать subscribe-ветка)
+        await admin_svc.sync_admins(channel.id, ["sub_admin_id"])
+        await db_session.commit()
+
+        admin_ids = await admin_svc.get_admin_ids(channel.id)
+        assert "sub_admin_id" in admin_ids
+
+        channels = await svc.get_channels_by_admin("sub_admin_id")
+        assert any(ch.id == channel.id for ch in channels)
+
+    async def test_channel_activated_no_admins_before_sync(self, db_session):
+        """Канал без синхронизации админов — список пуст.
+
+        Симуляция: бот ещё не в канале (get_chat_administrators не вызван).
+        В channel_admins никого нет — прочерк в списке каналов.
+        Это ожидаемое временное состояние до добавления бота.
+        """
+        svc = ChannelService(db_session)
+        admin_svc = ChannelAdminService(db_session)
+
+        channel = await svc.create(
+            telegram_channel_id="@test_no_bot_yet",
+            admin_telegram_user_id="",
+            title="Bot not in channel",
+        )
+        await svc.activate_subscription(channel.id, duration_days=30)
+        await db_session.commit()
+
+        admin_ids = await admin_svc.get_admin_ids(channel.id)
+        assert admin_ids == []
+
 
 # ═══════════════════════════════════════════════════════════════
 # ChannelService — Subscription tiers
