@@ -30,6 +30,7 @@ PAGE_SIZE = 5  # мероприятий/билетов на страницу
 # ─── Наборы команд для Menu Button ────────────────────────────────
 ADMIN_COMMANDS = [
     BotCommand(command="menu", description="🎛 Панель управления"),
+    BotCommand(command="check", description="🔍 Проверить билет"),
 ]
 
 SUPER_ADMIN_COMMANDS = [
@@ -691,7 +692,10 @@ class TelegramBot(PlatformBot):
             InlineKeyboardButton(text="📋 Мои мероприятия", callback_data="admin_menu:events_all"),
         ])
         rows.append([
+            InlineKeyboardButton(text="🔍 Проверить билет", callback_data="admin_menu:check_ticket"),
             InlineKeyboardButton(text="🔄 Репост анонсов", callback_data="admin_menu:repost_events"),
+        ])
+        rows.append([
             InlineKeyboardButton(text="📢 Мои каналы", callback_data="admin_menu:my_channels"),
         ])
 
@@ -1254,6 +1258,56 @@ class TelegramBot(PlatformBot):
                     ticket = await ticket_svc.admin_cancel_ticket(ticket_id)
                     await session.commit()
                     await message.answer(f"✅ Билет <code>{ticket_id}</code> возвращён.", parse_mode="HTML")
+                except ValueError as e:
+                    await message.answer(f"❌ {e}")
+            await state.clear()
+            return
+
+        if action == "check_ticket":
+            code = user_input.strip().upper()
+            if len(code) == 8 and "-" not in code:
+                code = f"{code[:4]}-{code[4:]}"
+
+            async with async_session_factory() as session:
+                ticket_svc = TicketService(session)
+                result = await ticket_svc.validate_ticket(code)
+
+                if not result["found"]:
+                    await message.answer(f"❌ Билет с кодом <code>{code}</code> не найден.", parse_mode="HTML")
+                    await state.clear()
+                    return
+
+                if result["status"] == "checked_in":
+                    await message.answer(
+                        f"🟡 <b>Билет уже использован</b>\n\n"
+                        f"👤 {result['user_name']}\n"
+                        f"🎫 {result['event_title']}\n"
+                        f"⏰ Вход: {result['checked_in_at']}",
+                        parse_mode="HTML",
+                    )
+                    await state.clear()
+                    return
+
+                if result["status"] == "refunded":
+                    await message.answer(
+                        f"❌ <b>Билет возвращён</b>\n\n"
+                        f"👤 {result['user_name']}\n"
+                        f"🎫 {result['event_title']}",
+                        parse_mode="HTML",
+                    )
+                    await state.clear()
+                    return
+
+                try:
+                    await ticket_svc.check_in_by_code(code, str(message.from_user.id))
+                    await session.commit()
+                    await message.answer(
+                        f"✅ <b>Вход разрешён</b>\n\n"
+                        f"👤 {result['user_name']}\n"
+                        f"🎫 {result['event_title']}\n"
+                        f"⏰ {datetime.now(timezone.utc).strftime('%H:%M')} UTC",
+                        parse_mode="HTML",
+                    )
                 except ValueError as e:
                     await message.answer(f"❌ {e}")
             await state.clear()
@@ -2567,6 +2621,7 @@ class TelegramBot(PlatformBot):
                 "unsubscribe": "🔴 <b>Подписка (отключение)</b>\n\nВведите @username канала:",
                 "change_admin": "🔄 <b>Смена администратора канала</b>\n\nВведите @username канала и новый Telegram ID через пробел:\nПример: <code>@my_channel 123456789</code>",
                 "admin_cancel": "✅ <b>Отмена билета (админ)</b>\n\nВведите ID билета:",
+                "check_ticket": "🔍 <b>Проверка билета</b>\n\nВведите код билета для проверки:\nПример: <code>AB3X-K7M9</code>",
             }
             if action in input_actions:
                 await state.update_data(admin_action=action)

@@ -195,6 +195,43 @@ class TestAdminCommands:
         kwargs = mock_message.answer.call_args[1]
         assert "reply_markup" in kwargs
 
+    async def test_admin_menu_has_check_ticket_button(self, telegram_bot, mock_message):
+        """В админ-меню есть кнопка проверки билетов."""
+        with patch(
+            "app.platforms.telegram.bot.settings.admin_telegram_ids",
+            "12345",
+        ):
+            mock_message.text = "/admin"
+            await telegram_bot.admin_menu(mock_message)
+
+        kwargs = mock_message.answer.call_args[1]
+        kb = kwargs["reply_markup"]
+        found = False
+        for row in kb.inline_keyboard:
+            for btn in row:
+                if "Проверить билет" in btn.text:
+                    assert btn.callback_data == "admin_menu:check_ticket"
+                    found = True
+        assert found, "Кнопка 'Проверить билет' не найдена в админ-меню"
+
+    async def test_admin_menu_check_ticket_for_non_super(self, telegram_bot, mock_message):
+        """Обычный админ тоже видит кнопку проверки билетов."""
+        mock_channel = Mock()
+        mock_channel.id = uuid.uuid4()
+
+        with patch.object(telegram_bot, "_get_admin_channel", new_callable=AsyncMock, return_value=mock_channel):
+            mock_message.text = "/admin"
+            await telegram_bot.admin_menu(mock_message)
+
+        kwargs = mock_message.answer.call_args[1]
+        kb = kwargs["reply_markup"]
+        found = False
+        for row in kb.inline_keyboard:
+            for btn in row:
+                if "Проверить билет" in btn.text:
+                    found = True
+        assert found, "Кнопка проверки билетов должна быть видна и обычному админу"
+
     async def test_admin_create_event_unauthorized(self, telegram_bot, mock_message):
         """Обычный пользователь не может создать мероприятие."""
         mock_message.from_user.id = 99999
@@ -686,6 +723,29 @@ class TestAdminMenuSelectScope:
             )
             await telegram_bot.cmd_callback(mock_callback, mock_state)
 
+        mock_callback.answer.assert_awaited_once()
+
+    # ─── check_ticket (admin_menu) ────────────────────────────
+
+    async def test_check_ticket_callback_opens_fsm(self, telegram_bot, mock_callback):
+        """admin_menu:check_ticket — открывает FSM для ввода кода."""
+        mock_callback.data = "admin_menu:check_ticket"
+        mock_callback.message.chat.type = "private"
+        mock_state = AsyncMock()
+        mock_state.get_data = AsyncMock(return_value={})
+
+        with (
+            patch(
+                "app.platforms.telegram.bot.settings.admin_telegram_ids",
+                "12345",
+            ),
+        ):
+            await telegram_bot.cmd_callback(mock_callback, mock_state)
+
+        mock_state.set_state.assert_awaited_once()
+        mock_callback.message.answer.assert_awaited_once()
+        answer_text = mock_callback.message.answer.call_args[0][0]
+        assert "код" in answer_text.lower() or "билет" in answer_text.lower()
         mock_callback.answer.assert_awaited_once()
 
 
