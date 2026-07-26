@@ -23,6 +23,9 @@ dev = [
     "pytest-timeout>=2.3",
     "httpx>=0.28",
 ]
+monitoring = [
+    "psutil>=5.9",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

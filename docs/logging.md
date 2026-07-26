@@ -100,6 +100,10 @@
 | `event.updated` | INFO | Изменено мероприятие | `event_id`, `changed` (какие поля) |
 | `event.toggled` | INFO | Включено/отключено | `event_id`, `is_active` |
 | `event.deleted` | INFO | Удалено (soft delete) | `event_id`, `event_title` |
+| `event.get_by_id` | INFO | Запрос деталей мероприятия | `event_id`, `found` |
+| `event.list_upcoming` | INFO | Список предстоящих мероприятий | `channel_id`, `count` |
+| `event.list_all` | INFO | Все мероприятия админа | `channel_id`, `count` |
+| `event.get_stats` | INFO | Статистика продаж | `event_id`, `sold`, `refunded`, `revenue` |
 
 ### Пользователи
 
@@ -117,6 +121,12 @@
 |---|---|---|---|
 | `channel.created` | INFO | Создан канал в БД | `channel_id`, `telegram_channel_id` |
 | `channel.admin_changed` | INFO | Смена администратора | `channel_id`, `old_admin_ids`, `new_admin_id` |
+| `channel.get_by_telegram_id` | INFO | Поиск канала по ID | `telegram_channel_id`, `found` |
+| `channel.get_by_id` | INFO | Поиск канала по UUID | `channel_id`, `found` |
+| `channel.subscription_check` | INFO | Проверка подписки | `channel_id`, `valid`, `reason` |
+| `channel.get_active_unassigned` | INFO | Поиск канала без админа | `found` |
+| `channel.get_ids_by_admin` | INFO | ID каналов админа | `admin_id`, `count` |
+| `channel.get_channels_by_admin` | INFO | Каналы админа | `admin_id`, `count` |
 | `subscription.activated` | INFO | Активирована подписка | `channel_id`, `duration_days`, `subscription_until` |
 | `subscription.deactivated` | INFO | Деактивирована подписка | `channel_id` |
 | `subscription.auto_expired` | INFO | Авто-деактивация просрочки | `channel_id` |
@@ -127,6 +137,22 @@
 |---|---|---|---|
 | `channel_admins.synced` | INFO | Синхронизация админов | `channel_id`, `added`, `removed` |
 | `channel_admin.removed` | INFO | Удалён администратор | `channel_id`, `user_id` |
+| `channel_admin.get_ids` | INFO | Список админов канала | `channel_id`, `count` |
+| `channel_admin.user_is_admin` | INFO | Проверка прав админа | `channel_id`, `user_id`, `is_admin` |
+
+### Билеты (чтение)
+
+| event_type | Уровень | Когда | Доп. поля |
+|---|---|---|---|
+| `ticket.get_user_tickets` | INFO | Билеты пользователя | `user_id`, `count` |
+| `ticket.get_event_tickets` | INFO | Билеты на мероприятие (админ) | `event_id`, `count` |
+
+### Системные метрики (фоновый сбор)
+
+| event_type | Уровень | Когда | Доп. поля |
+|---|---|---|---|
+| `system.metrics` | INFO | Каждые 60с фоновым сборщиком | `cpu_percent`, `memory_percent`, `disk_percent`, `load_1m`, `load_5m`, `load_15m` |
+| `system.metrics_error` | WARNING | Ошибка сбора метрик | `error` |
 
 ### Системные события Telegram
 
@@ -135,6 +161,74 @@
 | `callback.received` | INFO | Нажата inline-кнопка | `callback_data`, `user_id` |
 | `bot.added_to_channel` | INFO | Бот добавлен в канал | `channel_id`, `adder_id` |
 | `bot.removed_from_channel` | INFO | Бот удалён из канала | `channel_id` |
+
+---
+
+## Самодиагностика производительности
+
+Проект содержит систему самодиагностики, которая проверяет пороги производительности
+и отправляет алерт в Telegram super-admin'у при превышении.
+
+### Скрипт: `scripts/self-diagnose.py`
+
+```bash
+# Полная диагностика (через SSH на сервере)
+make -C deploy diagnose
+
+# С принудительным алертом в Telegram
+make -C deploy diagnose-alert
+```
+
+**4 шага диагностики:**
+1. **System** — CPU, RAM, disk, load average (psutil или /proc)
+2. **DB** — активные соединения, блокировки, долгие запросы, размер БД
+3. **App logs** — парсинг Docker-логов: p50/p95 duration_ms, error rate, RPS, типы событий
+4. **Threshold check** — сравнение метрик с порогами, алерт в Telegram при превышении
+
+### Пороги
+
+| Метрика | Warning | Critical |
+|---------|---------|----------|
+| CPU usage | >70% | >90% |
+| RAM usage | >75% | >90% |
+| Disk usage | >75% | >90% |
+| DB connections | >70% от max_connections | >90% от max_connections |
+| p95 latency | >500ms | >1000ms |
+| Error rate | >2% | >5% |
+| Load per CPU | >2.0 | >4.0 |
+
+### Фоновый сбор метрик: `app/core/system_metrics.py`
+
+Запускается как asyncio-задача внутри Telegram бота.
+Каждые 60 секунд логирует `event_type: system.metrics` с CPU/RAM/disk/load.
+
+Не требует новых зависимостей — использует `psutil` (optional dep `[monitoring]`)
+или читает `/proc` как fallback.
+
+### Makefile-цели
+
+```bash
+make -C deploy diagnose           # 🩺 Полная диагностика
+make -C deploy diagnose-alert     # + алерт в Telegram
+make -C deploy diagnose-verbose   # подробный вывод
+```
+
+### Автоматический режим
+
+Система самодиагностики работает в двух режимах одновременно:
+
+1. **Внутри бота** — `metrics_loop` раз в 60с проверяет CPU/RAM/disk/load. При превышении порогов отправляет алерт super-admin'у в Telegram (с cooldown 5 мин, чтобы не спамить)
+2. **Cron на сервере** — `scripts/cron-diagnose.py` запускает полную диагностику (включая БД и RPS) раз в 5 минут через crontab
+
+**Cron-задание устанавливается автоматически** при деплое через GitHub Actions (шаг `⏰ Установить cron-задание самодиагностики` в `deploy.yml`). При каждом деплое проверяется актуальность — если команда совпадает, ничего не меняется.
+
+Лог cron: `/var/log/ticketbot-diagnose.log`
+
+Проверить вручную на сервере:
+```bash
+ssh vps 'crontab -l | grep cron-diagnose'
+tail -f /var/log/ticketbot-diagnose.log'
+```
 
 ---
 
@@ -216,7 +310,8 @@ logger = setup_logging("ticketbot.telegram", {"platform": "telegram"}, debug=set
 
 ### Зависимости
 
-**Нет внешних зависимостей.** `CompactJsonFormatter` написан на стандартном `logging` + `json`.
+- **`CompactJsonFormatter`** — написан на стандартном `logging` + `json` (нет внешних зависимостей)
+- **`psutil`** — опционально (`pip install ticketbot[monitoring]`), для фонового сбора метрик системы. Без него метрики собираются через `/proc`
 
 ---
 
@@ -271,6 +366,13 @@ make -C deploy logs-health
 
 # Статус мониторинга (Loki, Promtail, Grafana)
 make -C deploy logs-monitor
+
+# 🩺 Самодиагностика
+make -C deploy diagnose           # полная диагностика
+make -C deploy diagnose-alert     # + алерт в Telegram
+make -C deploy diagnose-verbose   # подробный вывод
+
+# ⏰ Авто-диагностика (cron) устанавливается GitHub Actions при деплое
 ```
 
 ### Логи через Grafana

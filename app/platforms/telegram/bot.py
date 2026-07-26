@@ -19,6 +19,7 @@ from app.core.models import (
     TicketStatus, PaymentStatus,
 )
 from app.core.services import UserService, EventService, TicketService, ChannelService, ChannelAdminService
+from app.core.system_metrics import metrics_loop
 from app.platforms.base import PlatformBot
 from app.platforms.telegram.channel import ChannelManager
 
@@ -3036,6 +3037,9 @@ class TelegramBot(PlatformBot):
                     commands=ADMIN_COMMANDS,
                     scope=BotCommandScopeAllPrivateChats(),
                 )
+
+                # Запускаем фоновый сбор метрик системы (каждые 60с)
+                asyncio.create_task(metrics_loop(interval=60))
 
                 await self.dp.start_polling(
                     self.bot,

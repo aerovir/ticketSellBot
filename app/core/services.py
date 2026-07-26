@@ -68,13 +68,31 @@ class ChannelService:
 
     async def get_by_telegram_id(self, telegram_channel_id: str) -> Channel | None:
         """Look up a channel by its Telegram chat_id or @username."""
+        start = time.perf_counter()
         stmt = select(Channel).where(Channel.telegram_channel_id == telegram_channel_id)
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        channel = result.scalar_one_or_none()
+        logger.info("", extra={
+            "event_type": "channel.get_by_telegram_id",
+            "telegram_channel_id": telegram_channel_id,
+            "found": channel is not None,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return channel
 
     async def get_by_id(self, channel_id: uuid.UUID) -> Channel | None:
         """Look up a channel by its UUID."""
-        return await self.session.get(Channel, channel_id)
+        start = time.perf_counter()
+        channel = await self.session.get(Channel, channel_id)
+        logger.info("", extra={
+            "event_type": "channel.get_by_id",
+            "channel_id": str(channel_id),
+            "found": channel is not None,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return channel
 
     async def create(
         self,
@@ -155,10 +173,27 @@ class ChannelService:
 
     async def is_subscription_valid(self, channel_id: uuid.UUID) -> bool:
         """Check if the channel has an active, non-expired subscription."""
+        start = time.perf_counter()
         channel = await self.session.get(Channel, channel_id)
         if channel is None:
+            logger.info("", extra={
+                "event_type": "channel.subscription_check",
+                "channel_id": str(channel_id),
+                "valid": False,
+                "reason": "not_found",
+                "status": "success",
+                "duration_ms": _ms(start),
+            })
             return False
         if not channel.is_subscription_active:
+            logger.info("", extra={
+                "event_type": "channel.subscription_check",
+                "channel_id": str(channel_id),
+                "valid": False,
+                "reason": "not_active",
+                "status": "success",
+                "duration_ms": _ms(start),
+            })
             return False
         if channel.subscription_until and channel.subscription_until < datetime.now(timezone.utc):
             # Auto-deactivate expired subscriptions
@@ -170,12 +205,21 @@ class ChannelService:
                 "channel_id": str(channel.id),
                 "telegram_channel_id": channel.telegram_channel_id,
                 "status": "success",
+                "duration_ms": _ms(start),
             })
             return False
+        logger.info("", extra={
+            "event_type": "channel.subscription_check",
+            "channel_id": str(channel_id),
+            "valid": True,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return True
 
     async def get_active_unassigned_channel(self) -> Channel | None:
         """Get a channel with active subscription but no admin assigned."""
+        start = time.perf_counter()
         stmt = (
             select(Channel)
             .where(
@@ -187,22 +231,54 @@ class ChannelService:
             .limit(1)
         )
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        channel = result.scalar_one_or_none()
+        logger.info("", extra={
+            "event_type": "channel.get_active_unassigned",
+            "found": channel is not None,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return channel
 
     async def get_channel_ids_by_admin(self, telegram_user_id: str) -> list[uuid.UUID]:
         """Получить ID всех каналов, где пользователь — админ (из channel_admins)."""
+        start = time.perf_counter()
         stmt = select(ChannelAdmin.channel_id).where(ChannelAdmin.telegram_user_id == telegram_user_id)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        ids = list(result.scalars().all())
+        logger.info("", extra={
+            "event_type": "channel.get_ids_by_admin",
+            "admin_id": telegram_user_id,
+            "count": len(ids),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return ids
 
     async def get_channels_by_admin(self, telegram_user_id: str) -> list[Channel]:
         """Получить все каналы, где пользователь — админ (через channel_admins)."""
+        start = time.perf_counter()
         channel_ids = await self.get_channel_ids_by_admin(telegram_user_id)
         if not channel_ids:
+            logger.info("", extra={
+                "event_type": "channel.get_channels_by_admin",
+                "admin_id": telegram_user_id,
+                "count": 0,
+                "status": "success",
+                "duration_ms": _ms(start),
+            })
             return []
         stmt = select(Channel).where(Channel.id.in_(channel_ids))
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        channels = list(result.scalars().all())
+        logger.info("", extra={
+            "event_type": "channel.get_channels_by_admin",
+            "admin_id": telegram_user_id,
+            "count": len(channels),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return channels
 
     async def change_admin(self, channel_telegram_id: str, new_admin_id: str) -> tuple[Channel, list[str]]:
         """Сменить администратора канала.
@@ -260,9 +336,18 @@ class ChannelAdminService:
 
     async def get_admin_ids(self, channel_id: uuid.UUID) -> list[str]:
         """Получить список Telegram ID админов канала."""
+        start = time.perf_counter()
         stmt = select(ChannelAdmin.telegram_user_id).where(ChannelAdmin.channel_id == channel_id)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        ids = list(result.scalars().all())
+        logger.info("", extra={
+            "event_type": "channel_admin.get_ids",
+            "channel_id": str(channel_id),
+            "count": len(ids),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return ids
 
     async def sync_admins(self, channel_id: uuid.UUID, admin_ids: list[str]):
         """Синхронизировать список админов канала с Telegram.
@@ -305,12 +390,21 @@ class ChannelAdminService:
 
     async def user_is_admin(self, channel_id: uuid.UUID, telegram_user_id: str) -> bool:
         """Проверить, является ли пользователь админом канала."""
+        start = time.perf_counter()
         stmt = select(ChannelAdmin).where(
             ChannelAdmin.channel_id == channel_id,
             ChannelAdmin.telegram_user_id == telegram_user_id,
         ).limit(1)
         result = await self.session.execute(stmt)
         is_admin = result.scalar_one_or_none() is not None
+        logger.info("", extra={
+            "event_type": "channel_admin.user_is_admin",
+            "channel_id": str(channel_id),
+            "user_id": telegram_user_id,
+            "is_admin": is_admin,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return is_admin
 
     async def remove_admin(self, channel_id: uuid.UUID, telegram_user_id: str):
@@ -339,6 +433,7 @@ class EventService:
 
     async def list_upcoming(self, channel_id: uuid.UUID | None = None) -> list[Event]:
         """Get all active, published events that haven't passed yet, optionally filtered by channel."""
+        start = time.perf_counter()
         now = datetime.now(timezone.utc)
         stmt = (
             select(Event)
@@ -350,15 +445,32 @@ class EventService:
         if channel_id is not None:
             stmt = stmt.where(Event.channel_id == channel_id)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        events = list(result.scalars().all())
+        logger.info("", extra={
+            "event_type": "event.list_upcoming",
+            "channel_id": str(channel_id) if channel_id else "all",
+            "count": len(events),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return events
 
     async def get_by_id(self, event_id: uuid.UUID, channel_id: uuid.UUID | None = None) -> Event | None:
         """Get event by ID, optionally scoped to a channel."""
+        start = time.perf_counter()
         stmt = select(Event).where(Event.id == event_id)
         if channel_id is not None:
             stmt = stmt.where(Event.channel_id == channel_id)
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        event = result.scalar_one_or_none()
+        logger.info("", extra={
+            "event_type": "event.get_by_id",
+            "event_id": str(event_id),
+            "found": event is not None,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return event
 
     async def create(self, title: str, description: Optional[str], date: datetime,
                      location: Optional[str], price: float,
@@ -394,11 +506,20 @@ class EventService:
     async def list_all(self, channel_id: uuid.UUID | None = None) -> list[Event]:
         """Get ALL events that are not deleted, newest first.
         Optionally filtered by channel."""
+        start = time.perf_counter()
         stmt = select(Event).where(Event.deleted_at.is_(None)).order_by(Event.date.desc())
         if channel_id is not None:
             stmt = stmt.where(Event.channel_id == channel_id)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        events = list(result.scalars().all())
+        logger.info("", extra={
+            "event_type": "event.list_all",
+            "channel_id": str(channel_id) if channel_id else "all",
+            "count": len(events),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return events
 
     async def update(self, event_id: uuid.UUID, **data) -> Event | None:
         """Partially update an event. Returns updated event or None."""
@@ -493,6 +614,7 @@ class EventService:
 
     async def get_event_stats(self, event_id: uuid.UUID) -> dict:
         """Get sales stats for an event."""
+        start = time.perf_counter()
         event = await self.session.get(Event, event_id)
         if event is None:
             raise ValueError("Мероприятие не найдено")
@@ -513,6 +635,17 @@ class EventService:
 
         sold_pct = round((sold / event.total_tickets * 100), 1) if event.total_tickets > 0 else 0
         revenue = sold * event.price
+
+        logger.info("", extra={
+            "event_type": "event.get_stats",
+            "event_id": str(event_id),
+            "total_tickets": event.total_tickets,
+            "sold": sold,
+            "refunded": refunded,
+            "revenue": revenue,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
 
         return {
             "total_tickets": event.total_tickets,
@@ -866,6 +999,7 @@ class TicketService:
 
     async def get_user_tickets(self, user_id: uuid.UUID, channel_id: uuid.UUID | None = None) -> list[dict]:
         """Get all tickets for a user with event info, optionally filtered by channel."""
+        start = time.perf_counter()
         stmt = (
             select(Ticket, Event.title)
             .join(Event, Ticket.event_id == Event.id)
@@ -886,12 +1020,22 @@ class TicketService:
                 "purchase_date": ticket.purchase_date,
                 "status": ticket.status.value,
             })
+
+        logger.info("", extra={
+            "event_type": "ticket.get_user_tickets",
+            "user_id": str(user_id),
+            "channel_id": str(channel_id) if channel_id else None,
+            "count": len(tickets),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return tickets
 
     # ─── Admin methods ───────────────────────────────────────────────────
 
     async def get_event_tickets(self, event_id: uuid.UUID) -> list[dict]:
         """Get all tickets for a specific event (admin view)."""
+        start = time.perf_counter()
         stmt = (
             select(Ticket, User.name, User.platform_user_id)
             .join(User, Ticket.user_id == User.id)
@@ -909,4 +1053,12 @@ class TicketService:
                 "purchase_date": ticket.purchase_date,
                 "status": ticket.status.value,
             })
+
+        logger.info("", extra={
+            "event_type": "ticket.get_event_tickets",
+            "event_id": str(event_id),
+            "count": len(tickets),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return tickets

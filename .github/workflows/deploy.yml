@@ -281,6 +281,14 @@ jobs:
           docker compose ${{ env.COMPOSE_FILES }} --profile all up -d vk
           echo "✅ VK бот запущен"
 
+      - name: ⏰ Установить cron-задание самодиагностики
+        run: |
+          CRON_CMD="*/5 * * * * cd ${GITHUB_WORKSPACE} && python3 scripts/cron-diagnose.py >> /var/log/ticketbot-diagnose.log 2>&1"
+          (crontab -l 2>/dev/null | grep -Fq "$CRON_CMD") && echo "✅ Cron-задание уже актуально" || (
+            (crontab -l 2>/dev/null | grep -v cron-diagnose; echo "$CRON_CMD") | crontab - &&
+            echo "✅ Cron-задание установлено (или обновлено)"
+          )
+
       - name: 🩺 Проверка работоспособности
         run: |
           echo "⏳ Ожидание запуска Telegram бота (до 45с)..."

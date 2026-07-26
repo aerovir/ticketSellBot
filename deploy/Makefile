@@ -91,14 +91,25 @@ endif
 
 logs-app: ## Бизнес-логи (event_type) с VPS. LINES=30 — последние N строк
 	@lines=${LINES:-50}; \
-	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram | grep event_type || echo "(нет event_type-логов)"'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram 2>/dev/null | grep event_type || echo "(нет event_type-логов)"'
 
 logs-raw: ## Сырые логи telegram-бота с VPS. LINES=50 — последние N строк
 	@lines=${LINES:-50}; \
-	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) logs --tail '$$lines' telegram 2>/dev/null'
 
 logs-health: ## Статус контейнеров на VPS
 	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps'
 
 logs-monitor: ## Статус мониторинга (Loki, Promtail, Grafana) на VPS
 	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) ps loki promtail grafana'
+
+# ─── Самодиагностика ──────────────────────────────────
+
+diagnose: ## 🩺 Полная самодиагностика: система + БД + логи + пороги
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && python3 scripts/self-diagnose.py'
+
+diagnose-alert: ## 🩺 Самодиагностика + принудительный алерт в Telegram
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && python3 scripts/self-diagnose.py --alert'
+
+diagnose-verbose: ## 🩺 Самодиагностика (подробно)
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && python3 scripts/self-diagnose.py --verbose'
