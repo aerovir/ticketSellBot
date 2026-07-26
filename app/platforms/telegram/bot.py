@@ -94,7 +94,7 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.admin_menu, Command("admin"))  # алиас для обратной совместимости
 
         # ─── Команда проверки билетов ─────────────
-        self.dp.message.register(self.cmd_check, Command("check"))
+        self.dp.message.register(self.cmd_check, Command("check"), StateFilter(None))
 
         # ─── Супер-админ команды (текстовые) ─────────
         self.dp.message.register(self.sa_stats_all, Command("stats_all"))
@@ -455,69 +455,70 @@ class TelegramBot(PlatformBot):
 
     async def cmd_check(self, message: types.Message):
         """Проверить билет по коду на входе. Usage: /check <code>"""
-        # Проверяем, что пользователь — админ канала или super-admin
-        is_super = self._is_super_admin(message.from_user.id)
-        channel = await self._get_admin_channel(message.from_user.id) if not is_super else None
+        try:
+            is_super = self._is_super_admin(message.from_user.id)
+            channel = await self._get_admin_channel(message.from_user.id) if not is_super else None
 
-        if not is_super and not channel:
-            await message.answer("❌ У вас нет доступа к проверке билетов.")
-            return
-
-        args = message.text.split(maxsplit=1)
-        if len(args) < 2:
-            await message.answer(
-                "🎫 <b>Проверка билета</b>\n\n"
-                "Введите код билета для проверки:\n"
-                "<code>/check AB3X-K7M9</code>",
-                parse_mode="HTML",
-            )
-            return
-
-        code = args[1].strip().upper()
-        # Нормализация: убираем пробелы, оставляем дефис
-        if len(code) == 8 and "-" not in code:
-            code = f"{code[:4]}-{code[4:]}"
-
-        async with async_session_factory() as session:
-            ticket_svc = TicketService(session)
-            result = await ticket_svc.validate_ticket(code)
-
-            if not result["found"]:
-                await message.answer(f"❌ Билет с кодом <code>{code}</code> не найден.", parse_mode="HTML")
+            if not is_super and not channel:
+                await message.answer("❌ У вас нет доступа к проверке билетов.")
                 return
 
-            if result["status"] == "checked_in":
+            args = message.text.split(maxsplit=1)
+            if len(args) < 2:
                 await message.answer(
-                    f"🟡 <b>Билет уже использован</b>\n\n"
-                    f"👤 {result['user_name']}\n"
-                    f"🎫 {result['event_title']}\n"
-                    f"⏰ Вход: {result['checked_in_at']}",
+                    "🎫 <b>Проверка билета</b>\n\n"
+                    "Введите код билета для проверки:\n"
+                    "<code>/check AB3X-K7M9</code>",
                     parse_mode="HTML",
                 )
                 return
 
-            if result["status"] == "refunded":
-                await message.answer(
-                    f"❌ <b>Билет возвращён</b>\n\n"
-                    f"👤 {result['user_name']}\n"
-                    f"🎫 {result['event_title']}",
-                    parse_mode="HTML",
-                )
-                return
+            code = args[1].strip().upper()
+            if len(code) == 8 and "-" not in code:
+                code = f"{code[:4]}-{code[4:]}"
 
-            # Билет активен — чекиним
-            try:
-                await ticket_svc.check_in_by_code(code, str(message.from_user.id))
-                await session.commit()
-                await message.answer(
-                    f"✅ <b>Вход разрешён</b>\n\n"
-                    f"👤 {result['user_name']}\n"
-                    f"🎫 {result['event_title']}\n"
-                    f"⏰ {datetime.now(timezone.utc).strftime('%H:%M')} UTC",
-                    parse_mode="HTML",
-                )
-            except ValueError as e:
-                await message.answer(f"❌ {e}")
+            async with async_session_factory() as session:
+                ticket_svc = TicketService(session)
+                result = await ticket_svc.validate_ticket(code)
+
+                if not result["found"]:
+                    await message.answer(f"❌ Билет с кодом <code>{code}</code> не найден.", parse_mode="HTML")
+                    return
+
+                if result["status"] == "checked_in":
+                    await message.answer(
+                        f"🟡 <b>Билет уже использован</b>\n\n"
+                        f"👤 {result['user_name']}\n"
+                        f"🎫 {result['event_title']}\n"
+                        f"⏰ Вход: {result['checked_in_at']}",
+                        parse_mode="HTML",
+                    )
+                    return
+
+                if result["status"] == "refunded":
+                    await message.answer(
+                        f"❌ <b>Билет возвращён</b>\n\n"
+                        f"👤 {result['user_name']}\n"
+                        f"🎫 {result['event_title']}",
+                        parse_mode="HTML",
+                    )
+                    return
+
+                try:
+                    await ticket_svc.check_in_by_code(code, str(message.from_user.id))
+                    await session.commit()
+                    await message.answer(
+                        f"✅ <b>Вход разрешён</b>\n\n"
+                        f"👤 {result['user_name']}\n"
+                        f"🎫 {result['event_title']}\n"
+                        f"⏰ {datetime.now(timezone.utc).strftime('%H:%M')} UTC",
+                        parse_mode="HTML",
+                    )
+                except ValueError as e:
+                    await message.answer(f"❌ {e}")
+        except Exception as e:
+            logger.error("Ошибка /check: %s", e, exc_info=True)
+            await message.answer("❌ Произошла ошибка при проверке билета. Попробуйте ещё раз.")
 
     # ═══════════════════════════════════════════════════════
     # АДМИН-ХЕНДЛЕРЫ
@@ -1264,53 +1265,58 @@ class TelegramBot(PlatformBot):
             return
 
         if action == "check_ticket":
-            code = user_input.strip().upper()
-            if len(code) == 8 and "-" not in code:
-                code = f"{code[:4]}-{code[4:]}"
+            try:
+                code = user_input.strip().upper()
+                if len(code) == 8 and "-" not in code:
+                    code = f"{code[:4]}-{code[4:]}"
 
-            async with async_session_factory() as session:
-                ticket_svc = TicketService(session)
-                result = await ticket_svc.validate_ticket(code)
+                async with async_session_factory() as session:
+                    ticket_svc = TicketService(session)
+                    result = await ticket_svc.validate_ticket(code)
 
-                if not result["found"]:
-                    await message.answer(f"❌ Билет с кодом <code>{code}</code> не найден.", parse_mode="HTML")
-                    await state.clear()
-                    return
+                    if not result["found"]:
+                        await message.answer(f"❌ Билет с кодом <code>{code}</code> не найден.", parse_mode="HTML")
+                        await state.clear()
+                        return
 
-                if result["status"] == "checked_in":
-                    await message.answer(
-                        f"🟡 <b>Билет уже использован</b>\n\n"
-                        f"👤 {result['user_name']}\n"
-                        f"🎫 {result['event_title']}\n"
-                        f"⏰ Вход: {result['checked_in_at']}",
-                        parse_mode="HTML",
-                    )
-                    await state.clear()
-                    return
+                    if result["status"] == "checked_in":
+                        await message.answer(
+                            f"🟡 <b>Билет уже использован</b>\n\n"
+                            f"👤 {result['user_name']}\n"
+                            f"🎫 {result['event_title']}\n"
+                            f"⏰ Вход: {result['checked_in_at']}",
+                            parse_mode="HTML",
+                        )
+                        await state.clear()
+                        return
 
-                if result["status"] == "refunded":
-                    await message.answer(
-                        f"❌ <b>Билет возвращён</b>\n\n"
-                        f"👤 {result['user_name']}\n"
-                        f"🎫 {result['event_title']}",
-                        parse_mode="HTML",
-                    )
-                    await state.clear()
-                    return
+                    if result["status"] == "refunded":
+                        await message.answer(
+                            f"❌ <b>Билет возвращён</b>\n\n"
+                            f"👤 {result['user_name']}\n"
+                            f"🎫 {result['event_title']}",
+                            parse_mode="HTML",
+                        )
+                        await state.clear()
+                        return
 
-                try:
-                    await ticket_svc.check_in_by_code(code, str(message.from_user.id))
-                    await session.commit()
-                    await message.answer(
-                        f"✅ <b>Вход разрешён</b>\n\n"
-                        f"👤 {result['user_name']}\n"
-                        f"🎫 {result['event_title']}\n"
-                        f"⏰ {datetime.now(timezone.utc).strftime('%H:%M')} UTC",
-                        parse_mode="HTML",
-                    )
-                except ValueError as e:
-                    await message.answer(f"❌ {e}")
-            await state.clear()
+                    try:
+                        await ticket_svc.check_in_by_code(code, str(message.from_user.id))
+                        await session.commit()
+                        await message.answer(
+                            f"✅ <b>Вход разрешён</b>\n\n"
+                            f"👤 {result['user_name']}\n"
+                            f"🎫 {result['event_title']}\n"
+                            f"⏰ {datetime.now(timezone.utc).strftime('%H:%M')} UTC",
+                            parse_mode="HTML",
+                        )
+                    except ValueError as e:
+                        await message.answer(f"❌ {e}")
+                await state.clear()
+            except Exception as e:
+                logger.error("Ошибка проверки билета (FSM): %s", e, exc_info=True)
+                await message.answer("❌ Произошла ошибка при проверке билета. Попробуйте ещё раз.")
+                await state.clear()
             return
 
         await message.answer("❌ Неизвестное действие.")
