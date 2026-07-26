@@ -211,33 +211,42 @@ async def collect_db_metrics() -> dict:
 
 # ─── Шаг 3: Application metrics из логов ──────────────────
 
-def collect_app_metrics(tail_lines: int = 500) -> dict:
+def collect_app_metrics(tail_lines: int = 500, raw_logs: str | None = None) -> dict:
     """Проанализировать Docker-логи Telegram бота.
 
     Парсит JSON-строки с event_type, duration_ms и status.
     Вычисляет: RPS, p95 latency, error rate, распределение по типам.
+
+    Args:
+        tail_lines: Сколько строк анализировать.
+        raw_logs: Готовый текст логов. Если None — читает через docker compose.
     """
-    print(f"🔍 Логи приложения (последние {tail_lines} строк)...")
+    if raw_logs is not None:
+        print(f"🔍 Логи приложения (из stdin)...")
+    else:
+        print(f"🔍 Логи приложения (последние {tail_lines} строк)...")
+
     metrics = {}
 
-    try:
-        docker_cmd = [
-            "docker", "compose"] + COMPOSE_FILES.split() + [
-            "logs", "--tail", str(tail_lines), "telegram"
-        ]
-        result = subprocess.run(
-            docker_cmd, capture_output=True, text=True, timeout=15,
-        )
-        raw_logs = result.stdout + result.stderr
-    except FileNotFoundError:
-        fail("Docker не найден")
-        return {"app_error": "docker not found"}
-    except subprocess.TimeoutExpired:
-        fail("Таймаут при чтении логов Docker")
-        return {"app_error": "timeout"}
-    except Exception as e:
-        fail(f"Ошибка чтения логов: {e}")
-        return {"app_error": str(e)}
+    if raw_logs is None:
+        try:
+            docker_cmd = [
+                "docker", "compose"] + COMPOSE_FILES.split() + [
+                "logs", "--tail", str(tail_lines), "telegram"
+            ]
+            result = subprocess.run(
+                docker_cmd, capture_output=True, text=True, timeout=15,
+            )
+            raw_logs = result.stdout + result.stderr
+        except FileNotFoundError:
+            fail("Docker не найден")
+            return {"app_error": "docker not found"}
+        except subprocess.TimeoutExpired:
+            fail("Таймаут при чтении логов Docker")
+            return {"app_error": "timeout"}
+        except Exception as e:
+            fail(f"Ошибка чтения логов: {e}")
+            return {"app_error": str(e)}
 
     durations = defaultdict(list)
     error_count = 0
@@ -488,6 +497,8 @@ async def main():
     parser = argparse.ArgumentParser(description="Самодиагностика TicketBot")
     parser.add_argument("--verbose", "-v", action="store_true", help="Подробный вывод")
     parser.add_argument("--alert", action="store_true", help="Принудительно отправить алерт (даже если всё ОК)")
+    parser.add_argument("--logs-from-stdin", action="store_true",
+                        help="Читать Docker-логи из stdin (для запуска внутри контейнера)")
     parser.add_argument("--tail", type=int, default=500, help="Сколько строк логов анализировать")
     args = parser.parse_args()
 
@@ -505,7 +516,10 @@ async def main():
     print()
 
     # Шаг 3: Логи приложения
-    app = collect_app_metrics(tail_lines=args.tail)
+    logs_data = None
+    if args.logs_from_stdin:
+        logs_data = sys.stdin.read()
+    app = collect_app_metrics(tail_lines=args.tail, raw_logs=logs_data)
     print()
 
     # Шаг 4: Пороги

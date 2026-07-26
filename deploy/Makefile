@@ -106,10 +106,10 @@ logs-monitor: ## Статус мониторинга (Loki, Promtail, Grafana) �
 # ─── Самодиагностика ──────────────────────────────────
 
 diagnose: ## 🩺 Полная самодиагностика: система + БД + логи + пороги
-	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && python3 scripts/self-diagnose.py'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) exec -T telegram python scripts/self-diagnose.py'
 
 diagnose-alert: ## 🩺 Самодиагностика + принудительный алерт в Telegram
-	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && python3 scripts/self-diagnose.py --alert'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) exec -T telegram python scripts/self-diagnose.py --alert'
 
 diagnose-verbose: ## 🩺 Самодиагностика (подробно)
-	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && python3 scripts/self-diagnose.py --verbose'
+	ssh $(SSH_HOST) 'cd $(PROJ_DIR) && docker compose $(COMPOSE_FILES) exec -T telegram python scripts/self-diagnose.py --verbose'
