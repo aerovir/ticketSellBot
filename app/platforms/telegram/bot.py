@@ -30,7 +30,6 @@ PAGE_SIZE = 5  # мероприятий/билетов на страницу
 # ─── Наборы команд для Menu Button ────────────────────────────────
 ADMIN_COMMANDS = [
     BotCommand(command="menu", description="🎛 Панель управления"),
-    BotCommand(command="check", description="🔍 Проверить билет"),
 ]
 
 SUPER_ADMIN_COMMANDS = [
