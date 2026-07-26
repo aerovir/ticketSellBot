@@ -48,6 +48,11 @@ _THRESHOLDS = {
 _ALERT_COOLDOWN = 300  # 5 минут
 _last_alert: dict[str, float] = {}  # metric_name -> last_alert_time
 
+# Grace period после старта: не проверять пороги первые N секунд
+# (чтобы избежать ложных срабатываний во время деплоя, когда CPU в пике)
+_STARTUP_GRACE_PERIOD = 180  # 3 минуты
+_bot_start_time: float = time.monotonic()
+
 
 def _fmt(val, unit=""):
     if isinstance(val, float):
@@ -126,8 +131,16 @@ def _check_thresholds_and_alert(metrics: dict):
 
     Использует cooldown — не шлёт повторный алерт по той же метрике
     чаще чем раз в _ALERT_COOLDOWN секунд.
+
+    Grace period: первые _STARTUP_GRACE_PERIOD секунд после старта бота
+    алерты не отправляются (чтобы избежать ложных срабатываний при деплое).
     """
     now = time.monotonic()
+
+    # Grace period: не алертим сразу после старта
+    if now - _bot_start_time < _STARTUP_GRACE_PERIOD:
+        return
+
     warnings = []
     criticals = []
 
