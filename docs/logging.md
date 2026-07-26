@@ -311,7 +311,7 @@ logger = setup_logging("ticketbot.telegram", {"platform": "telegram"}, debug=set
 ### Зависимости
 
 - **`CompactJsonFormatter`** — написан на стандартном `logging` + `json` (нет внешних зависимостей)
-- **`psutil`** — опционально (`pip install ticketbot[monitoring]`), для фонового сбора метрик системы. Без него метрики собираются через `/proc`
+- **`psutil`** — основная зависимость (не опциональная), для фонового сбора метрик системы. Устанавливается в каждый контейнер через `pip install .`
 
 ---
 

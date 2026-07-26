@@ -97,9 +97,12 @@
 | 72 | Feat: фоновый сбор метрик системы (app/core/system_metrics.py) | ✅ done | 2026-07-26 | — |
 | 73 | Feat: скрипт самодиагностики с порогами + Telegram-алерт (scripts/self-diagnose.py) | ✅ done | 2026-07-26 | — |
 | 74 | Feat: добавлены Makefile-цели diagnose, diagnose-alert, diagnose-verbose | ✅ done | 2026-07-26 | — |
-| 75 | Feat: psutil как optional dependency [monitoring] в pyproject.toml | ✅ done | 2026-07-26 | — |
+| 75 | Feat: psutil как основная зависимость (перенесён из [monitoring] в core) | ✅ done | 2026-07-26 | — |
 | 76 | Feat: автоматический алерт при превышении порогов (в metrics_loop бота) | ✅ done | 2026-07-26 | — |
 | 77 | Feat: cron-диагностика раз в 5 мин (scripts/cron-diagnose.py) | ✅ done | 2026-07-26 | — |
 | 78 | Feat: cron-задание устанавливается GitHub Actions при деплое (deploy.yml) | ✅ done | 2026-07-26 | — |
 | 79 | Chore: удалён setup_cron_diagnose из setup-dev-env.sh (теперь в CI/CD) | ✅ done | 2026-07-26 | — |
 | 80 | Chore: удалены install/remove-cron-diagnose из Makefile (теперь в CI/CD) | ✅ done | 2026-07-26 | — |
+| 81 | Fix: self-diagnose.py — флаг --logs-from-stdin для пайпа логов в контейнер | ✅ done | 2026-07-26 | — |
+| 82 | Fix: cron-diagnose.py — сбор логов на хосте, запуск diagnose внутри контейнера | ✅ done | 2026-07-26 | — |
+| 83 | Fix: cron-diagnose.py — datetime.utcnow() → datetime.now(timezone.utc) | ✅ done | 2026-07-26 | — |

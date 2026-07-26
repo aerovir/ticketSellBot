@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+import secrets
 
 from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
@@ -10,8 +11,15 @@ from app.core.database import Base
 import enum
 
 
+class SubscriptionTier(str, enum.Enum):
+    """Уровень подписки канала."""
+    basic = "basic"  # только бесплатные мероприятия, короткий код
+    pro = "pro"      # платные мероприятия + QR
+
+
 class TicketStatus(str, enum.Enum):
     active = "active"
+    checked_in = "checked_in"
     refunded = "refunded"
 
 
@@ -39,6 +47,9 @@ class Channel(Base):
     admin_telegram_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     is_subscription_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     subscription_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    subscription_tier: Mapped[SubscriptionTier] = mapped_column(
+        SAEnum(SubscriptionTier), default=SubscriptionTier.basic, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -91,6 +102,7 @@ class Event(Base):
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     media_telegram_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "photo" или "video"
+    is_free: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -121,6 +133,11 @@ class Ticket(Base):
     status: Mapped[TicketStatus] = mapped_column(
         SAEnum(TicketStatus), default=TicketStatus.active, nullable=False
     )
+    validation_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    checked_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    checked_in_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_free: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    qr_code_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     event = relationship("Event", back_populates="tickets", lazy="raise")
     user = relationship("User", back_populates="tickets", lazy="raise")

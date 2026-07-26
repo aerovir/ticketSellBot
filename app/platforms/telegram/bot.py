@@ -92,6 +92,9 @@ class TelegramBot(PlatformBot):
         self.dp.message.register(self.admin_menu, Command("menu"))
         self.dp.message.register(self.admin_menu, Command("admin"))  # алиас для обратной совместимости
 
+        # ─── Команда проверки билетов ─────────────
+        self.dp.message.register(self.cmd_check, Command("check"))
+
         # ─── Супер-админ команды (текстовые) ─────────
         self.dp.message.register(self.sa_stats_all, Command("stats_all"))
         self.dp.message.register(self.sa_list_channels, Command("list_channels"))
@@ -261,9 +264,15 @@ class TelegramBot(PlatformBot):
             try:
                 ticket = await ticket_svc.buy_ticket(user_id, event_id)
                 await session.commit()
+
+                code_text = ""
+                if ticket.validation_code:
+                    code_text = f"\n🔑 Код: <code>{ticket.validation_code}</code>"
+
                 await message.answer(
                     f"✅ Билет куплен!\n"
-                    f"Номер билета: <code>{ticket.id}</code>\n\n"
+                    f"Номер билета: <code>{ticket.id}</code>"
+                    f"{code_text}\n\n"
                     f"Используйте /my_tickets для просмотра всех билетов.",
                     parse_mode="HTML",
                 )
@@ -310,10 +319,11 @@ class TelegramBot(PlatformBot):
         """Отправить детали мероприятия с inline-кнопками."""
         text = self._format_event_text(event, "full")
 
+        buy_text = "🎟 Получить билет" if event.is_free else "🎟 Купить билет"
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="🎟 Купить билет",
+                    text=buy_text,
                     callback_data=f"buy:{event.id}"
                 )],
                 [InlineKeyboardButton(
@@ -373,13 +383,21 @@ class TelegramBot(PlatformBot):
 
         for t in tickets:
             date_str = t["purchase_date"].strftime("%d.%m.%Y %H:%M")
-            status_emoji = "✅" if t["status"] == "active" else "❌"
+            status_emoji = "✅" if t["status"] == "active" else "🟡" if t["status"] == "checked_in" else "❌"
+            status_text = {
+                "active": "✅ Активен",
+                "checked_in": "🟡 Вход разрешён",
+                "refunded": "❌ Возвращён",
+            }
             lines.append(
                 f"{status_emoji} <b>{t['event_title']}</b>\n"
-                f"🆔 <code>{t['id']}</code>\n"
-                f"📅 Куплен: {date_str}\n"
-                f"📌 Статус: {t['status']}\n"
+                f"📌 {status_text.get(t['status'], t['status'])}\n"
             )
+            if t.get("validation_code"):
+                lines.append(f"🔑 Код: <code>{t['validation_code']}</code>\n")
+            if t.get("checked_in_at"):
+                lines.append(f"⏰ Вход: {t['checked_in_at']}\n")
+            lines.append(f"📅 Куплен: {date_str}\n")
 
             if t["status"] == "active":
                 kb_rows.append([
@@ -429,6 +447,76 @@ class TelegramBot(PlatformBot):
                 await send_method("✅ Билет возвращён.")
             except ValueError as e:
                 await send_method(f"❌ {e}")
+
+    # ═══════════════════════════════════════════════════════
+    # ПРОВЕРКА БИЛЕТОВ
+    # ═══════════════════════════════════════════════════════
+
+    async def cmd_check(self, message: types.Message):
+        """Проверить билет по коду на входе. Usage: /check <code>"""
+        # Проверяем, что пользователь — админ канала или super-admin
+        is_super = self._is_super_admin(message.from_user.id)
+        channel = await self._get_admin_channel(message.from_user.id) if not is_super else None
+
+        if not is_super and not channel:
+            await message.answer("❌ У вас нет доступа к проверке билетов.")
+            return
+
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer(
+                "🎫 <b>Проверка билета</b>\n\n"
+                "Введите код билета для проверки:\n"
+                "<code>/check AB3X-K7M9</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        code = args[1].strip().upper()
+        # Нормализация: убираем пробелы, оставляем дефис
+        if len(code) == 8 and "-" not in code:
+            code = f"{code[:4]}-{code[4:]}"
+
+        async with async_session_factory() as session:
+            ticket_svc = TicketService(session)
+            result = await ticket_svc.validate_ticket(code)
+
+            if not result["found"]:
+                await message.answer(f"❌ Билет с кодом <code>{code}</code> не найден.", parse_mode="HTML")
+                return
+
+            if result["status"] == "checked_in":
+                await message.answer(
+                    f"🟡 <b>Билет уже использован</b>\n\n"
+                    f"👤 {result['user_name']}\n"
+                    f"🎫 {result['event_title']}\n"
+                    f"⏰ Вход: {result['checked_in_at']}",
+                    parse_mode="HTML",
+                )
+                return
+
+            if result["status"] == "refunded":
+                await message.answer(
+                    f"❌ <b>Билет возвращён</b>\n\n"
+                    f"👤 {result['user_name']}\n"
+                    f"🎫 {result['event_title']}",
+                    parse_mode="HTML",
+                )
+                return
+
+            # Билет активен — чекиним
+            try:
+                await ticket_svc.check_in_by_code(code, str(message.from_user.id))
+                await session.commit()
+                await message.answer(
+                    f"✅ <b>Вход разрешён</b>\n\n"
+                    f"👤 {result['user_name']}\n"
+                    f"🎫 {result['event_title']}\n"
+                    f"⏰ {datetime.now(timezone.utc).strftime('%H:%M')} UTC",
+                    parse_mode="HTML",
+                )
+            except ValueError as e:
+                await message.answer(f"❌ {e}")
 
     # ═══════════════════════════════════════════════════════
     # АДМИН-ХЕНДЛЕРЫ
@@ -1015,7 +1103,7 @@ class TelegramBot(PlatformBot):
                 return
             parts = user_input.split()
             if len(parts) < 2:
-                await message.answer("❌ Укажите @username канала и количество дней через пробел.\nПример: <code>@my_channel 30</code>", parse_mode="HTML")
+                await message.answer("❌ Укажите @username канала, количество дней и уровень (basic/pro) через пробел.\nПример: <code>@my_channel 30 pro</code>", parse_mode="HTML")
                 return
             try:
                 channel_telegram_id = parts[0].strip()
@@ -1025,15 +1113,23 @@ class TelegramBot(PlatformBot):
             except ValueError:
                 await message.answer("❌ Укажите ID канала и количество дней (число > 0).")
                 return
+
+            from app.core.models import SubscriptionTier
+            tier = SubscriptionTier.basic
+            if len(parts) >= 3:
+                tier_str = parts[2].strip().lower()
+                if tier_str == "pro":
+                    tier = SubscriptionTier.pro
+                elif tier_str != "basic":
+                    await message.answer("❌ Неверный уровень подписки. Используйте: basic или pro.")
+                    return
             async with async_session_factory() as session:
                 try:
                     channel_svc = ChannelService(session)
                     channel = await channel_svc.get_by_telegram_id(channel_telegram_id)
                     if channel:
-                        channel = await channel_svc.activate_subscription(channel.id, days)
+                        channel = await channel_svc.activate_subscription(channel.id, days, tier=tier)
                         channel_name = channel.title or channel.telegram_channel_id
-
-                        # Синхронизировать админов канала, если бот в нём
                         admin_svc = ChannelAdminService(session)
                         try:
                             admins = await self.bot.get_chat_administrators(chat_id=channel.telegram_channel_id)
@@ -1061,10 +1157,10 @@ class TelegramBot(PlatformBot):
                             admin_telegram_user_id="",
                             title=f"Канал {channel_telegram_id}",
                         )
-                        channel = await channel_svc.activate_subscription(channel.id, days)
+                        channel = await channel_svc.activate_subscription(channel.id, days, tier=tier)
                         await session.commit()
                         text = (
-                            f"✅ Подписка активирована для канала {channel_telegram_id}!\n"
+                            f"✅ Подписка {tier.value.upper()} активирована для канала {channel_telegram_id}!\n"
                             f"Срок: {days} дней.\n"
                             f"ℹ️ Владелец канала должен добавить бота в канал для начала работы."
                         )
@@ -1750,17 +1846,19 @@ class TelegramBot(PlatformBot):
     # ─── /subscribe (super-admin only) ────────────────────────────────────
 
     async def admin_subscribe(self, message: types.Message):
-        """Activate a subscription for a channel. Usage: /subscribe <channel_id> <days>"""
+        """Activate a subscription for a channel. Usage: /subscribe <channel_id> <days> [tier]"""
         if not self._is_super_admin(message.from_user.id):
             await message.answer("У вас нет доступа к панели администратора.")
             return
 
-        args = message.text.split(maxsplit=2)
+        args = message.text.split(maxsplit=3)
         if len(args) < 3:
             await message.answer(
-                "Использование: /subscribe &lt;channel_id&gt; &lt;days&gt;\n\n"
+                "Использование: /subscribe &lt;channel_id&gt; &lt;days&gt; [tier]\n\n"
                 "channel_id — @username канала или его числовой ID\n"
-                "Пример: /subscribe @my_channel 30"
+                "days — количество дней подписки\n"
+                "tier — (опционально) basic/pro, по умолчанию basic\n"
+                "Пример: /subscribe @my_channel 30 pro"
             )
             return
 
@@ -1773,6 +1871,17 @@ class TelegramBot(PlatformBot):
             await message.answer("❌ Укажите ID канала и количество дней (число > 0).")
             return
 
+        # Парсим tier
+        from app.core.models import SubscriptionTier
+        tier = SubscriptionTier.basic
+        if len(args) >= 4:
+            tier_str = args[3].strip().lower()
+            if tier_str == "pro":
+                tier = SubscriptionTier.pro
+            elif tier_str != "basic":
+                await message.answer("❌ Неверный уровень подписки. Используйте: basic или pro.")
+                return
+
         async with async_session_factory() as session:
             try:
                 channel_svc = ChannelService(session)
@@ -1780,10 +1889,8 @@ class TelegramBot(PlatformBot):
 
                 if channel:
                     # Update existing channel's subscription
-                    channel = await channel_svc.activate_subscription(channel.id, days)
+                    channel = await channel_svc.activate_subscription(channel.id, days, tier=tier)
                     channel_name = channel.title or channel.telegram_channel_id
-
-                    # Синхронизировать админов канала, если бот в нём
                     admin_svc = ChannelAdminService(session)
                     try:
                         admins = await self.bot.get_chat_administrators(chat_id=channel.telegram_channel_id)
@@ -1812,10 +1919,10 @@ class TelegramBot(PlatformBot):
                         admin_telegram_user_id="",
                         title=f"Канал {channel_telegram_id}",
                     )
-                    channel = await channel_svc.activate_subscription(channel.id, days)
+                    channel = await channel_svc.activate_subscription(channel.id, days, tier=tier)
                     await session.commit()
                     text = (
-                        f"✅ Подписка активирована для канала {channel_telegram_id}!\n"
+                        f"✅ Подписка {tier.value.upper()} активирована для канала {channel_telegram_id}!\n"
                         f"Срок: {days} дней.\n"
                         f"ℹ️ Владелец канала должен добавить бота в канал для начала работы.\n"
                         f"   После добавления бот привяжет канал к пользователю."
@@ -2506,10 +2613,15 @@ class TelegramBot(PlatformBot):
                 try:
                     ticket = await ticket_svc.buy_ticket(user_id, event_id)
                     await session.commit()
-                    await callback.answer("✅ Билет куплен!", show_alert=True)
+
+                    code_text = ""
+                    if ticket.validation_code:
+                        code_text = f"\n🔑 Код: <code>{ticket.validation_code}</code>"
+
+                    alert_text = "✅ Билет куплен!" if not ticket.validation_code else f"✅ Билет! Код: {ticket.validation_code}"
+                    await callback.answer(alert_text, show_alert=True)
                     await callback.message.edit_text(
-                        f"✅ Билет куплен!\n"
-                        f"Номер: <code>{ticket.id}</code>",
+                        f"✅ Билет куплен!{code_text}",
                         parse_mode="HTML",
                     )
                 except ValueError as e:
@@ -2620,10 +2732,9 @@ class TelegramBot(PlatformBot):
             try:
                 ticket = await ticket_svc.buy_ticket(user_id, event_id)
                 await session.commit()
-                await callback.answer(
-                    f"✅ Билет куплен! Номер: {ticket.id}",
-                    show_alert=True,
-                )
+
+                alert_msg = f"✅ Билет куплен!" if not ticket.validation_code else f"✅ Билет! Код: {ticket.validation_code}"
+                await callback.answer(alert_msg, show_alert=True)
             except ValueError as e:
                 await callback.answer(f"❌ {e}", show_alert=True)
 

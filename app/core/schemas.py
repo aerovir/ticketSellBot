@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.core.models import SubscriptionTier
+
 
 # ─── User ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +49,7 @@ class EventOut(BaseModel):
     total_tickets: int
     available_tickets: int
     is_active: bool
+    is_free: bool
 
     model_config = {"from_attributes": True}
 
@@ -79,6 +82,7 @@ class ChannelOut(BaseModel):
     admin_telegram_user_id: str
     is_subscription_active: bool
     subscription_until: Optional[datetime]
+    subscription_tier: SubscriptionTier = SubscriptionTier.basic
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -92,6 +96,9 @@ class TicketOut(BaseModel):
     event_title: str = ""
     purchase_date: datetime
     status: str
+    validation_code: Optional[str] = None
+    checked_in_at: Optional[datetime] = None
+    is_free: bool = False
 
     model_config = {"from_attributes": True}
 

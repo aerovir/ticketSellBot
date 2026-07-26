@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from app.core.models import Base, User, Event, Ticket, Channel
-from app.core.models import PlatformType
+from app.core.models import PlatformType, SubscriptionTier
 from app.core.services import UserService, EventService, TicketService, ChannelService
 
 
@@ -100,13 +100,33 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
 @pytest_asyncio.fixture
 async def sample_channel(db_session: AsyncSession) -> Channel:
-    """Создаёт тестовый канал."""
+    """Создаёт тестовый канал с активной Pro-подпиской."""
     svc = ChannelService(db_session)
     channel = await svc.create(
         telegram_channel_id="test_channel_1",
         admin_telegram_user_id="test_12345",
         title="Test Channel",
     )
+    channel = await svc.activate_subscription(
+        channel.id, duration_days=365, tier=SubscriptionTier.pro,
+    )
+    await db_session.flush()
+    return channel
+
+
+@pytest_asyncio.fixture
+async def basic_channel(db_session: AsyncSession) -> Channel:
+    """Создаёт тестовый канал с Basic-подпиской (только бесплатные мероприятия)."""
+    svc = ChannelService(db_session)
+    channel = await svc.create(
+        telegram_channel_id="test_basic_channel",
+        admin_telegram_user_id="test_basic_admin",
+        title="Test Basic Channel",
+    )
+    channel = await svc.activate_subscription(
+        channel.id, duration_days=365, tier=SubscriptionTier.basic,
+    )
+    await db_session.flush()
     return channel
 
 
@@ -152,6 +172,24 @@ async def sample_past_event(db_session: AsyncSession, sample_channel: Channel) -
         price=500.0,
         total_tickets=10,
         channel_id=sample_channel.id,
+    )
+    event.is_published = True
+    await db_session.flush()
+    return event
+
+
+@pytest_asyncio.fixture
+async def sample_free_event(db_session: AsyncSession, basic_channel: Channel) -> Event:
+    """Создаёт тестовое БЕСПЛАТНОЕ мероприятие на Basic-канале."""
+    svc = EventService(db_session)
+    event = await svc.create(
+        title="Бесплатное мероприятие",
+        description="Только бесплатные билеты",
+        date=datetime.now(timezone.utc) + timedelta(days=14),
+        location="Москва",
+        price=0,
+        total_tickets=50,
+        channel_id=basic_channel.id,
     )
     event.is_published = True
     await db_session.flush()

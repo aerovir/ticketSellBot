@@ -45,9 +45,12 @@ class ChannelManager:
             event: Объект мероприятия (нужен для медиа). Если не передан —
                    отправляет только текст.
         """
+        # Разные кнопки для бесплатных и платных мероприятий
+        is_free = event.is_free if event else False
+        buy_text = "🎟 Получить билет" if is_free else "🎟 Купить"
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎟 Купить", callback_data=f"channel_buy:{event_id}"),
+                InlineKeyboardButton(text=buy_text, callback_data=f"channel_buy:{event_id}"),
             ],
         ])
 

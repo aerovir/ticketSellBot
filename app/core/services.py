@@ -1,13 +1,14 @@
 import uuid
 import logging
 import time
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType
+from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType, SubscriptionTier
 from app.core.schemas import EventOut, EventShortOut, TicketOut, UserOut
 
 logger = logging.getLogger("ticketbot.services")
@@ -119,8 +120,19 @@ class ChannelService:
         })
         return channel
 
-    async def activate_subscription(self, channel_id: uuid.UUID, duration_days: int = 30) -> Channel | None:
-        """Manually activate subscription for a channel."""
+    async def activate_subscription(
+        self,
+        channel_id: uuid.UUID,
+        duration_days: int = 30,
+        tier: SubscriptionTier | None = None,
+    ) -> Channel | None:
+        """Manually activate subscription for a channel.
+
+        Args:
+            channel_id: UUID канала.
+            duration_days: Срок подписки в днях.
+            tier: Уровень подписки (basic/pro). Если None — остаётся текущий.
+        """
         start = time.perf_counter()
         channel = await self.session.get(Channel, channel_id)
         if channel is None:
@@ -134,12 +146,15 @@ class ChannelService:
             return None
         channel.is_subscription_active = True
         channel.subscription_until = datetime.now(timezone.utc) + timedelta(days=duration_days)
+        if tier is not None:
+            channel.subscription_tier = tier
         await self.session.flush()
         logger.info("", extra={
             "event_type": "subscription.activated",
             "channel_id": str(channel.id),
             "telegram_channel_id": channel.telegram_channel_id,
             "duration_days": duration_days,
+            "tier": channel.subscription_tier.value,
             "subscription_until": channel.subscription_until.isoformat(),
             "status": "success",
             "duration_ms": _ms(start),
@@ -216,6 +231,39 @@ class ChannelService:
             "duration_ms": _ms(start),
         })
         return True
+
+    async def get_subscription_tier(self, channel_id: uuid.UUID) -> SubscriptionTier | None:
+        """Получить уровень подписки канала."""
+        channel = await self.session.get(Channel, channel_id)
+        if channel is None:
+            return None
+        return channel.subscription_tier
+
+    async def require_feature(self, channel_id: uuid.UUID, feature: str) -> bool:
+        """Проверить, поддерживает ли канал указанную фичу.
+
+        Args:
+            channel_id: UUID канала.
+            feature: Название фичи ('free_events', 'paid_events', 'qr_codes', 'promo_codes').
+
+        Returns:
+            True если фича доступна, False если нет.
+        """
+        if not await self.is_subscription_valid(channel_id):
+            return False
+
+        tier = await self.get_subscription_tier(channel_id)
+        if tier is None:
+            return False
+
+        # Матрица фич по уровням подписки
+        FEATURES = {
+            "free_events": {SubscriptionTier.basic, SubscriptionTier.pro},
+            "paid_events": {SubscriptionTier.pro},
+            "qr_codes": {SubscriptionTier.pro},
+        }
+
+        return tier in FEATURES.get(feature, set())
 
     async def get_active_unassigned_channel(self) -> Channel | None:
         """Get a channel with active subscription but no admin assigned."""
@@ -476,6 +524,17 @@ class EventService:
                      location: Optional[str], price: float,
                      total_tickets: int, channel_id: uuid.UUID) -> Event:
         start = time.perf_counter()
+
+        # Проверка: если мероприятие платное, канал должен иметь Pro-подписку
+        if price > 0:
+            channel_svc = ChannelService(self.session)
+            if not await channel_svc.require_feature(channel_id, "paid_events"):
+                raise ValueError(
+                    "Ваш тариф поддерживает только бесплатные мероприятия. "
+                    "Для платных мероприятий необходима подписка Pro."
+                )
+
+        is_free = (price == 0)
         event = Event(
             title=title,
             description=description,
@@ -485,6 +544,7 @@ class EventService:
             total_tickets=total_tickets,
             available_tickets=total_tickets,
             is_active=True,
+            is_free=is_free,
             channel_id=channel_id,
         )
         self.session.add(event)
@@ -496,6 +556,7 @@ class EventService:
             "channel_id": str(channel_id),
             "price": price,
             "total_tickets": total_tickets,
+            "is_free": is_free,
             "status": "success",
             "duration_ms": _ms(start),
         })
@@ -663,6 +724,16 @@ class TicketService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    @staticmethod
+    async def generate_validation_code() -> str:
+        """Сгенерировать уникальный короткий код для входа.
+
+        Формат: XXXX-XXXX (hex, 8 символов + дефис).
+        Пример: AB3X-K7M9
+        """
+        raw = secrets.token_hex(4).upper()
+        return f"{raw[:4]}-{raw[4:]}"
+
     async def buy_ticket(self, user_id: uuid.UUID, event_id: uuid.UUID) -> Ticket:
         """Purchase a ticket for an event."""
         start = time.perf_counter()
@@ -738,6 +809,8 @@ class TicketService:
             event_id=event_id,
             user_id=user_id,
             status=TicketStatus.active,
+            validation_code=await self.generate_validation_code(),
+            is_free=event.is_free,
         )
         self.session.add(ticket)
 
@@ -761,6 +834,8 @@ class TicketService:
             "event_title": event.title,
             "user_id": str(user_id),
             "amount": float(event.price),
+            "is_free": ticket.is_free,
+            "validation_code": ticket.validation_code,
             "payment_status": "completed",
             "platform": "telegram",
             "status": "success",
@@ -848,6 +923,8 @@ class TicketService:
             event_id=event_id,
             user_id=user_id,
             status=TicketStatus.active,
+            validation_code=await self.generate_validation_code(),
+            is_free=event.is_free,
         )
         self.session.add(ticket)
 
@@ -871,6 +948,8 @@ class TicketService:
             "event_title": event.title,
             "user_id": str(user_id),
             "amount": float(event.price),
+            "is_free": ticket.is_free,
+            "validation_code": ticket.validation_code,
             "payment_status": "pending",
             "platform": "web",
             "status": "success",
@@ -1019,6 +1098,9 @@ class TicketService:
                 "event_title": event_title,
                 "purchase_date": ticket.purchase_date,
                 "status": ticket.status.value,
+                "validation_code": ticket.validation_code,
+                "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
+                "is_free": ticket.is_free,
             })
 
         logger.info("", extra={
@@ -1062,3 +1144,141 @@ class TicketService:
             "duration_ms": _ms(start),
         })
         return tickets
+
+    # ─── Validation & Check-in ────────────────────────────────────────
+
+    async def validate_ticket(self, code: str) -> dict:
+        """Проверить билет по validation_code.
+
+        Args:
+            code: Код билета (формат XXXX-XXXX).
+
+        Returns:
+            dict с результатами проверки:
+                found: bool — найден ли билет
+                status: str — статус (active/checked_in/refunded/not_found)
+                user_name: str — имя покупателя (если найден)
+                event_title: str — название мероприятия
+                already_checked_in: bool — уже ли использован
+                checked_in_at: str|None — время чекина (если был)
+        """
+        start = time.perf_counter()
+        stmt = (
+            select(Ticket, User.name, Event.title)
+            .join(User, Ticket.user_id == User.id)
+            .join(Event, Ticket.event_id == Event.id)
+            .where(Ticket.validation_code == code)
+        )
+        result = await self.session.execute(stmt)
+        row = result.one_or_none()
+
+        if row is None:
+            logger.info("", extra={
+                "event_type": "ticket.validate_not_found",
+                "code": code,
+                "status": "not_found",
+                "duration_ms": _ms(start),
+            })
+            return {"found": False, "status": "not_found"}
+
+        ticket, user_name, event_title = row
+
+        result_data = {
+            "found": True,
+            "status": ticket.status.value,
+            "user_name": user_name or "—",
+            "event_title": event_title,
+            "already_checked_in": ticket.status == TicketStatus.checked_in,
+            "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
+        }
+
+        logger.info("", extra={
+            "event_type": "ticket.validate",
+            "ticket_id": str(ticket.id),
+            "code": code,
+            "status": ticket.status.value,
+            "duration_ms": _ms(start),
+        })
+        return result_data
+
+    async def check_in(self, ticket_id: uuid.UUID, admin_id: str) -> Ticket:
+        """Отметить билет как использованный на входе.
+
+        Args:
+            ticket_id: UUID билета.
+            admin_id: Telegram ID проверяющего.
+
+        Returns:
+            Ticket с обновлённым статусом.
+
+        Raises:
+            ValueError: если билет не найден, уже использован или возвращён.
+        """
+        start = time.perf_counter()
+        ticket = await self.session.get(Ticket, ticket_id)
+        if ticket is None:
+            logger.warning("", extra={
+                "event_type": "ticket.checkin_failed",
+                "ticket_id": str(ticket_id),
+                "status": "error",
+                "error": "Ticket not found",
+                "duration_ms": _ms(start),
+            })
+            raise ValueError("Билет не найден")
+
+        if ticket.status == TicketStatus.checked_in:
+            logger.warning("", extra={
+                "event_type": "ticket.checkin_failed",
+                "ticket_id": str(ticket_id),
+                "status": "error",
+                "error": "Already checked in",
+                "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else "",
+                "duration_ms": _ms(start),
+            })
+            raise ValueError(f"Билет уже использован (вход: {ticket.checked_in_at.strftime('%H:%M')})")
+
+        if ticket.status == TicketStatus.refunded:
+            logger.warning("", extra={
+                "event_type": "ticket.checkin_failed",
+                "ticket_id": str(ticket_id),
+                "status": "error",
+                "error": "Ticket refunded",
+                "duration_ms": _ms(start),
+            })
+            raise ValueError("Билет возвращён")
+
+        ticket.status = TicketStatus.checked_in
+        ticket.checked_in_at = datetime.now(timezone.utc)
+        ticket.checked_in_by = admin_id
+        await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "ticket.checked_in",
+            "ticket_id": str(ticket.id),
+            "event_id": str(ticket.event_id),
+            "user_id": str(ticket.user_id),
+            "admin_id": admin_id,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return ticket
+
+    async def check_in_by_code(self, code: str, admin_id: str) -> Ticket:
+        """Отметить билет по validation_code.
+
+        Args:
+            code: Код билета (XXXX-XXXX).
+            admin_id: Telegram ID проверяющего.
+
+        Returns:
+            Ticket с обновлённым статусом.
+
+        Raises:
+            ValueError: если билет с таким кодом не найден.
+        """
+        stmt = select(Ticket).where(Ticket.validation_code == code)
+        result = await self.session.execute(stmt)
+        ticket = result.scalar_one_or_none()
+        if ticket is None:
+            raise ValueError(f"Билет с кодом {code} не найден")
+        return await self.check_in(ticket.id, admin_id)
