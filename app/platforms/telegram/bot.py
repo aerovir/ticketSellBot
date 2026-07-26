@@ -2705,6 +2705,22 @@ class TelegramBot(PlatformBot):
                         f"✅ Билет куплен!{code_text}",
                         parse_mode="HTML",
                     )
+
+                    # Отправить код в ЛС отдельным сообщением
+                    if ticket.validation_code:
+                        try:
+                            dm_text = (
+                                f"🎫 <b>Ваш билет</b>\n\n"
+                                f"🔑 Код: <code>{ticket.validation_code}</code>\n\n"
+                                f"Покажите этот код на входе."
+                            )
+                            await self.bot.send_message(
+                                chat_id=callback.from_user.id,
+                                text=dm_text,
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
                 except ValueError as e:
                     await callback.answer(f"❌ {e}", show_alert=True)
             return
@@ -2816,6 +2832,22 @@ class TelegramBot(PlatformBot):
 
                 alert_msg = f"✅ Билет куплен!" if not ticket.validation_code else f"✅ Билет! Код: {ticket.validation_code}"
                 await callback.answer(alert_msg, show_alert=True)
+
+                # Отправить код в ЛС отдельным сообщением
+                if ticket.validation_code:
+                    try:
+                        dm_text = (
+                            f"🎫 <b>Ваш билет</b>\n\n"
+                            f"🔑 Код: <code>{ticket.validation_code}</code>\n\n"
+                            f"Покажите этот код на входе."
+                        )
+                        await self.bot.send_message(
+                            chat_id=callback.from_user.id,
+                            text=dm_text,
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
             except ValueError as e:
                 await callback.answer(f"❌ {e}", show_alert=True)
 

@@ -339,6 +339,10 @@ class TestCallbackHandlers:
         """Callback покупки билета."""
         event_id = uuid.uuid4()
         mock_callback.data = f"buy:{event_id}"
+        mock_callback.from_user.id = 12345
+
+        mock_ticket = Mock(id=uuid.uuid4())
+        mock_ticket.validation_code = None
 
         with (
             patch(
@@ -349,12 +353,72 @@ class TestCallbackHandlers:
             patch(
                 "app.platforms.telegram.bot.TicketService.buy_ticket",
                 new_callable=AsyncMock,
-                return_value=Mock(id=uuid.uuid4()),
+                return_value=mock_ticket,
             ),
         ):
             await telegram_bot.cmd_callback(mock_callback, Mock())
 
         mock_callback.answer.assert_awaited_once()
+
+    async def test_callback_buy_ticket_sends_dm_with_code(self, telegram_bot, mock_callback):
+        """После покупки билет с кодом отправляется в ЛС."""
+        event_id = uuid.uuid4()
+        mock_callback.data = f"buy:{event_id}"
+        mock_callback.from_user.id = 12345
+        mock_callback.from_user.full_name = "Test User"
+
+        mock_ticket = Mock(id=uuid.uuid4())
+        mock_ticket.validation_code = "AB3X-K7M9"
+
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch(
+                "app.platforms.telegram.bot.TicketService.buy_ticket",
+                new_callable=AsyncMock,
+                return_value=mock_ticket,
+            ),
+        ):
+            await telegram_bot.cmd_callback(mock_callback, Mock())
+
+        dm_found = any(
+            "AB3X-K7M9" in str(call)
+            for call in telegram_bot.bot.send_message.await_args_list
+        )
+        assert dm_found, "Код AB3X-K7M9 не отправлен в ЛС"
+
+    async def test_callback_channel_buy_sends_dm_with_code(self, telegram_bot, mock_callback):
+        """После покупки из канала код отправляется в ЛС."""
+        event_id = uuid.uuid4()
+        mock_callback.data = f"channel_buy:{event_id}"
+        mock_callback.from_user.id = 12345
+        mock_callback.from_user.full_name = "Test User"
+
+        mock_ticket = Mock(id=uuid.uuid4())
+        mock_ticket.validation_code = "CODE-1234"
+
+        with (
+            patch(
+                "app.platforms.telegram.bot.UserService.get_or_create",
+                new_callable=AsyncMock,
+                return_value=Mock(id=uuid.uuid4()),
+            ),
+            patch(
+                "app.platforms.telegram.bot.TicketService.buy_ticket",
+                new_callable=AsyncMock,
+                return_value=mock_ticket,
+            ),
+        ):
+            await telegram_bot.cmd_callback(mock_callback, Mock())
+
+        dm_found = any(
+            "CODE-1234" in str(call)
+            for call in telegram_bot.bot.send_message.await_args_list
+        )
+        assert dm_found, "Код CODE-1234 не отправлен в ЛС из канала"
 
     async def test_callback_ev_page(self, telegram_bot, mock_callback):
         """Callback навигации по страницам мероприятий."""
