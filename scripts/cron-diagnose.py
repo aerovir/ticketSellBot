@@ -48,7 +48,7 @@ def main():
     ps1.stdout.close()
     ps1.wait()
 
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
     success = result.returncode == 0
 
     # В stdout пишем краткий статус (попадает в cron-лог)
