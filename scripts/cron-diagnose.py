@@ -15,7 +15,7 @@ cron-diagnose.py — Скрипт для cron: запускает самодиа
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -48,7 +48,7 @@ def main():
     ps1.stdout.close()
     ps1.wait()
 
-    timestamp = datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     success = result.returncode == 0
 
     # В stdout пишем краткий статус (попадает в cron-лог)
