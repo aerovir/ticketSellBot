@@ -32,9 +32,9 @@
 
 | # | Задача | Статус | Дата | Коммит |
 |---|--------|--------|------|--------|
-| 16 | Реальная оплата (YooKassa / ссылка на оплату) | 🔄 pending | 2026-07-07 | — |
-| 17 | VK группа — настройка и подключение | 🔄 pending | 2026-07-07 | — |
-| 18 | MAX — подключение после выхода SDK | 🔄 pending | 2026-07-07 | — |
+| 16 | Реальная оплата (YooKassa / ссылка на оплату) | 📌 pending | 2026-07-07 | — |
+| 17 | VK группа — настройка и подключение | 📌 pending | 2026-07-07 | — |
+| 18 | MAX — подключение после выхода SDK | 📌 pending | 2026-07-07 | — |
 | 20 | Telegram канал: анонсы + channel_post хендлеры | ✅ done | 2026-07-07 | `99e177d` |
 | 21 | Telegram канал: проверка /events и /event в работе | ✅ verified | 2026-07-07 | — |
 | 22 | Добавить TELEGRAM_CHANNEL_ID в GitHub Secrets | ✅ done | 2026-07-07 | — |
@@ -106,3 +106,20 @@
 | 81 | Fix: self-diagnose.py — флаг --logs-from-stdin для пайпа логов в контейнер | ✅ done | 2026-07-26 | — |
 | 82 | Fix: cron-diagnose.py — сбор логов на хосте, запуск diagnose внутри контейнера | ✅ done | 2026-07-26 | — |
 | 83 | Fix: cron-diagnose.py — datetime.utcnow() → datetime.now(timezone.utc) | ✅ done | 2026-07-26 | — |
+| 84 | Feat: SubscriptionTier (basic/pro) + Channel.subscription_tier | ✅ done | 2026-07-26 | — |
+| 85 | Feat: TicketStatus.checked_in + validation_code, checked_in_at/by, is_free | ✅ done | 2026-07-26 | — |
+| 86 | Feat: ChannelService.activate_subscription с tier, get_subscription_tier, require_feature | ✅ done | 2026-07-26 | — |
+| 87 | Feat: EventService проверяет tier при создании (basic не может price>0) | ✅ done | 2026-07-26 | — |
+| 88 | Feat: TicketService.generate_validation_code, validate_ticket, check_in, check_in_by_code | ✅ done | 2026-07-26 | — |
+| 89 | Feat: /check <code> команда для админа на входе | ✅ done | 2026-07-26 | — |
+| 90 | Feat: разные кнопки для бесплатных/платных мероприятий | ✅ done | 2026-07-26 | — |
+| 91 | Feat: /subscribe с аргументом tier (basic/pro) | ✅ done | 2026-07-26 | — |
+| 92 | Tests: 62 тестов сервисного слоя (все проходят) | ✅ done | 2026-07-26 | — |
+
+## 📌 Запланировано
+
+| # | Задача | Статус | Дата | Коммит |
+|---|--------|--------|------|--------|
+| 93 | QR-генерация для Pro-мероприятий | 📌 pending | 2026-07-26 | — |
+| 94 | Telegram Mini App сканер QR для админа | 📌 pending | 2026-07-26 | — |
+| 95 | Экспорт списка участников (CSV) | 📌 pending | 2026-07-26 | — |

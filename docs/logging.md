@@ -83,8 +83,8 @@
 
 | event_type | Уровень | Когда | Доп. поля |
 |---|---|---|---|
-| `ticket.purchased` | INFO | Успешная покупка через Telegram | `ticket_id`, `event_id`, `event_title`, `user_id`, `amount` |
-| `ticket.purchased_webapp` | INFO | Успешная покупка через Mini App | `ticket_id`, `event_id`, `event_title`, `user_id`, `amount` |
+| `ticket.purchased` | INFO | Успешная покупка через Telegram | `ticket_id`, `event_id`, `event_title`, `user_id`, `amount`, `is_free`, `validation_code` |
+| `ticket.purchased_webapp` | INFO | Успешная покупка через Mini App | `ticket_id`, `event_id`, `event_title`, `user_id`, `amount`, `is_free`, `validation_code` |
 | `ticket.purchase_failed` | WARNING | Ошибка покупки (любая причина) | `event_id`, `user_id`, `error` |
 | `ticket.purchase_webapp_failed` | WARNING | Ошибка покупки через Mini App | `event_id`, `user_id`, `error` |
 | `ticket.cancelled` | INFO | Отмена билета пользователем | `ticket_id`, `event_id`, `user_id` |
@@ -146,6 +146,15 @@
 |---|---|---|---|
 | `ticket.get_user_tickets` | INFO | Билеты пользователя | `user_id`, `count` |
 | `ticket.get_event_tickets` | INFO | Билеты на мероприятие (админ) | `event_id`, `count` |
+
+### Проверка и чекин на входе
+
+| event_type | Уровень | Когда | Доп. поля |
+|---|---|---|---|
+| `ticket.validate` | INFO | Проверка билета по коду | `ticket_id`, `code`, `status` |
+| `ticket.validate_not_found` | INFO | Код не найден | `code` |
+| `ticket.checked_in` | INFO | Успешный вход | `ticket_id`, `event_id`, `user_id`, `admin_id` |
+| `ticket.checkin_failed` | WARNING | Ошибка входа | `ticket_id`, `error` (причина) |
 
 ### Системные метрики (фоновый сбор)
 
