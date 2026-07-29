@@ -172,3 +172,32 @@ async def cancel_ticket(ticket_id: str, auth_data: dict = Depends(validate_init_
         except ValueError as e:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════
+# VK Mini App
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/vk/me")
+async def vk_me(user_id: str, user_name: str = ""):
+    """VK Mini App: приветствие пользователя и регистрация в БД.
+
+    Вызывается из VK Mini App после инициализации VK Bridge.
+    """
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=user_id,
+            name=user_name or None,
+        )
+        await session.commit()
+
+        return {
+            "user_id": user_id,
+            "name": user_name or "Гость",
+            "greeting": f"Привет, {user_name or 'Гость'}!",
+            "platform": "vk",
+            "registered": user is not None,
+        }

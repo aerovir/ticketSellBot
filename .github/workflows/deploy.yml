@@ -6,7 +6,7 @@ on:
   workflow_dispatch:  # ручной запуск
 
 env:
-  COMPOSE_FILES: -f docker-compose.yml -f deploy/docker-compose.beget.yml -f deploy/docker-compose.monitoring.yml
+  COMPOSE_FILES: -f docker-compose.yml -f deploy/docker-compose.beget.yml -f deploy/docker-compose.monitoring.yml -f deploy/docker-compose.nginx.yml
 
 jobs:
   test:
@@ -272,6 +272,29 @@ jobs:
         run: |
           docker compose ${{ env.COMPOSE_FILES }} up -d loki promtail grafana
           echo "✅ Мониторинг запущен"
+
+      - name: 🔐 Получить SSL-сертификат (Let's Encrypt)
+        run: |
+          if [ ! -d "/etc/letsencrypt/live/pochtibot.online" ]; then
+            echo "🔐 Получение SSL-сертификата для pochtibot.online..."
+            docker run --rm 
+              -v /etc/letsencrypt:/etc/letsencrypt 
+              -v /var/www/certbot:/var/www/certbot 
+              -p 80:80 
+              certbot/certbot:latest 
+              certonly --standalone 
+              -d pochtibot.online 
+              --non-interactive --agree-tos 
+              -m admin@pochtibot.online 
+              --preferred-challenges http || true
+          else
+            echo "✅ SSL-сертификат уже есть"
+          fi
+
+      - name: 🚀 Запустить Nginx reverse proxy
+        run: |
+          docker compose ${{ env.COMPOSE_FILES }} up -d nginx
+          echo "✅ Nginx запущен"
 
       - name: 🚀 Запустить VK бота (если есть токен)
         env:

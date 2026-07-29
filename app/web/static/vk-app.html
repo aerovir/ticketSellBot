@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TicketBot</title>
+    <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #fff;
+            color: #222;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            text-align: center;
+        }
+        .logo {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        p {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 24px;
+        }
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid #e0e0e0;
+            border-top-color: #2688eb;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .greeting {
+            font-size: 20px;
+            font-weight: 500;
+            color: #2688eb;
+            margin-top: 20px;
+        }
+        .error {
+            color: #e64646;
+            font-size: 14px;
+            margin-top: 12px;
+        }
+        .card {
+            background: #f5f5f5;
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 320px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .badge {
+            display: inline-block;
+            background: #2688eb;
+            color: #fff;
+            border-radius: 6px;
+            padding: 4px 12px;
+            font-size: 12px;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="logo">🎫</div>
+    <h1>TicketBot</h1>
+    <p>Билеты на мероприятия</p>
+    <div id="loading" class="spinner"></div>
+    <div id="greeting" class="greeting" style="display:none"></div>
+    <div id="error" class="error" style="display:none"></div>
+    <div id="card" class="card" style="display:none">
+        <div id="card-content"></div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin + '/api';
+
+        async function init() {
+            try {
+                // Инициализация VK Bridge
+                await vkBridge.send('VKWebAppInit');
+
+                // Получаем данные пользователя
+                const user = await vkBridge.send('VKWebAppGetUserInfo');
+                const userId = user.id;
+                const userName = user.first_name || '';
+
+                // Запрос к нашему API
+                const response = await fetch(`${API_URL}/vk/me?user_id=${userId}&user_name=${encodeURIComponent(userName)}`);
+                const data = await response.json();
+
+                // Показываем приветствие
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('greeting').style.display = 'block';
+                document.getElementById('greeting').textContent = data.greeting;
+
+                // Карточка пользователя
+                document.getElementById('card').style.display = 'block';
+                document.getElementById('card-content').innerHTML = `
+                    <div style="font-size:14px;color:#666;">Вы вошли как</div>
+                    <div style="font-size:18px;font-weight:500;margin:8px 0;">${data.name}</div>
+                    <div class="badge">VK Mini App</div>
+                `;
+            } catch (e) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = 'Ошибка загрузки: ' + e.message;
+            }
+        }
+
+        // Ждём загрузки VK Bridge
+        if (window.vkBridge) {
+            init();
+        } else {
+            document.addEventListener('DOMContentLoaded', () => {
+                if (window.vkBridge) {
+                    init();
+                } else {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('error').style.display = 'block';
+                    document.getElementById('error').textContent = 'VK Bridge не загружен. Откройте приложение внутри VK.';
+                }
+            });
+        }
+    </script>
+</body>
+</html>
