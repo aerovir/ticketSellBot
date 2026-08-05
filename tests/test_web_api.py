@@ -801,3 +801,158 @@ class TestSuperAdminGaps:
         with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
             resp = client.get("/api/admin/health", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 403
+
+
+class TestInviteApi:
+    """Тесты эндпоинтов пригласительных (TDD: до реализации)."""
+
+    def test_admin_issue_invite(self, client):
+        """POST /admin/events/{id}/invites — админ канала выдаёт пригласительное."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        mock_invite = Mock()
+        mock_invite.id = EVENT_ID
+        mock_invite.validation_code = "AB3X-K7M9"
+        mock_invite.seats = 1
+        mock_invite.status.value = "active"
+
+        with (
+            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.TicketService.issue_invite", new_callable=AsyncMock, return_value=mock_invite),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/invites",
+                headers={"X-Skip-Auth": "1"},
+                json={"seats": 1},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["validation_code"] == "AB3X-K7M9"
+
+    def test_admin_issue_invite_super_forbidden(self, client):
+        """POST invites — 403 для суперадмина (не выдаёт пригласительные)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/invites",
+                headers={"X-Skip-Auth": "1"},
+                json={"seats": 1},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_issue_invite_not_admin_forbidden(self, client):
+        """POST invites — 403 если канал не в managed."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=False, channel_ids=["99999999-9999-4999-8999-999999999999"]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/invites",
+                headers={"X-Skip-Auth": "1"},
+                json={"seats": 1},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_issue_invite_no_pro(self, client):
+        """POST invites — 403 если канал не pro (require_feature False)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/invites",
+                headers={"X-Skip-Auth": "1"},
+                json={"seats": 1},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_issue_invite_conflict(self, client):
+        """POST invites — 409 при ValueError."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.TicketService.issue_invite", new_callable=AsyncMock, side_effect=ValueError("Квота исчерпана")),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/invites",
+                headers={"X-Skip-Auth": "1"},
+                json={"seats": 1},
+            )
+        assert resp.status_code == 409
+
+    def test_admin_cancel_invite(self, client):
+        """POST invites/{tid}/cancel — отмена пригласительного."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+        mock_invite = Mock()
+        mock_invite.id = EVENT_ID
+        mock_invite.status.value = "refunded"
+
+        with (
+            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.TicketService.cancel_invite", new_callable=AsyncMock, return_value=mock_invite),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/invites/{EVENT_ID}/cancel",
+                headers={"X-Skip-Auth": "1"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "refunded"
+
+    def test_admin_get_invites(self, client):
+        """GET /admin/events/{id}/invites — список пригласительных."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.TicketService.get_event_invites", new_callable=AsyncMock, return_value=[{"is_invite": True, "validation_code": "AB3X-K7M9"}]),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/invites", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert len(resp.json()["invites"]) == 1
+
+    def test_admin_ticket_qr(self, client):
+        """GET /admin/tickets/{id}/qr — PNG-картинка QR."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.validation_code = "AB3X-K7M9"
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
+        ):
+            resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert "image/png" in resp.headers["content-type"]

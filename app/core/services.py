@@ -281,6 +281,7 @@ class ChannelService:
             "free_events": {SubscriptionTier.basic, SubscriptionTier.pro},
             "paid_events": {SubscriptionTier.pro},
             "qr_codes": {SubscriptionTier.pro},
+            "invite_tickets": {SubscriptionTier.pro},
         }
 
         return tier in FEATURES.get(feature, set())
@@ -604,7 +605,8 @@ class EventService:
 
     async def create(self, title: str, description: Optional[str], date: datetime,
                      location: Optional[str], price: float,
-                     total_tickets: int, channel_id: uuid.UUID) -> Event:
+                     total_tickets: int, channel_id: uuid.UUID,
+                     invites_quota: int = 0) -> Event:
         start = time.perf_counter()
 
         # Проверка: если мероприятие платное, канал должен иметь Pro-подписку
@@ -627,6 +629,7 @@ class EventService:
             available_tickets=total_tickets,
             is_active=True,
             is_free=is_free,
+            invites_quota=invites_quota,
             channel_id=channel_id,
         )
         self.session.add(event)
@@ -678,6 +681,9 @@ class EventService:
             })
             return None
 
+        # Снимок старых значений ДО setattr (нужен для корректировки available)
+        before = {k: getattr(event, k) for k in data if hasattr(event, k)}
+
         changed = {}
         for key, value in data.items():
             if hasattr(event, key):
@@ -688,10 +694,19 @@ class EventService:
 
         # Sync available_tickets when total_tickets changes
         if "total_tickets" in data:
-            old_total = event.total_tickets
+            old_total = before["total_tickets"]
             new_total = data["total_tickets"]
             diff = new_total - old_total
             event.available_tickets = max(0, event.available_tickets + diff)
+
+        # Изменение квоты пригласительных выделяет/возвращает места из непроданных:
+        # увеличение quota → резервируем места (available -= diff),
+        # уменьшение → возвращаем в непроданные (available += diff).
+        if "invites_quota" in data:
+            old_quota = before["invites_quota"]
+            new_quota = data["invites_quota"]
+            diff = new_quota - old_quota
+            event.available_tickets = max(0, event.available_tickets - diff)
 
         await self.session.flush()
         logger.info("", extra={
@@ -762,19 +777,38 @@ class EventService:
         if event is None:
             raise ValueError("Мероприятие не найдено")
 
-        # Count active tickets
-        active_stmt = select(func.count(Ticket.id)).where(
-            and_(Ticket.event_id == event_id, Ticket.status == TicketStatus.active)
+        # Sold = активные ОПЛАЧЕННЫЕ билеты (не пригласительные)
+        sold_stmt = select(func.count(Ticket.id)).where(
+            and_(
+                Ticket.event_id == event_id,
+                Ticket.status == TicketStatus.active,
+                Ticket.is_invite == False,
+            )
         )
-        active_result = await self.session.execute(active_stmt)
-        sold = active_result.scalar() or 0
+        sold_result = await self.session.execute(sold_stmt)
+        sold = sold_result.scalar() or 0
 
-        # Count refunded tickets
+        # Refunded = возвращённые билеты
         refunded_stmt = select(func.count(Ticket.id)).where(
             and_(Ticket.event_id == event_id, Ticket.status == TicketStatus.refunded)
         )
         refunded_result = await self.session.execute(refunded_stmt)
         refunded = refunded_result.scalar() or 0
+
+        # Пригласительные: выдано (все) и использовано (checked_in)
+        invites_stmt = select(func.count(Ticket.id)).where(
+            and_(Ticket.event_id == event_id, Ticket.is_invite == True)
+        )
+        invites_issued = (await self.session.execute(invites_stmt)).scalar() or 0
+
+        invites_used_stmt = select(func.count(Ticket.id)).where(
+            and_(
+                Ticket.event_id == event_id,
+                Ticket.is_invite == True,
+                Ticket.status == TicketStatus.checked_in,
+            )
+        )
+        invites_used = (await self.session.execute(invites_used_stmt)).scalar() or 0
 
         sold_pct = round((sold / event.total_tickets * 100), 1) if event.total_tickets > 0 else 0
         revenue = sold * event.price
@@ -785,6 +819,8 @@ class EventService:
             "total_tickets": event.total_tickets,
             "sold": sold,
             "refunded": refunded,
+            "invites_issued": invites_issued,
+            "invites_used": invites_used,
             "revenue": revenue,
             "status": "success",
             "duration_ms": _ms(start),
@@ -797,6 +833,9 @@ class EventService:
             "refunded": refunded,
             "sold_pct": sold_pct,
             "revenue": revenue,
+            "invites_quota": event.invites_quota,
+            "invites_issued": invites_issued,
+            "invites_used": invites_used,
         }
 
 
@@ -1220,6 +1259,8 @@ class TicketService:
                 "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
                 "checked_in_by": ticket.checked_in_by,
                 "is_free": ticket.is_free,
+                "is_invite": ticket.is_invite,
+                "seats": ticket.seats,
             })
 
         logger.info("", extra={
@@ -1265,6 +1306,8 @@ class TicketService:
                 "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else "",
                 "checked_in_by": ticket.checked_in_by or "",
                 "is_free": "да" if ticket.is_free else "нет",
+                "is_invite": "да" if ticket.is_invite else "нет",
+                "seats": ticket.seats,
             })
         return tickets
 
@@ -1405,6 +1448,123 @@ class TicketService:
         if ticket is None:
             raise ValueError(f"Билет с кодом {code} не найден")
         return await self.check_in(ticket.id, admin_id)
+
+    # ─── Пригласительные (invite tickets, pro) ─────────────────────
+
+    async def issue_invite(
+        self,
+        event_id: uuid.UUID,
+        seats: int = 1,
+        issued_by: str | None = None,
+    ) -> Ticket:
+        """Выдать пригласительный билет на мероприятие (бесплатно).
+
+        Пригласительный занимает `seats` мест из непроданных и не создаёт Payment.
+        Проверяет: событие активно/не прошло, хватает мест, не превышена квота.
+
+        Raises:
+            ValueError: если событие невалидно, нет мест или исчерпана квота.
+        """
+        start = time.perf_counter()
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            raise ValueError("Мероприятие не найдено")
+        if not event.is_active:
+            raise ValueError("Мероприятие неактивно")
+        if event.date < datetime.now(timezone.utc):
+            raise ValueError("Мероприятие уже прошло")
+        if event.invites_quota <= 0:
+            raise ValueError("Квота пригласительных не настроена (invites_quota=0)")
+        if seats < 1 or seats > 3:
+            raise ValueError("Вместимость пригласительного: 1, 2 или 3 человека")
+        if event.available_tickets < seats:
+            raise ValueError(f"Не хватает свободных мест (свободно: {event.available_tickets})")
+
+        # Подсчёт уже выданных пригласительных
+        issued_stmt = select(func.count(Ticket.id)).where(
+            and_(Ticket.event_id == event_id, Ticket.is_invite == True)
+        )
+        already_issued = (await self.session.execute(issued_stmt)).scalar() or 0
+        if already_issued >= event.invites_quota:
+            raise ValueError("Исчерпана квота пригласительных")
+
+        ticket = Ticket(
+            id=uuid.uuid4(),
+            event_id=event_id,
+            user_id=None,  # пригласительное не привязано к пользователю
+            status=TicketStatus.active,
+            validation_code=await self.generate_validation_code(),
+            is_free=True,
+            is_invite=True,
+            seats=seats,
+            invited_by=issued_by,
+        )
+        self.session.add(ticket)
+        event.available_tickets -= seats
+        await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "ticket.invite_issued",
+            "ticket_id": str(ticket.id),
+            "event_id": str(event_id),
+            "event_title": event.title,
+            "seats": seats,
+            "issued_by": issued_by,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return ticket
+
+    async def cancel_invite(self, ticket_id: uuid.UUID) -> Ticket:
+        """Отменить пригласительный — вернуть места в непроданные.
+
+        Raises:
+            ValueError: если билет не найден, не пригласительный или уже возвращён.
+        """
+        ticket = await self.session.get(Ticket, ticket_id)
+        if ticket is None:
+            raise ValueError("Пригласительное не найдено")
+        if not ticket.is_invite:
+            raise ValueError("Это не пригласительное")
+        if ticket.status == TicketStatus.refunded:
+            raise ValueError("Пригласительное уже возвращено")
+
+        ticket.status = TicketStatus.refunded
+        event = await self.session.get(Event, ticket.event_id)
+        if event:
+            event.available_tickets += ticket.seats
+        await self.session.flush()
+        return ticket
+
+    async def get_event_invites(self, event_id: uuid.UUID) -> list[dict]:
+        """Список пригласительных по мероприятию (админ)."""
+        stmt = (
+            select(Ticket)
+            .where(and_(Ticket.event_id == event_id, Ticket.is_invite == True))
+            .order_by(Ticket.purchase_date.desc())
+        )
+        result = await self.session.execute(stmt)
+        tickets = list(result.scalars().all())
+
+        return [
+            {
+                "id": ticket.id,
+                "validation_code": ticket.validation_code,
+                "seats": ticket.seats,
+                "status": ticket.status.value,
+                "is_invite": ticket.is_invite,
+                "invited_by": ticket.invited_by,
+                "purchase_date": ticket.purchase_date.isoformat(),
+                "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
+            }
+            for ticket in tickets
+        ]
+
+    async def get_by_code(self, code: str) -> Ticket | None:
+        """Найти билет по validation_code (для deep-link пригласительного)."""
+        stmt = select(Ticket).where(Ticket.validation_code == code)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
 
 # ─── Stats Service ──────────────────────────────────────────────────────────

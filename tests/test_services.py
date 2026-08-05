@@ -893,3 +893,258 @@ class TestUserLookup:
         svc = UserService(db_session)
         user = await svc.get_by_platform_user_id(PlatformType.telegram, "nonexistent_999")
         assert user is None
+
+
+# ═══════════════════════════════════════════════════════════════
+# Пригласительные (invite tickets) — TDD: тесты пишутся до кода
+# ═══════════════════════════════════════════════════════════════
+
+class TestInviteTickets:
+    """Тесты выдачи/отмены пригласительных."""
+
+    async def _make_invite_event(self, db_session, channel, total=10, quota=5, price=1000.0):
+        """Создаёт мероприятие с квотой пригласительных."""
+        from app.core.services import EventService
+        from datetime import datetime, timezone, timedelta
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Invite Event",
+            description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None,
+            price=price,
+            total_tickets=total,
+            channel_id=channel.id,
+            invites_quota=quota,
+        )
+        await db_session.flush()
+        return event
+
+    async def test_issue_invite_basic(self, db_session, sample_channel):
+        """Выдача пригласительного: is_invite, seats=1, available-1, код есть."""
+        from app.core.services import TicketService
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=5)
+        ticket_svc = TicketService(db_session)
+
+        invite = await ticket_svc.issue_invite(event.id, seats=1, issued_by="admin_1")
+        await db_session.commit()
+
+        assert invite.is_invite is True
+        assert invite.seats == 1
+        assert invite.invited_by == "admin_1"
+        assert invite.validation_code is not None
+        assert invite.status.value == "active"
+        # available уменьшился на 1
+        await db_session.refresh(event)
+        assert event.available_tickets == 9
+
+    async def test_issue_invite_seats3(self, db_session, sample_channel):
+        """Пригласительное на 3 человек: available -= 3."""
+        from app.core.services import TicketService
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=5)
+        ticket_svc = TicketService(db_session)
+
+        await ticket_svc.issue_invite(event.id, seats=3, issued_by="admin_1")
+        await db_session.commit()
+        await db_session.refresh(event)
+        assert event.available_tickets == 7
+
+    async def test_issue_invite_quota_zero(self, db_session, sample_channel):
+        """Пригласительное при invites_quota=0 → ValueError."""
+        from app.core.services import TicketService
+        import pytest
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=0)
+        ticket_svc = TicketService(db_session)
+
+        with pytest.raises(ValueError):
+            await ticket_svc.issue_invite(event.id, seats=1, issued_by="admin_1")
+
+    async def test_issue_invite_quota_exceeded(self, db_session, sample_channel):
+        """Превышение квоты пригласительных → ValueError."""
+        from app.core.services import TicketService
+        import pytest
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=2)
+        ticket_svc = TicketService(db_session)
+
+        await ticket_svc.issue_invite(event.id, seats=1, issued_by="a")
+        await ticket_svc.issue_invite(event.id, seats=1, issued_by="a")
+        await db_session.commit()
+        with pytest.raises(ValueError):
+            await ticket_svc.issue_invite(event.id, seats=1, issued_by="a")
+
+    async def test_issue_invite_no_seats(self, db_session, sample_channel):
+        """Не хватает мест → ValueError."""
+        from app.core.services import TicketService
+        import pytest
+        event = await self._make_invite_event(db_session, sample_channel, total=2, quota=5)
+        ticket_svc = TicketService(db_session)
+
+        await ticket_svc.issue_invite(event.id, seats=2, issued_by="a")
+        await db_session.commit()
+        with pytest.raises(ValueError):
+            await ticket_svc.issue_invite(event.id, seats=2, issued_by="a")
+
+    async def test_issue_invite_past_event(self, db_session, sample_past_event):
+        """Прошедшее мероприятие → ValueError."""
+        from app.core.services import TicketService
+        import pytest
+        sample_past_event.invites_quota = 5
+        await db_session.flush()
+        ticket_svc = TicketService(db_session)
+        with pytest.raises(ValueError):
+            await ticket_svc.issue_invite(sample_past_event.id, seats=1, issued_by="a")
+
+    async def test_cancel_invite(self, db_session, sample_channel):
+        """Отмена пригласительного: available += seats, статус refunded."""
+        from app.core.services import TicketService
+        from app.core.models import TicketStatus
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=5)
+        ticket_svc = TicketService(db_session)
+        invite = await ticket_svc.issue_invite(event.id, seats=2, issued_by="admin_1")
+        await db_session.commit()
+
+        await ticket_svc.cancel_invite(invite.id)
+        await db_session.commit()
+
+        await db_session.refresh(event)
+        assert event.available_tickets == 10  # вернулось
+        await db_session.refresh(invite)
+        assert invite.status == TicketStatus.refunded
+
+    async def test_get_event_invites(self, db_session, sample_channel):
+        """Список пригласительных по событию."""
+        from app.core.services import TicketService
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=5)
+        ticket_svc = TicketService(db_session)
+        await ticket_svc.issue_invite(event.id, seats=1, issued_by="a")
+        await ticket_svc.issue_invite(event.id, seats=2, issued_by="b")
+        await db_session.commit()
+
+        invites = await ticket_svc.get_event_invites(event.id)
+        assert len(invites) == 2
+        assert invites[0]["is_invite"] is True
+        assert invites[0]["validation_code"] is not None
+
+
+class TestEventInvitesQuota:
+    """Тесты квоты пригласительных на мероприятии."""
+
+    async def test_create_with_invites_quota(self, db_session, sample_channel):
+        """create сохраняет invites_quota."""
+        from app.core.services import EventService
+        from datetime import datetime, timezone, timedelta
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Q Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=0, total_tickets=20,
+            channel_id=sample_channel.id, invites_quota=7,
+        )
+        await db_session.commit()
+        await db_session.refresh(event)
+        assert event.invites_quota == 7
+        assert event.available_tickets == 20
+
+    async def test_update_invites_quota_increase(self, db_session, sample_channel):
+        """Увеличение квоты выделяет из непроданных (available -= diff)."""
+        from app.core.services import EventService
+        from datetime import datetime, timezone, timedelta
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Q Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=0, total_tickets=20,
+            channel_id=sample_channel.id, invites_quota=5,
+        )
+        await db_session.commit()
+        await svc.update(event.id, invites_quota=10)
+        await db_session.commit()
+        await db_session.refresh(event)
+        assert event.available_tickets == 15  # 20 - 5 новых
+
+    async def test_update_invites_quota_decrease(self, db_session, sample_channel):
+        """Уменьшение квоты возвращает в непроданные (available += diff)."""
+        from app.core.services import EventService
+        from datetime import datetime, timezone, timedelta
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Q Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=0, total_tickets=20,
+            channel_id=sample_channel.id, invites_quota=10,
+        )
+        await db_session.commit()
+        await svc.update(event.id, invites_quota=6)
+        await db_session.commit()
+        await db_session.refresh(event)
+        assert event.available_tickets == 24  # 20 + 4
+
+
+class TestStatsWithInvites:
+    """Тесты статистики с пригласительными."""
+
+    async def test_stats_invites(self, db_session, sample_channel):
+        """get_event_stats: sold только paid, invites_issued/used/quota."""
+        from app.core.services import EventService, TicketService, UserService
+        from app.core.models import PlatformType
+        from datetime import datetime, timezone, timedelta
+
+        event_svc = EventService(db_session)
+        event = await event_svc.create(
+            title="Stats Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=1000.0, total_tickets=20,
+            channel_id=sample_channel.id, invites_quota=5,
+        )
+        await db_session.commit()
+
+        # Купленный билет
+        user_svc = UserService(db_session)
+        user = await user_svc.get_or_create(PlatformType.telegram, "buyer1", "Buyer")
+        ticket_svc = TicketService(db_session)
+        await ticket_svc.buy_ticket(user.id, event.id)
+        # Пригласительное
+        invite = await ticket_svc.issue_invite(event.id, seats=1, issued_by="admin")
+        # Пригласительное использовано (check-in)
+        await ticket_svc.check_in(invite.id, "checker")
+        await db_session.commit()
+
+        stats = await event_svc.get_event_stats(event.id)
+        assert stats["sold"] == 1          # только купленный
+        assert stats["invites_issued"] == 1
+        assert stats["invites_used"] == 1
+        assert stats["invites_quota"] == 5
+        assert stats["revenue"] == 1000.0  # только оплаченный
+
+
+class TestQrGeneration:
+    """Тесты генерации QR-кодов."""
+
+    async def test_generate_qr_png(self):
+        """generate_qr_png возвращает PNG-байты."""
+        from app.core.qr import generate_qr_png
+        png = generate_qr_png("AB3X-K7M9")
+        assert png.startswith(b"\x89PNG")
+        assert len(png) > 100
+
+
+class TestTicketExtraFields:
+    """Поля is_invite/seats в списках билетов."""
+
+    async def test_get_event_tickets_has_invite_fields(self, db_session, sample_event, ticket_svc, sample_user):
+        """get_event_tickets включает is_invite/seats."""
+        await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
+        await db_session.commit()
+        tickets = await ticket_svc.get_event_tickets(sample_event.id)
+        assert len(tickets) == 1
+        assert "is_invite" in tickets[0]
+        assert "seats" in tickets[0]
+
+    async def test_export_event_tickets_has_invite_fields(self, db_session, sample_event, ticket_svc, sample_user):
+        """export_event_tickets включает is_invite/seats."""
+        await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
+        await db_session.commit()
+        rows = await ticket_svc.export_event_tickets(sample_event.id)
+        assert len(rows) == 1
+        assert "is_invite" in rows[0]
+        assert "seats" in rows[0]

@@ -103,6 +103,7 @@ class Event(Base):
     media_telegram_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "photo" или "video"
     is_free: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    invites_quota: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -124,8 +125,9 @@ class Ticket(Base):
     event_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("events.id"), nullable=False
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    # user_id nullable: пригласительные (is_invite=True) не привязаны к пользователю
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     purchase_date: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -137,6 +139,9 @@ class Ticket(Base):
     checked_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     checked_in_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_free: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_invite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    seats: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    invited_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     qr_code_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     event = relationship("Event", back_populates="tickets", lazy="raise")

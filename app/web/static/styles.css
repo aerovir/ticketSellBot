@@ -754,3 +754,30 @@ textarea.form-input {
     background: #e74c3c;
     color: white;
 }
+
+/* ─── QR modal ─── */
+
+.qr-modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 400;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.qr-modal-card {
+    background: var(--tg-section-bg);
+    border-radius: var(--radius);
+    padding: 20px;
+    text-align: center;
+    max-width: 300px;
+    width: 100%;
+}
+
+.qr-modal-card img {
+    display: block;
+    margin: 0 auto;
+}

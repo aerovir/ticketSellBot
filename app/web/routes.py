@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.database import async_session_factory
 from app.core.models import PlatformType
+from app.core.qr import generate_qr_png
 from app.core.schemas import (
     BroadcastIn,
     ChangeAdminIn,
@@ -21,6 +22,7 @@ from app.core.schemas import (
     CheckInIn,
     EventCreate,
     EventUpdateIn,
+    InviteIssueIn,
     MeUpdateIn,
     SubscribeIn,
 )
@@ -967,3 +969,140 @@ async def admin_health(current: CurrentUser = Depends(require_super_admin)):
         "bot_username": bot_username,
         "db_ok": db_ok,
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Админ: пригласительные (pro, только админ канала)
+# ═══════════════════════════════════════════════════════════════
+
+
+def _can_issue_invites(current: CurrentUser, event) -> bool:
+    """Правило: пригласительные выдаёт только админ канала (не суперадмин)."""
+    if current.is_super_admin:
+        return False
+    return event.channel_id in current.managed_channel_ids
+
+
+@router.post("/admin/events/{event_id}/invites", status_code=status.HTTP_201_CREATED)
+async def admin_issue_invite(
+    event_id: str,
+    body: InviteIssueIn,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Выдать пригласительное (только админ канала, pro-подписка)."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_issue_invites(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пригласительные выдаёт только админ канала")
+
+        channel_svc = ChannelService(session)
+        if not await channel_svc.require_feature(event.channel_id, "invite_tickets"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Для пригласительных нужна подписка Pro")
+
+        ticket_svc = TicketService(session)
+        try:
+            invite = await ticket_svc.issue_invite(uid, seats=body.seats, issued_by=current.telegram_user_id)
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "ticket_id": str(invite.id),
+        "validation_code": invite.validation_code,
+        "seats": invite.seats,
+        "status": invite.status.value,
+    }
+
+
+@router.post("/admin/events/{event_id}/invites/{ticket_id}/cancel")
+async def admin_cancel_invite(
+    event_id: str,
+    ticket_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Отменить пригласительное (вернуть места)."""
+    try:
+        uid = UUID(event_id)
+        tid = UUID(ticket_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_issue_invites(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пригласительные управляет админ канала")
+
+        ticket_svc = TicketService(session)
+        try:
+            invite = await ticket_svc.cancel_invite(tid)
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {"ticket_id": str(tid), "status": invite.status.value}
+
+
+@router.get("/admin/events/{event_id}/invites")
+async def admin_list_invites(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Список пригласительных по мероприятию."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_issue_invites(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пригласительные управляет админ канала")
+        ticket_svc = TicketService(session)
+        invites = await ticket_svc.get_event_invites(uid)
+
+    return {"event_id": str(uid), "invites": invites}
+
+
+@router.get("/admin/tickets/{ticket_id}/qr")
+async def admin_ticket_qr(
+    ticket_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """PNG-картинка QR-кода билета/пригласительного."""
+    try:
+        tid = UUID(ticket_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID билета")
+
+    async with async_session_factory() as session:
+        ticket_svc = TicketService(session)
+        pair = await ticket_svc.get_ticket_event(tid)
+        if pair is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Билет не найден")
+        ticket, event = pair
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+
+    code = ticket.validation_code or str(ticket.id)
+    png = generate_qr_png(code)
+    return StreamingResponse(
+        iter([png]),
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="ticket-{ticket.id}-qr.png"'},
+    )

@@ -36,6 +36,7 @@ class EventCreate(BaseModel):
     total_tickets: int = Field(default=0, ge=0)
     available_tickets: int = Field(default=0, ge=0)
     channel_id: UUID
+    invites_quota: int = Field(default=0, ge=0)
 
 
 class EventUpdateIn(BaseModel):
@@ -46,6 +47,12 @@ class EventUpdateIn(BaseModel):
     location: Optional[str] = None
     price: Optional[float] = Field(default=None, ge=0)
     total_tickets: Optional[int] = Field(default=None, ge=0)
+    invites_quota: Optional[int] = Field(default=None, ge=0)
+
+
+class InviteIssueIn(BaseModel):
+    """Выдать пригласительный: вместимость 1/2/3 человека."""
+    seats: int = Field(default=1, ge=1, le=3)
 
 
 class EventOut(BaseModel):

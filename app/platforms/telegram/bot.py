@@ -18,6 +18,7 @@ from app.core.models import (
     PlatformType, Channel, User, Event, Ticket, Payment,
     TicketStatus, PaymentStatus,
 )
+from app.core.qr import generate_qr_png
 from app.core.services import UserService, EventService, TicketService, ChannelService, ChannelAdminService
 from app.core.system_metrics import metrics_loop
 from app.platforms.base import PlatformBot
@@ -181,6 +182,11 @@ class TelegramBot(PlatformBot):
             except (ValueError, IndexError):
                 pass
 
+        # Deep link пригласительного: t.me/bot?start=invite_<CODE>
+        if payload and payload.startswith("invite_"):
+            await self._handle_invite_link(message, payload[7:])
+            return
+
         await self._get_user_id(message)
 
         logger.info("", extra={
@@ -210,6 +216,36 @@ class TelegramBot(PlatformBot):
                 [InlineKeyboardButton(text="🎫 Мои билеты", callback_data="channel_my_tickets")],
             ])
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+    async def _handle_invite_link(self, message: types.Message, code: str):
+        """Показать пригласительный по deep-link invite_<code>."""
+        from aiogram.types import BufferedInputFile
+
+        code = code.strip().upper()
+        async with async_session_factory() as session:
+            ticket_svc = TicketService(session)
+            invite = await ticket_svc.get_by_code(code)
+
+        if invite is None or not invite.is_invite:
+            await message.answer("❌ Пригласительный не найден или недействителен.")
+            return
+
+        text = (
+            f"🎟 <b>Вам выдан пригласительный!</b>\n\n"
+            f"🔑 Код: <code>{invite.validation_code}</code>\n"
+            f"👥 Вместимость: {invite.seats} чел.\n\n"
+            f"Покажите этот код (или QR) на входе."
+        )
+
+        try:
+            png = generate_qr_png(invite.validation_code or str(invite.id))
+            await message.answer_photo(
+                BufferedInputFile(png, filename="invite.png"),
+                caption=text,
+                parse_mode="HTML",
+            )
+        except Exception:
+            await message.answer(text, parse_mode="HTML")
 
     async def cmd_events(self, message: types.Message, page: int = 0):
         """Список мероприятий с пагинацией."""

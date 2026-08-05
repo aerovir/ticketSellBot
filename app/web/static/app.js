@@ -748,6 +748,11 @@ async function showAdminEventForm(eventId) {
                 <label class="form-label">Количество билетов *</label>
                 <input class="form-input" type="number" min="1" step="1" id="f_tickets" required value="${event ? event.total_tickets : 100}">
             </div>
+            <div class="form-field">
+                <label class="form-label">Пригласительных (лимит, Pro)</label>
+                <input class="form-input" type="number" min="0" step="1" id="f_invites" value="${event ? (event.invites_quota || 0) : 0}">
+                <div class="hint" style="margin:4px 0 0">Сколько пригласительных можно выдать из непроданных мест</div>
+            </div>
             ${!event ? `
             <div class="form-field">
                 <label class="form-label">Канал *</label>
@@ -780,11 +785,15 @@ async function submitAdminEventForm(eventId) {
     if (!title || !dateStr) { showToast("Заполните название и дату", true); return; }
     if (total_tickets <= 0) { showToast("Билетов должно быть > 0", true); return; }
 
+    const invitesQuotaEl = document.getElementById("f_invites");
+    const invites_quota = invitesQuotaEl ? (parseInt(invitesQuotaEl.value, 10) || 0) : undefined;
+
     const payload = {
         title, description,
         date: new Date(dateStr).toISOString(),
         location, price, total_tickets,
     };
+    if (invites_quota !== undefined) payload.invites_quota = invites_quota;
     if (!eventId) payload.channel_id = document.getElementById("f_channel").value;
 
     try {
@@ -811,24 +820,28 @@ async function showAdminEventDetail(eventId) {
     try {
         const event = await api(`/api/admin/events/${eventId}`);
         state.currentAdminEvent = event;
-        let stats = null, tickets = null;
+        let stats = null, tickets = null, invites = [];
         try { stats = await api(`/api/admin/events/${eventId}/stats`); } catch (e) { /* нет доступа */ }
         try { tickets = await api(`/api/admin/events/${eventId}/tickets`); } catch (e) { /* нет доступа */ }
-        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : []);
+        try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites);
     } catch (err) {
         hideLoading();
         showError(err.message || "Ошибка загрузки");
     }
 }
 
-function renderAdminEventDetail(event, stats, tickets) {
+function renderAdminEventDetail(event, stats, tickets, invites) {
     hideLoading();
     const container = document.getElementById("adminEventContent");
+    invites = invites || [];
+
     const statsHtml = stats ? `
         <div class="stat-grid">
             <div class="stat-card"><div class="stat-value">${stats.sold}</div><div class="stat-label">Продано</div></div>
             <div class="stat-card"><div class="stat-value">${stats.available}</div><div class="stat-label">Свободно</div></div>
-            <div class="stat-card"><div class="stat-value">${stats.refunded}</div><div class="stat-label">Возвраты</div></div>
+            <div class="stat-card"><div class="stat-value">${stats.invites_issued != null ? stats.invites_issued + '/' + stats.invites_quota : '—'}</div><div class="stat-label">Пригласит. выдано</div></div>
+            <div class="stat-card"><div class="stat-value">${stats.invites_used != null ? stats.invites_used : '—'}</div><div class="stat-label">Пригласит. использовано</div></div>
             <div class="stat-card"><div class="stat-value">${formatPrice(stats.revenue)}</div><div class="stat-label">Выручка</div></div>
         </div>` : '<p class="hint">Статистика недоступна</p>';
 
@@ -837,11 +850,34 @@ function renderAdminEventDetail(event, stats, tickets) {
         : `<div class="admin-list">${tickets.map(t => `
             <div class="admin-list-item">
                 <div style="flex:1">
-                    <div><b>${escapeHtml(t.user_name)}</b> <code>${t.validation_code || '—'}</code></div>
+                    <div><b>${escapeHtml(t.user_name)}</b> <code>${t.validation_code || '—'}</code>
+                        ${t.is_invite ? '<span class="badge badge-tier-pro">приглас.</span>' : ''}</div>
                     <div class="hint">${t.status}${t.checked_in_at ? ' · вход ' + formatDate(t.checked_in_at) : ''} · ${formatDate(t.purchase_date)}</div>
                 </div>
-                ${t.status === 'active' ? `<button class="btn btn-sm btn-danger" onclick="adminCancelTicket('${t.id}')">Отменить</button>` : ''}
+                <button class="btn btn-sm btn-secondary" onclick="showTicketQr('${t.id}')">QR</button>
+                ${t.status === 'active' && !t.is_invite ? `<button class="btn btn-sm btn-danger" onclick="adminCancelTicket('${t.id}')">Отменить</button>` : ''}
             </div>`).join('')}</div>`;
+
+    // Блок пригласительных
+    const invitesHtml = `
+        <h3 style="margin:16px 0 8px">Пригласительные ${stats && stats.invites_quota != null ? `(лимит ${stats.invites_quota})` : ''}</h3>
+        <button class="btn btn-sm btn-primary" onclick="adminIssueInvitePrompt('${event.id}')">🎟 Выдать пригласительное</button>
+        ${invites.length === 0
+            ? '<p class="hint">Пригласительных пока нет</p>'
+            : `<div class="admin-list" style="margin-top:10px">${invites.map(iv => `
+                <div class="admin-list-item">
+                    <div style="flex:1">
+                        <div><code>${iv.validation_code || '—'}</code>
+                            <span class="badge badge-tier-pro">${iv.seats} чел.</span>
+                            ${iv.status === 'checked_in' ? '<span class="badge badge-published">использован</span>' : ''}
+                            ${iv.status === 'refunded' ? '<span class="badge badge-off">возвращён</span>' : ''}
+                        </div>
+                        <div class="hint">${formatDate(iv.purchase_date)}${iv.invited_by ? ' · выдал ' + escapeHtml(iv.invited_by) : ''}</div>
+                    </div>
+                    <button class="btn btn-sm btn-secondary" onclick="showTicketQr('${iv.id}')">QR</button>
+                    ${iv.status === 'active' ? `<button class="btn btn-sm btn-danger" onclick="adminCancelInvite('${event.id}','${iv.id}')">Отменить</button>` : ''}
+                </div>`).join('')}</div>`}
+    `;
 
     container.innerHTML = `
         <h2>${escapeHtml(event.title)}</h2>
@@ -858,6 +894,7 @@ function renderAdminEventDetail(event, stats, tickets) {
             <a class="btn btn-secondary" href="#" onclick="downloadCsv('${event.id}'); return false;">⬇️ Экспорт CSV</a>
         </div>
         ${ticketsHtml}
+        ${invitesHtml}
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             ${event.is_published
@@ -869,6 +906,70 @@ function renderAdminEventDetail(event, stats, tickets) {
         </div>
         <button class="btn btn-secondary" onclick="showAdminEvents()">← К списку</button>
     `;
+}
+
+// ─── Пригласительные: выдать / отменить / QR ──────────────────
+
+async function adminIssueInvitePrompt(eventId) {
+    const seats = prompt("Вместимость пригласительного (1/2/3 человека):", "1");
+    if (!seats) return;
+    const n = parseInt(seats, 10);
+    if (n < 1 || n > 3) { showToast("Вместимость: 1, 2 или 3", true); return; }
+    try {
+        const res = await api(`/api/admin/events/${eventId}/invites`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ seats: n }),
+        });
+        showToast(`✅ Пригласительное выдано: ${res.validation_code}`);
+        await showAdminEventDetail(eventId);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminCancelInvite(eventId, ticketId) {
+    if (!confirm("Отменить пригласительное?")) return;
+    try {
+        await api(`/api/admin/events/${eventId}/invites/${ticketId}/cancel`, { method: "POST" });
+        showToast("✅ Пригласительное отменено, места возвращены");
+        await showAdminEventDetail(eventId);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function showTicketQr(ticketId) {
+    try {
+        const resp = await fetch(`/api/admin/tickets/${ticketId}/qr`, { headers: { "X-Init-Data": state.initData } });
+        if (!resp.ok) { showToast("Ошибка загрузки QR", true); return; }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const overlay = document.createElement("div");
+        overlay.className = "qr-modal";
+        overlay.innerHTML = `
+            <div class="qr-modal-card">
+                <img src="${url}" alt="QR" style="width:220px;height:220px;border-radius:8px">
+                <div style="display:flex;gap:8px;margin-top:12px">
+                    <button class="btn btn-sm btn-primary" onclick="this.closest('.qr-modal').remove(); downloadQr('${ticketId}')">⬇️ Скачать</button>
+                    <button class="btn btn-sm btn-secondary" onclick="this.closest('.qr-modal').remove()">Закрыть</button>
+                </div>
+            </div>`;
+        overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+    } catch (e) { showToast(e.message || "Ошибка QR", true); }
+}
+
+async function downloadQr(ticketId) {
+    try {
+        const resp = await fetch(`/api/admin/tickets/${ticketId}/qr`, { headers: { "X-Init-Data": state.initData } });
+        if (!resp.ok) { showToast("Ошибка", true); return; }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `ticket-${ticketId}-qr.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
 async function adminPublish(eventId) {
