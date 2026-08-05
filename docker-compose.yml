@@ -75,7 +75,7 @@ services:
     profiles:
       - seed
 
-  # ─── Web (Mini App API) — FastAPI сервер (profile: all) ──────
+  # ─── Web (Mini App API) — FastAPI сервер ──────────────────────
   web:
     build: .
     container_name: ticketbot-web
@@ -87,8 +87,6 @@ services:
     command: ["python", "-m", "app.bot.web"]
     ports:
       - "8080:8080"
-    profiles:
-      - all
     labels:
       description: "TicketBot — Web/Mini App API"
 
