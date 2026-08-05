@@ -15,6 +15,14 @@ const state = {
     currentEvent: null,
     tickets: [],
     lastAction: null, // function name for retry
+    // Личный кабинет / админка
+    me: null,
+    role: "user",
+    adminEvents: [],
+    currentAdminEvent: null,
+    adminChannels: [],
+    globalStats: null,
+    adminTab: "events",
 };
 
 // ─── Init ───────────────────────────────────────────────────────
@@ -32,6 +40,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         console.warn("Telegram WebApp SDK not found — running in dev mode");
     }
 
+    // Загружаем профиль/роль и строим таб-бар (best-effort: не блокируем покупку)
+    try {
+        await loadMe();
+        renderTabBar();
+    } catch (e) {
+        console.warn("loadMe failed", e);
+    }
+
     // Check if opened with specific event_id
     const params = new URLSearchParams(window.location.search);
     const eventId = params.get("event_id");
@@ -42,6 +58,85 @@ document.addEventListener("DOMContentLoaded", async () => {
         await showEvents();
     }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// Личный кабинет / роль
+// ═══════════════════════════════════════════════════════════════
+
+async function loadMe() {
+    const me = await api("/api/me");
+    state.me = me;
+    state.role = me.role || "user";
+    return me;
+}
+
+function renderTabBar() {
+    const bar = document.getElementById("tabBar");
+    if (!bar || !state.me) {
+        if (bar) bar.style.display = "none";
+        return;
+    }
+    const tabs = [
+        { id: "events", label: "Мероприятия", fn: "showEvents" },
+        { id: "tickets", label: "Билеты", fn: "showMyTickets" },
+        { id: "profile", label: "Профиль", fn: "showProfile" },
+    ];
+    if (state.role !== "user") {
+        tabs.push({ id: "admin", label: "Панель", fn: "showAdminDashboard" });
+        tabs.push({ id: "checkin", label: "Проверка", fn: "showCheckin" });
+    }
+    if (state.role === "super_admin") {
+        tabs.push({ id: "channels", label: "Каналы", fn: "showAdminChannels" });
+        tabs.push({ id: "stats", label: "Статистика", fn: "showAdminStats" });
+    }
+    bar.innerHTML = tabs.map(t =>
+        `<button class="tab" data-tab="${t.id}" onclick="window['${t.fn}']()">${t.label}</button>`
+    ).join("");
+    bar.style.display = "flex";
+}
+
+function setActiveTab(tabId) {
+    document.querySelectorAll("#tabBar .tab").forEach(b => {
+        b.classList.toggle("active", b.dataset.tab === tabId);
+    });
+}
+
+async function showProfile() {
+    if (!state.me) { try { await loadMe(); } catch (e) { showError("Не удалось загрузить профиль"); return; } }
+    setActiveTab("profile");
+    updateToolbar("Профиль", false, false);
+    showPage("profile");
+    renderProfile();
+}
+
+function renderProfile() {
+    const me = state.me;
+    const roleNames = { user: "Покупатель", channel_admin: "Админ канала", super_admin: "Супер-админ" };
+    const roleText = roleNames[me.role] || me.role;
+    const channels = me.channels || [];
+
+    document.getElementById("profileContent").innerHTML = `
+        <div class="profile-card">
+            <div class="profile-avatar">👤</div>
+            <h2>${escapeHtml(me.name || "Пользователь")}</h2>
+            <p class="hint">Telegram ID: <code>${escapeHtml(me.telegram_user_id)}</code></p>
+            <span class="badge badge-role">${roleText}</span>
+        </div>
+        <h3 style="margin:20px 0 10px">Мои каналы</h3>
+        ${channels.length === 0
+            ? '<p class="hint">Нет каналов</p>'
+            : `<div class="admin-list">
+                ${channels.map(ch => `
+                    <div class="admin-list-item">
+                        <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
+                            <span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>
+                        </div>
+                        <div class="hint">${ch.is_subscription_active ? '🟢 Активна' : '🔴 Неактивна'}${ch.subscription_until ? ' до ' + formatDate(ch.subscription_until) : ''}</div>
+                    </div>`).join('')}
+            </div>`}
+        <button class="btn btn-secondary" style="margin-top:16px" onclick="showMyTickets()">🎫 Мои билеты</button>
+    `;
+}
 
 // ─── API helper ─────────────────────────────────────────────────
 
@@ -451,6 +546,495 @@ function showEmpty(containerId, message) {
     container.innerHTML = `
         <div class="empty-state">
             <p>${escapeHtml(message)}</p>
+        </div>
+    `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Админка
+// ═══════════════════════════════════════════════════════════════
+
+function showAdminDashboard() {
+    setActiveTab("admin");
+    updateToolbar("Панель", false, false);
+    showPage("admin");
+    const isSuper = state.role === "super_admin";
+    document.getElementById("adminContent").innerHTML = `
+        <h2 style="margin-bottom:16px">Панель управления</h2>
+        <div class="admin-menu-grid">
+            <button class="admin-menu-card" onclick="showAdminEvents()">
+                <div class="admin-menu-icon">🎫</div>
+                <div>Мероприятия</div>
+            </button>
+            <button class="admin-menu-card" onclick="showCheckin()">
+                <div class="admin-menu-icon">🔍</div>
+                <div>Проверка билета</div>
+            </button>
+            ${isSuper ? `
+            <button class="admin-menu-card" onclick="showAdminChannels()">
+                <div class="admin-menu-icon">📢</div>
+                <div>Каналы</div>
+            </button>
+            <button class="admin-menu-card" onclick="showAdminStats()">
+                <div class="admin-menu-icon">📊</div>
+                <div>Статистика</div>
+            </button>` : ''}
+        </div>
+    `;
+}
+
+// ─── Мероприятия (список + создание) ───────────────────────────
+
+async function showAdminEvents() {
+    setActiveTab("admin");
+    state.lastAction = "showAdminEvents";
+    updateToolbar("Мероприятия", true, false);
+    showPage("admin-events");
+    showLoading();
+    try {
+        const events = await api("/api/admin/events");
+        state.adminEvents = events;
+        renderAdminEvents(events);
+    } catch (err) {
+        hideLoading();
+        showError(err.message || "Ошибка загрузки мероприятий");
+    }
+}
+
+function renderAdminEvents(events) {
+    hideLoading();
+    const container = document.getElementById("adminEventsContent");
+    if (!events || events.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🎫</div>
+                <h3>Нет мероприятий</h3>
+                <button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>
+            </div>
+        `;
+        return;
+    }
+    container.innerHTML = `
+        <button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>
+        <div class="admin-list" style="margin-top:12px">
+            ${events.map(e => `
+                <div class="admin-list-item">
+                    <div style="flex:1;cursor:pointer" onclick="showAdminEventDetail('${e.id}')">
+                        <div><b>${escapeHtml(e.title)}</b>
+                            ${e.is_published ? '<span class="badge badge-published">опубл.</span>' : '<span class="badge badge-draft">черновик</span>'}
+                            ${e.is_active ? '' : '<span class="badge badge-off">выкл</span>'}
+                        </div>
+                        <div class="hint">${formatDate(e.date)}${e.channel_title ? ' · ' + escapeHtml(e.channel_title) : ''} · ${e.price > 0 ? formatPrice(e.price) : 'Бесплатно'} · ${e.available_tickets}/${e.total_tickets}</div>
+                    </div>
+                    <button class="btn btn-sm btn-secondary" onclick="showAdminEventDetail('${e.id}')">Открыть</button>
+                </div>`).join('')}
+        </div>
+    `;
+}
+
+async function showAdminEventForm(eventId) {
+    updateToolbar(eventId ? "Редактировать" : "Создать мероприятие", true, false);
+    showPage("admin-event-form");
+    const container = document.getElementById("adminEventFormContent");
+
+    let event = null;
+    if (eventId) {
+        try { event = await api(`/api/admin/events/${eventId}`); }
+        catch (e) { showError(e.message || "Ошибка загрузки"); return; }
+    }
+
+    const me = state.me || {};
+    const myChannels = (me.channels || []).filter(c => c.is_subscription_active);
+    const options = myChannels.map(c =>
+        `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}</option>`
+    ).join('');
+
+    const dateVal = event ? toLocalInputValue(event.date) : "";
+
+    container.innerHTML = `
+        <form onsubmit="event.preventDefault(); submitAdminEventForm('${eventId || ''}')">
+            <div class="form-field">
+                <label class="form-label">Название *</label>
+                <input class="form-input" id="f_title" required value="${escapeHtml(event ? event.title : '')}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">Описание</label>
+                <textarea class="form-input" id="f_description">${escapeHtml(event ? (event.description || '') : '')}</textarea>
+            </div>
+            <div class="form-field">
+                <label class="form-label">Дата и время *</label>
+                <input class="form-input" type="datetime-local" id="f_date" required value="${dateVal}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">Место</label>
+                <input class="form-input" id="f_location" value="${escapeHtml(event ? (event.location || '') : '')}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">Цена (₽, 0 = бесплатно)</label>
+                <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">Количество билетов *</label>
+                <input class="form-input" type="number" min="1" step="1" id="f_tickets" required value="${event ? event.total_tickets : 100}">
+            </div>
+            ${!event ? `
+            <div class="form-field">
+                <label class="form-label">Канал *</label>
+                <select class="form-input" id="f_channel" required>
+                    <option value="">Выберите канал</option>
+                    ${options}
+                </select>
+            </div>` : ''}
+            <button class="btn btn-primary" type="submit">${eventId ? "💾 Сохранить" : "✅ Создать (черновик)"}</button>
+            <button class="btn btn-secondary" type="button" onclick="showAdminEvents()">Отмена</button>
+        </form>
+    `;
+}
+
+function toLocalInputValue(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const pad = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function submitAdminEventForm(eventId) {
+    const title = document.getElementById("f_title").value.trim();
+    const description = document.getElementById("f_description").value.trim() || null;
+    const dateStr = document.getElementById("f_date").value;
+    const location = document.getElementById("f_location").value.trim() || null;
+    const price = parseFloat(document.getElementById("f_price").value) || 0;
+    const total_tickets = parseInt(document.getElementById("f_tickets").value, 10) || 0;
+
+    if (!title || !dateStr) { showToast("Заполните название и дату", true); return; }
+    if (total_tickets <= 0) { showToast("Билетов должно быть > 0", true); return; }
+
+    const payload = {
+        title, description,
+        date: new Date(dateStr).toISOString(),
+        location, price, total_tickets,
+    };
+    if (!eventId) payload.channel_id = document.getElementById("f_channel").value;
+
+    try {
+        if (eventId) {
+            await api(`/api/admin/events/${eventId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+            showToast("✅ Мероприятие обновлено");
+        } else {
+            await api("/api/admin/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+            showToast("✅ Мероприятие создано (черновик)");
+        }
+        await showAdminEvents();
+    } catch (err) {
+        showToast(err.message || "Ошибка сохранения", true);
+    }
+}
+
+// ─── Мероприятие (детали + статистика + билеты) ─────────────────
+
+async function showAdminEventDetail(eventId) {
+    state.lastAction = "showAdminEvents";
+    updateToolbar("Мероприятие", true, false);
+    showPage("admin-event");
+    showLoading();
+    try {
+        const event = await api(`/api/admin/events/${eventId}`);
+        state.currentAdminEvent = event;
+        let stats = null, tickets = null;
+        try { stats = await api(`/api/admin/events/${eventId}/stats`); } catch (e) { /* нет доступа */ }
+        try { tickets = await api(`/api/admin/events/${eventId}/tickets`); } catch (e) { /* нет доступа */ }
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : []);
+    } catch (err) {
+        hideLoading();
+        showError(err.message || "Ошибка загрузки");
+    }
+}
+
+function renderAdminEventDetail(event, stats, tickets) {
+    hideLoading();
+    const container = document.getElementById("adminEventContent");
+    const statsHtml = stats ? `
+        <div class="stat-grid">
+            <div class="stat-card"><div class="stat-value">${stats.sold}</div><div class="stat-label">Продано</div></div>
+            <div class="stat-card"><div class="stat-value">${stats.available}</div><div class="stat-label">Свободно</div></div>
+            <div class="stat-card"><div class="stat-value">${stats.refunded}</div><div class="stat-label">Возвраты</div></div>
+            <div class="stat-card"><div class="stat-value">${formatPrice(stats.revenue)}</div><div class="stat-label">Выручка</div></div>
+        </div>` : '<p class="hint">Статистика недоступна</p>';
+
+    const ticketsHtml = tickets.length === 0
+        ? '<p class="hint">Билетов пока нет</p>'
+        : `<div class="admin-list">${tickets.map(t => `
+            <div class="admin-list-item">
+                <div style="flex:1">
+                    <div><b>${escapeHtml(t.user_name)}</b> <code>${t.validation_code || '—'}</code></div>
+                    <div class="hint">${t.status}${t.checked_in_at ? ' · вход ' + formatDate(t.checked_in_at) : ''} · ${formatDate(t.purchase_date)}</div>
+                </div>
+                ${t.status === 'active' ? `<button class="btn btn-sm btn-danger" onclick="adminCancelTicket('${t.id}')">Отменить</button>` : ''}
+            </div>`).join('')}</div>`;
+
+    container.innerHTML = `
+        <h2>${escapeHtml(event.title)}</h2>
+        <div class="event-meta">
+            <div class="meta-row"><span class="meta-label">📅 Дата</span><span>${formatDate(event.date)}</span></div>
+            <div class="meta-row"><span class="meta-label">📍 Место</span><span>${escapeHtml(event.location || 'Не указано')}</span></div>
+            <div class="meta-row"><span class="meta-label">💰 Цена</span><span>${event.price > 0 ? formatPrice(event.price) : 'Бесплатно'}</span></div>
+            <div class="meta-row"><span class="meta-label">🎟 Билетов</span><span>${event.available_tickets}/${event.total_tickets}</span></div>
+            <div class="meta-row"><span class="meta-label">Статус</span><span>${event.is_published ? '📢 Опубликовано' : '📝 Черновик'} · ${event.is_active ? '🟢 Активно' : '🔴 Отключено'}</span></div>
+        </div>
+        ${statsHtml}
+        <h3 style="margin:16px 0 8px">Билеты</h3>
+        <div style="margin-bottom:12px">
+            <a class="btn btn-secondary" href="#" onclick="downloadCsv('${event.id}'); return false;">⬇️ Экспорт CSV</a>
+        </div>
+        ${ticketsHtml}
+        <h3 style="margin:16px 0 8px">Действия</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
+            ${event.is_published
+                ? `<button class="btn btn-sm btn-secondary" onclick="adminRepost('${event.id}')">🔄 Репост</button>`
+                : `<button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>`}
+            <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
+            <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
+            <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
+        </div>
+        <button class="btn btn-secondary" onclick="showAdminEvents()">← К списку</button>
+    `;
+}
+
+async function adminPublish(eventId) {
+    try {
+        const res = await api(`/api/admin/events/${eventId}/publish`, { method: "POST" });
+        showToast(res.announced ? "✅ Опубликовано, анонс отправлен" : "✅ Опубликовано (анонс не отправлен)");
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+    await showAdminEventDetail(eventId);
+}
+
+async function adminRepost(eventId) {
+    try {
+        const res = await api(`/api/admin/events/${eventId}/repost`, { method: "POST" });
+        showToast(res.announced ? "✅ Анонс отправлен" : "⚠️ Анонс не отправлен");
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminToggle(eventId) {
+    try { await api(`/api/admin/events/${eventId}/toggle`, { method: "POST" }); showToast("✅ Статус изменён"); }
+    catch (e) { showToast(e.message || "Ошибка", true); }
+    await showAdminEventDetail(eventId);
+}
+
+async function adminDelete(eventId) {
+    if (!confirm("Удалить мероприятие?")) return;
+    try { await api(`/api/admin/events/${eventId}/delete`, { method: "POST" }); showToast("✅ Удалено"); await showAdminEvents(); }
+    catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminCancelTicket(ticketId) {
+    if (!confirm("Отменить билет?")) return;
+    try {
+        await api(`/api/admin/tickets/${ticketId}/cancel`, { method: "POST" });
+        showToast("✅ Билет отменён");
+        if (state.currentAdminEvent) await showAdminEventDetail(state.currentAdminEvent.id);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function downloadCsv(eventId) {
+    try {
+        const resp = await fetch(`/api/admin/events/${eventId}/tickets.csv`, { headers: { "X-Init-Data": state.initData } });
+        if (!resp.ok) { showToast("Ошибка загрузки CSV", true); return; }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `event-${eventId}-tickets.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (e) { showToast(e.message || "Ошибка CSV", true); }
+}
+
+// ─── Проверка билета ───────────────────────────────────────────
+
+function showCheckin() {
+    setActiveTab("checkin");
+    updateToolbar("Проверка билета", true, false);
+    showPage("checkin");
+    document.getElementById("checkinContent").innerHTML = `
+        <div class="checkin-box">
+            <label class="form-label">Код билета</label>
+            <input class="form-input" id="ci_code" placeholder="AB3X-K7M9" autocomplete="off" inputmode="text" style="text-transform:uppercase;font-size:20px;letter-spacing:2px;text-align:center">
+            <button class="btn btn-primary" onclick="doCheckin()">🔍 Проверить и отметить вход</button>
+        </div>
+        <div id="checkinResult"></div>
+    `;
+    const input = document.getElementById("ci_code");
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") doCheckin(); });
+    setTimeout(() => input.focus(), 100);
+}
+
+async function doCheckin() {
+    const raw = document.getElementById("ci_code").value.trim().toUpperCase();
+    if (!raw) { showToast("Введите код", true); return; }
+    // Нормализация: 8 символов без дефиса → XXXX-XXXX
+    let code = raw;
+    if (code.length === 8 && !code.includes("-")) code = code.slice(0, 4) + "-" + code.slice(4);
+
+    const resultBox = document.getElementById("checkinResult");
+    resultBox.innerHTML = '<p class="hint">Проверяю...</p>';
+
+    try {
+        // Сначала валидация для информативного ответа
+        const info = await api(`/api/admin/tickets/validate?code=${encodeURIComponent(code)}`);
+        if (!info.found) {
+            resultBox.innerHTML = `<div class="checkin-result checkin-fail">❌ Билет с кодом ${escapeHtml(code)} не найден</div>`;
+            return;
+        }
+        if (info.status === "checked_in") {
+            resultBox.innerHTML = `<div class="checkin-result checkin-warn">🟡 Билет уже использован (вход: ${formatDate(info.checked_in_at)})</div>`;
+            return;
+        }
+        if (info.status === "refunded") {
+            resultBox.innerHTML = `<div class="checkin-result checkin-fail">❌ Билет возвращён</div>`;
+            return;
+        }
+        // Активный — отмечаем вход
+        const res = await api("/api/admin/tickets/checkin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+        resultBox.innerHTML = `
+            <div class="checkin-result checkin-ok">
+                ✅ Вход разрешён
+                <div class="hint" style="color:inherit">${escapeHtml(info.user_name)} · ${escapeHtml(info.event_title)}</div>
+            </div>`;
+        document.getElementById("ci_code").value = "";
+        if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback) {
+            window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+    } catch (err) {
+        resultBox.innerHTML = `<div class="checkin-result checkin-fail">❌ ${escapeHtml(err.message || "Ошибка")}</div>`;
+    }
+}
+
+// ─── Каналы (super-admin) ──────────────────────────────────────
+
+async function showAdminChannels() {
+    setActiveTab("channels");
+    state.lastAction = "showAdminChannels";
+    updateToolbar("Каналы", true, false);
+    showPage("admin-channels");
+    showLoading();
+    try {
+        const channels = await api("/api/admin/channels");
+        state.adminChannels = channels;
+        renderAdminChannels(channels);
+    } catch (err) {
+        hideLoading();
+        showError(err.message || "Ошибка загрузки каналов");
+    }
+}
+
+function renderAdminChannels(channels) {
+    hideLoading();
+    const container = document.getElementById("adminChannelsContent");
+    if (!channels || channels.length === 0) {
+        container.innerHTML = '<div class="empty-state"><div class="empty-icon">📢</div><h3>Нет каналов</h3></div>';
+        return;
+    }
+    container.innerHTML = `
+        <button class="btn btn-secondary" onclick="adminCheckExpired()">🔍 Проверить просроченные подписки</button>
+        <div class="admin-list" style="margin-top:12px">
+            ${channels.map(ch => `
+                <div class="admin-list-item">
+                    <div style="flex:1">
+                        <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
+                            <span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>
+                            ${ch.is_subscription_active ? '<span class="badge badge-published">активна</span>' : '<span class="badge badge-off">нет подписки</span>'}
+                        </div>
+                        <div class="hint">${escapeHtml(ch.telegram_channel_id)} · ${ch.admins.length ? 'Админы: ' + ch.admins.map(escapeHtml).join(', ') : '—'}${ch.subscription_until ? ' · до ' + formatDate(ch.subscription_until) : ''}</div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;min-width:120px">
+                        ${ch.is_subscription_active
+                            ? `<button class="btn btn-sm btn-secondary" onclick="adminUnsubscribe('${ch.id}')">Отписать</button>`
+                            : `<button class="btn btn-sm btn-primary" onclick="adminSubscribePrompt('${ch.id}')">Подписать</button>`}
+                        <button class="btn btn-sm btn-secondary" onclick="adminChangeAdminPrompt('${ch.id}')">Сменить админа</button>
+                    </div>
+                </div>`).join('')}
+        </div>
+    `;
+}
+
+async function adminSubscribePrompt(channelId) {
+    const days = prompt("Срок подписки (дней):", "30");
+    if (!days) return;
+    const tier = prompt("Тариф (basic/pro):", "basic") === "pro" ? "pro" : "basic";
+    try {
+        await api(`/api/admin/channels/${channelId}/subscribe`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ duration_days: parseInt(days, 10) || 30, tier }),
+        });
+        showToast("✅ Подписка активирована");
+        await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminUnsubscribe(channelId) {
+    if (!confirm("Отключить подписку?")) return;
+    try {
+        await api(`/api/admin/channels/${channelId}/unsubscribe`, { method: "POST" });
+        showToast("✅ Подписка отключена");
+        await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminChangeAdminPrompt(channelId) {
+    const newId = prompt("Telegram ID нового админа:");
+    if (!newId) return;
+    try {
+        await api(`/api/admin/channels/${channelId}/change_admin`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ new_admin_id: newId.trim() }),
+        });
+        showToast("✅ Админ сменён");
+        await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminCheckExpired() {
+    try {
+        const res = await api("/api/admin/channels/check_expired", { method: "POST" });
+        showToast(`✅ Проверено: ${res.checked}, отключено: ${res.deactivated}`);
+        await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ─── Статистика (super-admin) ──────────────────────────────────
+
+async function showAdminStats() {
+    setActiveTab("stats");
+    state.lastAction = "showAdminStats";
+    updateToolbar("Статистика", true, false);
+    showPage("admin-stats");
+    showLoading();
+    try {
+        const stats = await api("/api/admin/stats");
+        state.globalStats = stats;
+        renderAdminStats(stats);
+    } catch (err) {
+        hideLoading();
+        showError(err.message || "Ошибка загрузки статистики");
+    }
+}
+
+function renderAdminStats(s) {
+    hideLoading();
+    document.getElementById("adminStatsContent").innerHTML = `
+        <div class="stat-grid">
+            <div class="stat-card"><div class="stat-value">${s.users_count}</div><div class="stat-label">👥 Пользователей</div></div>
+            <div class="stat-card"><div class="stat-value">${s.channels_count}</div><div class="stat-label">📢 Каналов</div></div>
+            <div class="stat-card"><div class="stat-value">${s.active_subs}</div><div class="stat-label">Активных подписок</div></div>
+            <div class="stat-card"><div class="stat-value">${s.events_count}</div><div class="stat-label">🎫 Мероприятий</div></div>
+            <div class="stat-card"><div class="stat-value">${s.upcoming_count}</div><div class="stat-label">Предстоящих</div></div>
+            <div class="stat-card"><div class="stat-value">${s.tickets_active}</div><div class="stat-label">🎟 Активных билетов</div></div>
+            <div class="stat-card stat-revenue"><div class="stat-value">${formatPrice(s.revenue)}</div><div class="stat-label">💰 Выручка</div></div>
         </div>
     `;
 }

@@ -12,8 +12,9 @@ import logging
 from uuid import UUID
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
+from app.config import settings
 from app.core.database import async_session_factory
 from app.core.models import Event, Channel
 from app.core.services import EventService
@@ -45,14 +46,25 @@ class ChannelManager:
             event: Объект мероприятия (нужен для медиа). Если не передан —
                    отправляет только текст.
         """
-        # Разные кнопки для бесплатных и платных мероприятий
-        is_free = event.is_free if event else False
-        buy_text = "🎟 Получить билет" if is_free else "🎟 Купить"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text=buy_text, callback_data=f"channel_buy:{event_id}"),
-            ],
-        ])
+        # Покупка переехала в веб-кабинет — кнопка открывает Mini App
+        # (переходит сразу к мероприятию, если задан event_id)
+        buy_text = "🎟 Открыть кабинет"
+        if settings.webapp_url:
+            url = f"{settings.webapp_url}?event_id={event_id}" if event_id else settings.webapp_url
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=buy_text, web_app=WebAppInfo(url=url)),
+                ],
+            ])
+        else:
+            # Fallback без webapp_url — старая inline-покупка
+            is_free = event.is_free if event else False
+            buy_text = "🎟 Получить билет" if is_free else "🎟 Купить"
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=buy_text, callback_data=f"channel_buy:{event_id}"),
+                ],
+            ])
 
         # Если передан event с афишей — отправляем фото/видео
         if event and event.media_telegram_file_id:

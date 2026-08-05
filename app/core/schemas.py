@@ -38,6 +38,16 @@ class EventCreate(BaseModel):
     channel_id: UUID
 
 
+class EventUpdateIn(BaseModel):
+    """Partial update for an event (all fields optional)."""
+    title: Optional[str] = None
+    description: Optional[str] = None
+    date: Optional[datetime] = None
+    location: Optional[str] = None
+    price: Optional[float] = Field(default=None, ge=0)
+    total_tickets: Optional[int] = Field(default=None, ge=0)
+
+
 class EventOut(BaseModel):
     id: UUID
     channel_id: UUID
@@ -101,6 +111,25 @@ class TicketOut(BaseModel):
     is_free: bool = False
 
     model_config = {"from_attributes": True}
+
+
+# ─── Admin Panel ─────────────────────────────────────────────────────────────
+
+class SubscribeIn(BaseModel):
+    duration_days: int = Field(default=30, gt=0)
+    tier: SubscriptionTier = SubscriptionTier.basic
+
+
+class ChangeAdminIn(BaseModel):
+    new_admin_id: str
+
+
+class CheckInIn(BaseModel):
+    code: str
+
+
+class MeUpdateIn(BaseModel):
+    name: Optional[str] = None
 
 
 # ─── Payment ─────────────────────────────────────────────────────────────────

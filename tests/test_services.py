@@ -767,3 +767,108 @@ class TestTicketValidation:
         """Чекин по несуществующему коду -> ошибка."""
         with pytest.raises(ValueError, match="не найден"):
             await ticket_svc.check_in_by_code("ZZZZ-ZZZZ", "admin_1")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Новые методы для веб-кабинета/админки
+# ═══════════════════════════════════════════════════════════════
+
+class TestWebAdminServices:
+    """Тесты новых методов сервисного слоя для web-кабинета."""
+
+    async def test_channel_list_all(self, db_session, sample_channel):
+        """ChannelService.list_all возвращает все каналы."""
+        from app.core.services import ChannelService
+        svc = ChannelService(db_session)
+        channels = await svc.list_all()
+        assert isinstance(channels, list)
+        assert len(channels) >= 1
+
+    async def test_channel_summary(self, db_session, sample_channel, sample_event):
+        """ChannelService.get_channel_summary собирает сводку по каналу."""
+        from app.core.services import ChannelService, TicketService
+        from uuid import uuid4
+        svc = ChannelService(db_session)
+
+        summary = await svc.get_channel_summary(sample_channel.id)
+        assert summary is not None
+        assert summary["id"] == str(sample_channel.id)
+        assert summary["events_count"] >= 1
+        assert summary["admins"] is not None
+        assert "subscription_tier" in summary
+
+    async def test_channel_summary_missing(self, db_session):
+        """get_channel_summary для несуществующего канала -> None."""
+        from app.core.services import ChannelService
+        from uuid import uuid4
+        svc = ChannelService(db_session)
+        assert await svc.get_channel_summary(uuid4()) is None
+
+    async def test_export_event_tickets(self, db_session, sample_event, ticket_svc):
+        """TicketService.export_event_tickets отдаёт полные строки."""
+        from app.core.services import UserService
+        from app.core.models import PlatformType
+        # покупаем билет
+        user_svc = UserService(db_session)
+        user = await user_svc.get_or_create(PlatformType.telegram, "export_user", "Export User")
+        await ticket_svc.buy_ticket(user.id, sample_event.id)
+        await db_session.commit()
+
+        rows = await ticket_svc.export_event_tickets(sample_event.id)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["event_title"] == sample_event.title
+        assert row["user_name"] == "Export User"
+        assert row["status"] == "active"
+        assert "validation_code" in row
+
+    async def test_get_ticket_event(self, db_session, sample_event, ticket_svc):
+        """TicketService.get_ticket_event возвращает (билет, мероприятие)."""
+        from app.core.services import UserService
+        from app.core.models import PlatformType
+        user_svc = UserService(db_session)
+        user = await user_svc.get_or_create(PlatformType.telegram, "te_user", "TE User")
+        ticket = await ticket_svc.buy_ticket(user.id, sample_event.id)
+        await db_session.commit()
+
+        pair = await ticket_svc.get_ticket_event(ticket.id)
+        assert pair is not None
+        t, ev = pair
+        assert t.id == ticket.id
+        assert ev.id == sample_event.id
+
+    async def test_get_ticket_event_missing(self, db_session, ticket_svc):
+        """get_ticket_event для несуществующего -> None."""
+        from uuid import uuid4
+        assert await ticket_svc.get_ticket_event(uuid4()) is None
+
+    async def test_event_tickets_has_validation_code(self, db_session, sample_event, ticket_svc):
+        """get_event_tickets теперь включает validation_code."""
+        from app.core.services import UserService
+        from app.core.models import PlatformType
+        user_svc = UserService(db_session)
+        user = await user_svc.get_or_create(PlatformType.telegram, "vet_user", "VET User")
+        await ticket_svc.buy_ticket(user.id, sample_event.id)
+        await db_session.commit()
+
+        tickets = await ticket_svc.get_event_tickets(sample_event.id)
+        assert len(tickets) == 1
+        assert tickets[0]["validation_code"] is not None
+
+    async def test_stats_global(self, db_session, sample_channel):
+        """StatsService.get_global_stats возвращает агрегаты."""
+        from app.core.services import StatsService
+        svc = StatsService(db_session)
+        stats = await svc.get_global_stats()
+        assert stats["channels_count"] >= 1
+        assert stats["users_count"] >= 0
+        assert stats["events_count"] >= 0
+        assert stats["revenue"] >= 0
+
+    async def test_user_update_name(self, db_session, sample_user):
+        """UserService.update_name меняет имя пользователя."""
+        from app.core.services import UserService
+        svc = UserService(db_session)
+        user = await svc.update_name(sample_user.id, "Новое Имя")
+        assert user is not None
+        assert user.name == "Новое Имя"

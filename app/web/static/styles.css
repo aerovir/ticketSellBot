@@ -509,3 +509,231 @@ body {
     color: var(--tg-hint);
     margin-bottom: 24px;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Личный кабинет + админка
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── Bottom tab bar ─── */
+
+.tab-bar {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--tg-bg);
+    border-top: 1px solid var(--tg-secondary-bg);
+    display: flex;
+    z-index: 150;
+    padding: 4px 4px calc(6px + env(safe-area-inset-bottom));
+    gap: 2px;
+    justify-content: center;
+}
+
+.tab {
+    flex: 1;
+    max-width: 110px;
+    background: none;
+    border: none;
+    color: var(--tg-hint);
+    font-size: 12px;
+    padding: 8px 4px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: all 0.15s;
+}
+
+.tab.active {
+    color: var(--tg-button);
+    background: var(--tg-secondary-bg);
+    font-weight: 600;
+}
+
+/* ─── Profile ─── */
+
+.profile-card {
+    text-align: center;
+    padding: 24px 16px;
+    background: var(--tg-section-bg);
+    border: 1px solid var(--tg-secondary-bg);
+    border-radius: var(--radius);
+}
+
+.profile-avatar {
+    font-size: 56px;
+    margin-bottom: 12px;
+}
+
+.badge-role {
+    background: var(--tg-button);
+    color: var(--tg-button-text);
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 12px;
+}
+
+/* ─── Admin list ─── */
+
+.admin-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.admin-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--tg-section-bg);
+    border: 1px solid var(--tg-secondary-bg);
+    border-radius: var(--radius);
+    padding: 12px;
+}
+
+.admin-list-item .btn-sm {
+    margin-bottom: 0;
+    white-space: nowrap;
+}
+
+/* ─── Admin menu grid ─── */
+
+.admin-menu-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.admin-menu-card {
+    background: var(--tg-section-bg);
+    border: 1px solid var(--tg-secondary-bg);
+    border-radius: var(--radius);
+    padding: 20px 12px;
+    text-align: center;
+    cursor: pointer;
+    color: var(--tg-text);
+    font-size: 14px;
+    transition: transform 0.1s;
+}
+
+.admin-menu-card:active {
+    transform: scale(0.97);
+}
+
+.admin-menu-icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+}
+
+/* ─── Badges ─── */
+
+.badge-published { background: #2ecc71; color: white; }
+.badge-draft { background: #f39c12; color: white; }
+.badge-off { background: #e74c3c; color: white; }
+.badge-tier-pro { background: #9b59b6; color: white; }
+.badge-tier-basic { background: #7f8c8d; color: white; }
+
+/* ─── Forms ─── */
+
+.form-field {
+    margin-bottom: 14px;
+}
+
+.form-label {
+    display: block;
+    font-size: 13px;
+    color: var(--tg-hint);
+    margin-bottom: 6px;
+}
+
+.form-input {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--tg-secondary-bg);
+    border-radius: var(--radius-sm);
+    background: var(--tg-section-bg);
+    color: var(--tg-text);
+    font-size: 15px;
+    font-family: inherit;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--tg-button);
+}
+
+textarea.form-input {
+    min-height: 80px;
+    resize: vertical;
+}
+
+/* ─── Stat cards ─── */
+
+.stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 12px 0;
+}
+
+.stat-card {
+    background: var(--tg-section-bg);
+    border: 1px solid var(--tg-secondary-bg);
+    border-radius: var(--radius);
+    padding: 14px;
+    text-align: center;
+}
+
+.stat-revenue {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, #f39c12, #e67e22);
+    color: white;
+    border: none;
+}
+
+.stat-value {
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: var(--tg-hint);
+    margin-top: 4px;
+}
+
+.stat-revenue .stat-label {
+    color: rgba(255,255,255,0.9);
+}
+
+/* ─── Check-in ─── */
+
+.checkin-box {
+    background: var(--tg-section-bg);
+    border: 1px solid var(--tg-secondary-bg);
+    border-radius: var(--radius);
+    padding: 20px;
+}
+
+.checkin-result {
+    margin-top: 16px;
+    padding: 16px;
+    border-radius: var(--radius);
+    text-align: center;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.checkin-ok {
+    background: #2ecc71;
+    color: white;
+}
+
+.checkin-warn {
+    background: #f39c12;
+    color: white;
+}
+
+.checkin-fail {
+    background: #e74c3c;
+    color: white;
+}

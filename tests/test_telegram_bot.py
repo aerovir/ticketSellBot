@@ -87,7 +87,7 @@ class TestUserCommands:
         mock_message.answer.assert_awaited_once()
         text = mock_message.answer.call_args[0][0]
         assert "TicketBot" in text
-        assert "меню" in text
+        assert "личный кабинет" in text
 
     async def test_cmd_events_empty(self, telegram_bot, mock_message):
         """Команда /events когда нет мероприятий."""

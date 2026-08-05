@@ -60,6 +60,15 @@ class UserService:
 
         return user
 
+    async def update_name(self, user_id: uuid.UUID, name: str | None) -> User | None:
+        """Update a user's display name. Returns updated user or None."""
+        user = await self.session.get(User, user_id)
+        if user is None:
+            return None
+        user.name = name
+        await self.session.flush()
+        return user
+
 
 # ─── Channel Service ─────────────────────────────────────────────────────────
 
@@ -374,6 +383,68 @@ class ChannelService:
         })
 
         return channel, old_admin_ids
+
+    async def list_all(self) -> list[Channel]:
+        """Get all channels, newest first (super-admin view)."""
+        start = time.perf_counter()
+        stmt = select(Channel).order_by(Channel.created_at.desc())
+        result = await self.session.execute(stmt)
+        channels = list(result.scalars().all())
+        logger.info("", extra={
+            "event_type": "channel.list_all",
+            "count": len(channels),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return channels
+
+    async def get_channel_summary(self, channel_id: uuid.UUID) -> dict | None:
+        """Aggregated channel info for the admin panel.
+
+        Returns dict with channel fields + admins, events_count,
+        upcoming_count, tickets_sold; None if channel missing.
+        """
+        channel = await self.session.get(Channel, channel_id)
+        if channel is None:
+            return None
+
+        now = datetime.now(timezone.utc)
+
+        events_result = await self.session.execute(
+            select(func.count()).select_from(Event).where(Event.channel_id == channel.id)
+        )
+        events_count = events_result.scalar() or 0
+
+        upcoming_result = await self.session.execute(
+            select(func.count()).select_from(Event).where(
+                and_(Event.channel_id == channel.id, Event.date >= now)
+            )
+        )
+        upcoming = upcoming_result.scalar() or 0
+
+        tickets_result = await self.session.execute(
+            select(func.count()).select_from(Ticket)
+            .join(Event, Ticket.event_id == Event.id)
+            .where(Event.channel_id == channel.id, Ticket.status == TicketStatus.active)
+        )
+        tickets_sold = tickets_result.scalar() or 0
+
+        admin_svc = ChannelAdminService(self.session)
+        admins = await admin_svc.get_admin_ids(channel.id)
+
+        return {
+            "id": str(channel.id),
+            "telegram_channel_id": channel.telegram_channel_id,
+            "title": channel.title,
+            "admin_telegram_user_id": channel.admin_telegram_user_id,
+            "is_subscription_active": channel.is_subscription_active,
+            "subscription_until": channel.subscription_until.isoformat() if channel.subscription_until else None,
+            "subscription_tier": channel.subscription_tier.value,
+            "admins": admins,
+            "events_count": events_count,
+            "upcoming_count": upcoming,
+            "tickets_sold": tickets_sold,
+        }
 
 
 # ─── Channel Admin Service ──────────────────────────────────────────────────
@@ -1134,6 +1205,10 @@ class TicketService:
                 "user_name": user_name or platform_user_id,
                 "purchase_date": ticket.purchase_date,
                 "status": ticket.status.value,
+                "validation_code": ticket.validation_code,
+                "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
+                "checked_in_by": ticket.checked_in_by,
+                "is_free": ticket.is_free,
             })
 
         logger.info("", extra={
@@ -1143,6 +1218,43 @@ class TicketService:
             "status": "success",
             "duration_ms": _ms(start),
         })
+        return tickets
+
+    async def get_ticket_event(self, ticket_id: uuid.UUID) -> tuple[Ticket, Event] | None:
+        """Load a ticket together with its event (for channel-scoping admin actions)."""
+        ticket = await self.session.get(Ticket, ticket_id)
+        if ticket is None:
+            return None
+        event = await self.session.get(Event, ticket.event_id)
+        if event is None:
+            return None
+        return ticket, event
+
+    async def export_event_tickets(self, event_id: uuid.UUID) -> list[dict]:
+        """Full ticket rows for an event (CSV export)."""
+        stmt = (
+            select(Ticket, User.name, Event.title)
+            .join(User, Ticket.user_id == User.id)
+            .join(Event, Ticket.event_id == Event.id)
+            .where(Ticket.event_id == event_id)
+            .order_by(Ticket.purchase_date.desc())
+        )
+        result = await self.session.execute(stmt)
+        rows = result.all()
+
+        tickets = []
+        for ticket, user_name, event_title in rows:
+            tickets.append({
+                "ticket_id": str(ticket.id),
+                "event_title": event_title,
+                "user_name": user_name or "",
+                "purchase_date": ticket.purchase_date.isoformat(),
+                "status": ticket.status.value,
+                "validation_code": ticket.validation_code or "",
+                "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else "",
+                "checked_in_by": ticket.checked_in_by or "",
+                "is_free": "да" if ticket.is_free else "нет",
+            })
         return tickets
 
     # ─── Validation & Check-in ────────────────────────────────────────
@@ -1282,3 +1394,67 @@ class TicketService:
         if ticket is None:
             raise ValueError(f"Билет с кодом {code} не найден")
         return await self.check_in(ticket.id, admin_id)
+
+
+# ─── Stats Service ──────────────────────────────────────────────────────────
+
+class StatsService:
+    """Aggregated statistics for the admin panel (super-admin)."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_global_stats(self) -> dict:
+        """Global counts across all tenants (mirrors bot sa_stats_all)."""
+        start = time.perf_counter()
+        users_count = (await self.session.execute(
+            select(func.count()).select_from(User)
+        )).scalar() or 0
+
+        channels_count = (await self.session.execute(
+            select(func.count()).select_from(Channel)
+        )).scalar() or 0
+
+        active_subs = (await self.session.execute(
+            select(func.count()).select_from(Channel).where(Channel.is_subscription_active == True)
+        )).scalar() or 0
+
+        events_count = (await self.session.execute(
+            select(func.count()).select_from(Event)
+        )).scalar() or 0
+
+        upcoming_count = (await self.session.execute(
+            select(func.count()).select_from(Event).where(Event.date >= datetime.now(timezone.utc))
+        )).scalar() or 0
+
+        tickets_active = (await self.session.execute(
+            select(func.count()).select_from(Ticket).where(Ticket.status == TicketStatus.active)
+        )).scalar() or 0
+
+        revenue = float((await self.session.execute(
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .where(Payment.status == PaymentStatus.completed)
+        )).scalar() or 0)
+
+        logger.info("", extra={
+            "event_type": "stats.global",
+            "users": users_count,
+            "channels": channels_count,
+            "active_subs": active_subs,
+            "events": events_count,
+            "upcoming": upcoming_count,
+            "tickets_active": tickets_active,
+            "revenue": revenue,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+
+        return {
+            "users_count": users_count,
+            "channels_count": channels_count,
+            "active_subs": active_subs,
+            "events_count": events_count,
+            "upcoming_count": upcoming_count,
+            "tickets_active": tickets_active,
+            "revenue": revenue,
+        }

@@ -8,7 +8,7 @@ from aiogram.filters import Command, CommandObject, ChatMemberUpdatedFilter, IS_
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeChat, BotCommandScopeAllPrivateChats
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeChat, BotCommandScopeAllPrivateChats, MenuButtonWebApp, WebAppInfo
 
 from sqlalchemy import select, func
 
@@ -22,6 +22,7 @@ from app.core.services import UserService, EventService, TicketService, ChannelS
 from app.core.system_metrics import metrics_loop
 from app.platforms.base import PlatformBot
 from app.platforms.telegram.channel import ChannelManager
+from app.platforms.telegram.formatting import format_event_text
 
 logger = logging.getLogger("ticketbot.telegram")
 
@@ -196,15 +197,18 @@ class TelegramBot(PlatformBot):
         text = (
             "🎫 <b>TicketBot</b>\n\n"
             "Я помогаю покупать билеты на мероприятия.\n\n"
-            "Подпишитесь на канал, где публикуются анонсы, "
-            "и покупайте билеты через inline-кнопки.\n\n"
-            "ℹ️ Нажмите кнопку меню <b>☰</b> в левом нижнем углу, "
-            "чтобы увидеть все доступные команды."
+            "Откройте <b>личный кабинет</b> по кнопке ниже: там афиша, "
+            "покупка билетов и ваши билеты."
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Список мероприятий", callback_data="ev_page:0")],
-            [InlineKeyboardButton(text="🎫 Мои билеты", callback_data="channel_my_tickets")],
-        ])
+        if settings.webapp_url:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎫 Открыть кабинет", web_app=WebAppInfo(url=settings.webapp_url))],
+            ])
+        else:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Список мероприятий", callback_data="ev_page:0")],
+                [InlineKeyboardButton(text="🎫 Мои билеты", callback_data="channel_my_tickets")],
+            ])
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
     async def cmd_events(self, message: types.Message, page: int = 0):
@@ -721,7 +725,14 @@ class TelegramBot(PlatformBot):
         else:
             title += "<i>Управление вашим каналом</i>"
 
-        kb = self._admin_menu_kb(is_super)
+        if settings.webapp_url:
+            # Панель переехала в веб-кабинет
+            title += "\n\nПанель управления переехала в <b>личный кабинет</b>."
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎫 Открыть кабинет", web_app=WebAppInfo(url=settings.webapp_url))],
+            ])
+        else:
+            kb = self._admin_menu_kb(is_super)
         await message.answer(title, parse_mode="HTML", reply_markup=kb)
 
     # ═══════════════════════════════════════════════════════
@@ -1458,53 +1469,9 @@ class TelegramBot(PlatformBot):
     def _format_event_text(self, event, mode: str = "full") -> str:
         """Унифицированное форматирование текста мероприятия.
 
-        Args:
-            event: Event (SQLAlchemy model или Mock с теми же атрибутами)
-            mode: "full" — анонс/детали пользователя,
-                  "short" — пункт списка,
-                  "admin" — админ-панель/список
-
-        Returns:
-            str: форматированный текст (HTML-safe для parse_mode=HTML)
+        Тонкая обёртка над общим форматтером (используется ботом и web).
         """
-        date_str = event.date.strftime("%d.%m.%Y %H:%M")
-
-        if mode == "short":
-            return (
-                f"📌 <b>{event.title}</b>\n"
-                f"📅 {date_str}\n"
-                f"📍 {event.location or 'Не указано'}\n"
-                f"💰 {event.price:.0f}₽ | Осталось: {event.available_tickets}/{event.total_tickets}\n"
-            )
-
-        if mode == "admin":
-            status_icon = "🟢" if event.is_active else "🔴"
-            status_text = "Активно" if event.is_active else "Отключено"
-            publish_icon = "📢" if event.is_published else "📝"
-            publish_text = "Опубликовано" if event.is_published else "Черновик"
-            media_icon = "🖼" if event.media_telegram_file_id else "—"
-            media_type_label = " 🎬" if event.media_type == "video" else ""
-            media_text = f"Афиша: {media_icon}{media_type_label}" if event.media_telegram_file_id else "Афиша: —"
-            return (
-                f"{publish_icon} <b>{event.title}</b>\n"
-                f"{event.description or 'Описание отсутствует'}\n\n"
-                f"📅 {date_str}\n"
-                f"📍 {event.location or 'Не указано'}\n"
-                f"💰 {event.price:.0f}₽\n"
-                f"🎟 Осталось: {event.available_tickets}/{event.total_tickets}\n"
-                f"{status_icon} {status_text} | {publish_icon} {publish_text}\n"
-                f"{media_text}"
-            )
-
-        # mode == "full" (по умолчанию)
-        return (
-            f"🎫 <b>{event.title}</b>\n\n"
-            f"{event.description or 'Описание отсутствует'}\n\n"
-            f"📅 {date_str}\n"
-            f"📍 {event.location or 'Не указано'}\n"
-            f"💰 {event.price:.0f}₽\n"
-            f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}"
-        )
+        return format_event_text(event, mode=mode)
 
     async def admin_create_event(self, message: types.Message, state: FSMContext):
         """Start the create-event wizard."""
@@ -2816,7 +2783,27 @@ class TelegramBot(PlatformBot):
     # ═══════════════════════════════════════════════════════
 
     async def _handle_channel_buy(self, callback: types.CallbackQuery, event_id: UUID):
-        """Покупка билета из канала — по кнопке в анонсе."""
+        """Покупка билета из канала — по кнопке в анонсе.
+
+        С переносом покупок в веб-кабинет: старые inline-кнопки в уже
+        опубликованных анонсах направляют пользователя в кабинет.
+        """
+        if settings.webapp_url:
+            url = f"{settings.webapp_url}?event_id={event_id}"
+            try:
+                await callback.answer("🎫 Билеты покупаются в личном кабинете.", show_alert=False)
+                await self.bot.send_message(
+                    chat_id=callback.from_user.id,
+                    text=f"🎫 <b>Покупка билетов переехала в личный кабинет.</b>\n\nОткройте кабинет по кнопке ниже.",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🎫 Открыть кабинет", web_app=WebAppInfo(url=url))],
+                    ]),
+                )
+            except Exception:
+                pass
+            return
+
         try:
             user_id = await self._resolve_user_id(
                 str(callback.from_user.id),
@@ -3266,6 +3253,15 @@ class TelegramBot(PlatformBot):
                     commands=ADMIN_COMMANDS,
                     scope=BotCommandScopeAllPrivateChats(),
                 )
+
+                # Кнопка меню (левый нижний угол) открывает веб-кабинет
+                if settings.webapp_url:
+                    await self.bot.set_chat_menu_button(
+                        menu_button=MenuButtonWebApp(
+                            text="Мероприятия",
+                            web_app=WebAppInfo(url=settings.webapp_url),
+                        ),
+                    )
 
                 # Запускаем фоновый сбор метрик системы (каждые 60с)
                 asyncio.create_task(metrics_loop(interval=60))

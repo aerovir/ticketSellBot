@@ -4,15 +4,40 @@ REST API endpoints for Telegram Mini App.
 All endpoints (except health) require initData validation.
 """
 
+import csv
+import io
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from app.core.database import async_session_factory
 from app.core.models import PlatformType
-from app.core.services import EventService, TicketService, UserService
-from app.web.dependencies import validate_init_data
+from app.core.schemas import (
+    ChangeAdminIn,
+    CheckInIn,
+    EventCreate,
+    EventUpdateIn,
+    MeUpdateIn,
+    SubscribeIn,
+)
+from app.core.services import (
+    ChannelAdminService,
+    ChannelService,
+    EventService,
+    StatsService,
+    TicketService,
+    UserService,
+)
+from app.web.dependencies import (
+    CurrentUser,
+    get_current_user,
+    require_admin,
+    require_super_admin,
+    validate_init_data,
+)
+from app.web.announce import post_event_announcement
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
@@ -201,3 +226,621 @@ async def vk_me(user_id: str, user_name: str = ""):
             "platform": "vk",
             "registered": user is not None,
         }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Личный кабинет
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/me")
+async def get_me(current: CurrentUser = Depends(get_current_user)):
+    """Профиль текущего пользователя: роль + каналы, где он админ."""
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        channels = await channel_svc.get_channels_by_admin(current.telegram_user_id)
+
+    return {
+        "id": str(current.user_id),
+        "telegram_user_id": current.telegram_user_id,
+        "name": current.name,
+        "role": current.role,
+        "is_super_admin": current.is_super_admin,
+        "channels": [
+            {
+                "id": str(ch.id),
+                "telegram_channel_id": ch.telegram_channel_id,
+                "title": ch.title,
+                "is_subscription_active": ch.is_subscription_active,
+                "subscription_tier": ch.subscription_tier.value,
+                "subscription_until": ch.subscription_until.isoformat() if ch.subscription_until else None,
+            }
+            for ch in channels
+        ],
+    }
+
+
+@router.patch("/me")
+async def update_me(
+    body: MeUpdateIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Обновить имя пользователя в профиле."""
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.update_name(current.user_id, body.name)
+        await session.commit()
+    return {"id": str(current.user_id), "name": user.name if user else None}
+
+
+# ═══════════════════════════════════════════════════════════════
+# Админ: мероприятия
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/admin/events")
+async def admin_list_events(current: CurrentUser = Depends(require_admin)):
+    """Список всех мероприятий доступных админу (по его каналам).
+
+    Суперадмин видит все каналы.
+    """
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        channel_svc = ChannelService(session)
+        if current.is_super_admin:
+            events = await event_svc.list_all()
+        else:
+            events = []
+            for cid in current.managed_channel_ids:
+                events.extend(await event_svc.list_all(channel_id=cid))
+
+        # Карта каналов для названий
+        channel_ids = {e.channel_id for e in events}
+        channels = {}
+        for cid in channel_ids:
+            ch = await channel_svc.get_by_id(cid)
+            if ch:
+                channels[cid] = ch
+
+    return [
+        {
+            "id": str(e.id),
+            "channel_id": str(e.channel_id),
+            "channel_title": channels.get(e.channel_id).title if e.channel_id in channels else None,
+            "title": e.title,
+            "date": e.date.isoformat(),
+            "location": e.location,
+            "price": float(e.price),
+            "total_tickets": e.total_tickets,
+            "available_tickets": e.available_tickets,
+            "is_active": e.is_active,
+            "is_published": e.is_published,
+            "is_free": e.is_free,
+        }
+        for e in events
+    ]
+
+
+@router.post("/admin/events", status_code=status.HTTP_201_CREATED)
+async def admin_create_event(
+    body: EventCreate,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Создать мероприятие (черновик). Проверка канального доступа."""
+    if not current.can_manage(body.channel_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к этому каналу",
+        )
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        try:
+            event = await event_svc.create(
+                title=body.title,
+                description=body.description,
+                date=body.date,
+                location=body.location,
+                price=body.price,
+                total_tickets=body.total_tickets,
+                channel_id=body.channel_id,
+            )
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {"id": str(event.id), "is_published": event.is_published}
+
+
+@router.get("/admin/events/{event_id}")
+async def admin_get_event(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Детали мероприятия (админ)."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        channel_svc = ChannelService(session)
+        channel = await channel_svc.get_by_id(event.channel_id)
+
+    return {
+        "id": str(event.id),
+        "channel_id": str(event.channel_id),
+        "channel_title": channel.title if channel else None,
+        "title": event.title,
+        "description": event.description,
+        "date": event.date.isoformat(),
+        "location": event.location,
+        "price": float(event.price),
+        "total_tickets": event.total_tickets,
+        "available_tickets": event.available_tickets,
+        "is_active": event.is_active,
+        "is_published": event.is_published,
+        "is_free": event.is_free,
+    }
+
+
+@router.patch("/admin/events/{event_id}")
+async def admin_update_event(
+    event_id: str,
+    body: EventUpdateIn,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Частичное обновление мероприятия."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    data = body.model_dump(exclude_unset=True)
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        if not data:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        try:
+            event = await event_svc.update(uid, **data)
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {"id": str(uid), "updated": True}
+
+
+@router.post("/admin/events/{event_id}/toggle")
+async def admin_toggle_event(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Включить/отключить мероприятие."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        event = await event_svc.set_active(uid, not event.is_active)
+        await session.commit()
+
+    return {"id": str(uid), "is_active": event.is_active}
+
+
+@router.post("/admin/events/{event_id}/delete")
+async def admin_delete_event(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Мягко удалить мероприятие."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        await event_svc.soft_delete(uid)
+        await session.commit()
+
+    return {"id": str(uid), "deleted": True}
+
+
+@router.post("/admin/events/{event_id}/publish")
+async def admin_publish_event(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Опубликовать мероприятие + отправить анонс в канал.
+
+    Ошибка анонса не откатывает флаг публикации (логируется и возвращается announced=false).
+    """
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        await event_svc.update(uid, is_published=True)
+        await session.commit()
+
+    announced = await post_event_announcement(uid)
+    return {"id": str(uid), "is_published": True, "announced": announced}
+
+
+@router.post("/admin/events/{event_id}/repost")
+async def admin_repost_event(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Переотправить анонс в канал."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+
+    announced = await post_event_announcement(uid)
+    return {"id": str(uid), "announced": announced}
+
+
+@router.get("/admin/events/{event_id}/stats")
+async def admin_event_stats(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Статистика продаж мероприятия (всем админам, без тарифного гейта)."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        stats = await event_svc.get_event_stats(uid)
+
+    return {"event_id": str(uid), **stats}
+
+
+@router.get("/admin/events/{event_id}/tickets")
+async def admin_event_tickets(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Список билетов на мероприятие (админ)."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        ticket_svc = TicketService(session)
+        tickets = await ticket_svc.get_event_tickets(uid)
+
+    return {"event_id": str(uid), "tickets": tickets}
+
+
+@router.get("/admin/events/{event_id}/tickets.csv")
+async def admin_event_tickets_csv(
+    event_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Экспорт билетов на мероприятие в CSV."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        ticket_svc = TicketService(session)
+        tickets = await ticket_svc.export_event_tickets(uid)
+
+    if not tickets:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Нет билетов для экспорта")
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(tickets[0].keys()))
+    writer.writeheader()
+    writer.writerows(tickets)
+    buf.seek(0)
+
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="event-{uid}-tickets.csv"'},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Админ: билеты и вход
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/admin/tickets/validate")
+async def admin_validate_ticket(
+    code: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Проверить билет по коду (без отметки входа)."""
+    async with async_session_factory() as session:
+        ticket_svc = TicketService(session)
+        result = await ticket_svc.validate_ticket(code.strip().upper())
+    return result
+
+
+@router.post("/admin/tickets/checkin")
+async def admin_checkin_ticket(
+    body: CheckInIn,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Отметить вход по коду билета."""
+    code = body.code.strip().upper()
+    # Нормализация: AB3XK7M9 (8 символов без дефиса) → AB3X-K7M9
+    if len(code) == 8 and "-" not in code:
+        code = f"{code[:4]}-{code[4:]}"
+
+    async with async_session_factory() as session:
+        ticket_svc = TicketService(session)
+        try:
+            ticket = await ticket_svc.check_in_by_code(code, current.telegram_user_id)
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "ok": True,
+        "ticket_id": str(ticket.id),
+        "status": ticket.status.value,
+        "event_id": str(ticket.event_id),
+        "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
+    }
+
+
+@router.post("/admin/tickets/{ticket_id}/cancel")
+async def admin_cancel_ticket(
+    ticket_id: str,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Отменить билет (админ). Канальный доступ по мероприятию билета."""
+    try:
+        tid = UUID(ticket_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID билета")
+
+    async with async_session_factory() as session:
+        ticket_svc = TicketService(session)
+        pair = await ticket_svc.get_ticket_event(tid)
+        if pair is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Билет не найден")
+        ticket, event = pair
+        if not current.can_manage(event.channel_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        try:
+            ticket = await ticket_svc.admin_cancel_ticket(tid)
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {"ticket_id": str(tid), "status": ticket.status.value}
+
+
+# ═══════════════════════════════════════════════════════════════
+# Админ: каналы и подписки (super-admin)
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/admin/channels")
+async def admin_list_channels(current: CurrentUser = Depends(require_super_admin)):
+    """Список всех каналов со статусом подписки и админами."""
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        admin_svc = ChannelAdminService(session)
+        channels = await channel_svc.list_all()
+        admins_by_channel = {
+            str(ch.id): await admin_svc.get_admin_ids(ch.id)
+            for ch in channels
+        }
+
+    return [
+        {
+            "id": str(ch.id),
+            "telegram_channel_id": ch.telegram_channel_id,
+            "title": ch.title,
+            "is_subscription_active": ch.is_subscription_active,
+            "subscription_tier": ch.subscription_tier.value,
+            "subscription_until": ch.subscription_until.isoformat() if ch.subscription_until else None,
+            "admins": admins_by_channel.get(str(ch.id), []),
+        }
+        for ch in channels
+    ]
+
+
+@router.get("/admin/channels/{channel_id}")
+async def admin_channel_info(
+    channel_id: str,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Детальная информация о канале."""
+    try:
+        cid = UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        summary = await channel_svc.get_channel_summary(cid)
+    if summary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Канал не найден")
+    return summary
+
+
+@router.post("/admin/channels/{channel_id}/subscribe")
+async def admin_subscribe(
+    channel_id: str,
+    body: SubscribeIn,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Активировать подписку каналу."""
+    try:
+        cid = UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        channel = await channel_svc.activate_subscription(
+            cid,
+            duration_days=body.duration_days,
+            tier=body.tier,
+        )
+        if channel is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Канал не найден")
+        await session.commit()
+
+    return {
+        "channel_id": str(cid),
+        "is_subscription_active": channel.is_subscription_active,
+        "subscription_tier": channel.subscription_tier.value,
+        "subscription_until": channel.subscription_until.isoformat() if channel.subscription_until else None,
+    }
+
+
+@router.post("/admin/channels/{channel_id}/unsubscribe")
+async def admin_unsubscribe(
+    channel_id: str,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Отключить подписку канала."""
+    try:
+        cid = UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        channel = await channel_svc.deactivate_subscription(cid)
+        if channel is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Канал не найден")
+        await session.commit()
+
+    return {"channel_id": str(cid), "is_subscription_active": False}
+
+
+@router.post("/admin/channels/{channel_id}/change_admin")
+async def admin_change_admin(
+    channel_id: str,
+    body: ChangeAdminIn,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Сменить администратора канала."""
+    try:
+        cid = UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        channel = await channel_svc.get_by_id(cid)
+        if channel is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Канал не найден")
+        try:
+            _, old_admins = await channel_svc.change_admin(
+                channel.telegram_channel_id,
+                body.new_admin_id,
+            )
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {"channel_id": str(cid), "new_admin_id": body.new_admin_id, "old_admins": old_admins}
+
+
+@router.post("/admin/channels/check_expired")
+async def admin_check_expired(current: CurrentUser = Depends(require_super_admin)):
+    """Проверить и деактивировать просроченные подписки."""
+    async with async_session_factory() as session:
+        from sqlalchemy import select as _select
+        from app.core.models import Channel as _Channel
+
+        result = await session.execute(_select(_Channel).where(_Channel.is_subscription_active == True))
+        channels = list(result.scalars().all())
+        channel_svc = ChannelService(session)
+        deactivated = 0
+        for ch in channels:
+            if not await channel_svc.is_subscription_valid(ch.id):
+                deactivated += 1
+        await session.commit()
+
+    return {"checked": len(channels), "deactivated": deactivated}
+
+
+# ═══════════════════════════════════════════════════════════════
+# Админ: общая статистика (super-admin)
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/admin/stats")
+async def admin_global_stats(current: CurrentUser = Depends(require_super_admin)):
+    """Общая статистика по всем каналам/мероприятиям/билетам."""
+    async with async_session_factory() as session:
+        stats_svc = StatsService(session)
+        stats = await stats_svc.get_global_stats()
+    return stats

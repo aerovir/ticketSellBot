@@ -15,11 +15,16 @@ import hashlib
 import hmac
 import json
 import time
+from dataclasses import dataclass, field
 from urllib.parse import parse_qs, unquote
+from uuid import UUID
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 
 from app.config import settings
+from app.core.database import async_session_factory
+from app.core.models import PlatformType
+from app.core.services import ChannelService, UserService
 
 # Maximum age of initData in seconds (24 hours)
 _MAX_INIT_DATA_AGE = 86400
@@ -145,3 +150,100 @@ def validate_init_data(
         result[key] = val
 
     return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# Current user + role resolution (web admin panel)
+# ═══════════════════════════════════════════════════════════════
+
+def _is_super_admin(telegram_user_id: str) -> bool:
+    """Super-admin is a pure config check — Telegram ID in ADMIN_TELEGRAM_IDS."""
+    if not settings.admin_telegram_ids:
+        return False
+    admin_ids = [x.strip() for x in settings.admin_telegram_ids.split(",") if x.strip()]
+    return telegram_user_id in admin_ids
+
+
+@dataclass
+class CurrentUser:
+    """Resolved current user with role info for the web app."""
+
+    user_id: UUID
+    telegram_user_id: str
+    name: str | None
+    is_super_admin: bool
+    #: Каналы с активной подпиской, где пользователь — админ (channel_admins).
+    managed_channel_ids: list[UUID] = field(default_factory=list)
+
+    @property
+    def is_admin(self) -> bool:
+        return self.is_super_admin or bool(self.managed_channel_ids)
+
+    @property
+    def role(self) -> str:
+        if self.is_super_admin:
+            return "super_admin"
+        if self.managed_channel_ids:
+            return "channel_admin"
+        return "user"
+
+    def can_manage(self, channel_id: UUID) -> bool:
+        return self.is_super_admin or channel_id in self.managed_channel_ids
+
+
+async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> CurrentUser:
+    """Resolve the initData user into a CurrentUser with role.
+
+    NOTE (deliberate simplification vs the bot): admin status is DB-only —
+    channel_admins membership + active subscription. The bot additionally
+    verifies via Telegram get_chat_member and auto-removes stale admins;
+    the web cannot (no synchronous bot access). channel_admins stays fresh
+    because the bot syncs it on subscribe / on_chat_member_update / change_admin.
+    """
+    user_data = auth_data.get("user", {})
+    platform_user_id = str(user_data.get("id", "0"))
+    name = user_data.get("first_name", "")
+
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_or_create(
+            platform=PlatformType.telegram,
+            platform_user_id=platform_user_id,
+            name=name,
+        )
+
+        channel_svc = ChannelService(session)
+        raw_ids = await channel_svc.get_channel_ids_by_admin(platform_user_id)
+        managed = [
+            cid for cid in raw_ids
+            if await channel_svc.is_subscription_valid(cid)
+        ]
+        # Persist the row if get_or_create inserted a new user (read-only requests
+        # still carry this dependency); commit is a no-op when nothing changed.
+        await session.commit()
+
+    return CurrentUser(
+        user_id=user.id,
+        telegram_user_id=platform_user_id,
+        name=user.name,
+        is_super_admin=_is_super_admin(platform_user_id),
+        managed_channel_ids=managed,
+    )
+
+
+async def require_admin(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if not current.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Нет доступа к панели администратора",
+        )
+    return current
+
+
+async def require_super_admin(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if not current.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуется супер-администратор",
+        )
+    return current

@@ -130,3 +130,9 @@
 | 100 | Feat: отправка кода билета в ЛС после покупки | ✅ done | 2026-07-26 | — |
 | 101 | Fix: try/except в cmd_check и FSM check_ticket (обработка ошибок) | ✅ done | 2026-07-26 | — |
 | 102 | Chore: убран /check из Menu Button (оставлен в админ-меню) | ✅ done | 2026-07-26 | — |
+| 103 | Feat: личный кабинет + админка в Telegram Mini App (роли user/channel-admin/super-admin) | ✅ done (код) | 2026-08-05 | — |
+| 104 | Feat: веб-API админки — мероприятия CRUD, publish/repost/toggle/delete, статистика, билеты+check-in, CSV, каналы+подписки, общая статистика | ✅ done (код) | 2026-08-05 | — |
+| 105 | Feat: перенос покупок/админки из inline-кнопок в web (MenuButtonWebApp, WebApp-кнопка в анонсах, /start и /menu → кабинет) | ✅ done (код) | 2026-08-05 | — |
+| 106 | Feat: WEBAPP_URL в CI (.env.telegram) для работы WebApp-кнопок на проде | ✅ done | 2026-08-05 | — |
+| 107 | Тесты: 28 новых (admin API 16, сервисы 9, бот 1) — всего 168 | ✅ done | 2026-08-05 | — |
+| 108 | Деплой веб-кабинета на прод (pochtibot.online) и живой тест | 📌 pending | 2026-08-05 | — |

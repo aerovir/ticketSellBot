@@ -722,3 +722,34 @@
       pass  # бот не в канале — норм, сообщение подскажет
   ```
 - **Связанные ошибки:** нет
+
+## 041 — CI-деплой падает: `service "nginx" depends on undefined service "web": invalid compose project`
+
+- **Дата:** 2026-08-05
+- **Статус:** 🔄 Требует доработки
+- **Описание:** Пуш в `dev` (коммит `01e1799`, trigger deploy) — workflow `deploy.yml` падает на шаге «🏗️ Собрать новые образы» с ошибкой:
+  ```
+  service "nginx" depends on undefined service "web": invalid compose project
+  ```
+  Job `test` проходит (123 теста), job `deploy` падает → контейнеры ticketbot не поднимаются.
+- **Анализ:**
+  - **Подтверждено (`docker-compose.yml:79-93`):** сервис `web` объявлен внутри `profiles: all`.
+  - **Подтверждено (`deploy/docker-compose.nginx.yml:15`):** сервис `nginx` имеет `depends_on: web`.
+  - **Подтверждено (`.github/workflows/deploy.yml:9`):** `COMPOSE_FILES` включает `deploy/docker-compose.nginx.yml`, но ни build, ни up не активируют профиль `all` (`--profile all` отсутствует). Без активации профиля compose не видит `web` → `invalid compose project`.
+  - Проверено на VPS: `docker compose ... build` (без `--profile all`) падает с той же ошибкой; `docker compose ... --profile all build` — успешно, все 4 образа (`web`, `telegram`, `vk`, `max`) собираются.
+- **Исправление (применено, коммит `7b6da4b`):**
+  Выбран безопасный вариант — **`web` вынесен из `profiles: all`** в `docker-compose.yml` (теперь обычный сервис, виден nginx всегда). Дополнительно в `.dockerignore` добавлено `.env*` (с `!*.env.example`), чтобы секреты из `.env.telegram/.env.vk/.env.max` не попадали в образы. `--profile all` не нужен.
+- **Связанные ошибки:** нет
+
+## 042 — CI-деплой: шаг SSL-сертификата падает (сломанный перенос строки в docker run)
+
+- **Дата:** 2026-08-05
+- **Статус:** ✅ Исправлено
+- **Описание:** После фикса #041 деплой доходит до шага «🔐 Получить SSL-сертификат (Let's Encrypt)», но сертификат не выдаётся (`/etc/letsencrypt/live/pochtibot.online` отсутствует), nginx не поднимается, порты 80/443 закрыты.
+- **Анализ:**
+  - **Подтверждено (`.github/workflows/deploy.yml:280-284`):** команда `docker run` была записана с обратными слэшами `\` в конце строк. В block-scalar (`run: |`) эти слэши — часть текста, поэтому команда собиралась в одну длинную строку и падала на неизвестном аргументе `-v`. `|| true` в конце проглатывал ошибку → шаг формально «completed», но сертификат не выдан.
+  - Проверено через `cat -A`: слэши реально присутствуют как `$` в конце строк.
+  - Шаг «Накатить миграции» (строки 177-179) содержит легитимные слэши-переносы внутри `docker compose run` — их не трогать.
+- **Исправление (применено, коммит `394076c`):**
+  Команда объединена в одну строку: `docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot -p 80:80 certbot/certbot:latest certonly --standalone -d pochtibot.online --non-interactive --agree-tos -m admin@pochtibot.online --preferred-challenges http || true`
+- **Связанные ошибки:** #041

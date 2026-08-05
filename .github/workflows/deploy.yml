@@ -68,6 +68,7 @@ jobs:
           DATABASE_URL=postgresql+asyncpg://tg_user:${{ secrets.DB_PASSWORD_TG }}@db:5432/ticketbot
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           ADMIN_TELEGRAM_IDS=${{ secrets.ADMIN_TELEGRAM_IDS }}
+          WEBAPP_URL=${{ secrets.WEBAPP_URL || 'https://pochtibot.online' }}
           DEBUG=false
           ENVEOF
           echo "✅ .env.telegram создан"
