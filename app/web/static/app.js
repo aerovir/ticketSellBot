@@ -35,9 +35,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         tg.expand(); // Expand to full height
         state.initData = tg.initData || "";
     } else {
-        // Running outside Telegram (e.g., browser dev)
-        state.initData = "";
-        console.warn("Telegram WebApp SDK not found — running in dev mode");
+        // Telegram Desktop (и некоторые клиенты) открывают Mini App как
+        // обычную страницу и передают данные в URL-хэше: #tgWebAppData=...
+        // SDK (window.Telegram) в этом случае не внедряется, но данные есть.
+        state.initData = extractInitDataFromUrl() || "";
+        if (!state.initData) {
+            console.warn("Telegram WebApp SDK not found — running in dev mode");
+        }
     }
 
     // Если initData пуст — кабинет открыт вне Telegram (не как Mini App).
@@ -75,6 +79,20 @@ async function loadMe() {
     state.me = me;
     state.role = me.role || "user";
     return me;
+}
+
+function extractInitDataFromUrl() {
+    // Telegram Desktop передаёт initData в фрагменте URL: #tgWebAppData=...
+    // Это тот же initData, что mobile отдаёт через window.Telegram.WebApp.initData.
+    try {
+        const fragment = window.location.hash || "";
+        if (!fragment.includes("tgWebAppData=")) return "";
+        const params = new URLSearchParams(fragment.startsWith("#") ? fragment.slice(1) : fragment);
+        return params.get("tgWebAppData") || "";
+    } catch (e) {
+        console.warn("extractInitDataFromUrl failed", e);
+        return "";
+    }
 }
 
 function showNoInitData() {

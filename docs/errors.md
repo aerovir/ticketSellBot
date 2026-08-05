@@ -753,3 +753,16 @@
 - **Исправление (применено, коммит `394076c`):**
   Команда объединена в одну строку: `docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot -p 80:80 certbot/certbot:latest certonly --standalone -d pochtibot.online --non-interactive --agree-tos -m admin@pochtibot.online --preferred-challenges http || true`
 - **Связанные ошибки:** #041
+
+## 043 — Веб-кабинет не открывается на Telegram Desktop (initData пуст)
+
+- **Дата:** 2026-08-05
+- **Статус:** ✅ Исправлено
+- **Описание:** Telegram Mini App (личный кабинет) работает на мобильном Telegram, но на **Telegram Desktop** показывает экран «Откройте кабинет в Telegram» — `/api/me` не вызывается, список пуст.
+- **Анализ:**
+  - **Подтверждено (логи web на VPS):** телефон делает `/api/me 200` + `/api/events 200`, десктоп — только `GET /` + `static`, обрыв без `/api/me`.
+  - **Подтверждено (`app/web/static/app.js:32-41`):** initData берётся только из `window.Telegram.WebApp.initData`. Если SDK нет → `state.initData = ""`.
+  - **Подтверждено (URL с десктопа, диагностика экрана):** `window.Telegram: нет`, `WebApp: НЕТ`, но в URL-фрагменте есть `#tgWebAppData=user=...&auth_date=...&signature=...&hash=...` и `tgWebAppPlatform=tdesktop`. То есть Telegram Desktop открывает Mini App как обычную страницу и **передаёт данные через URL-хэш**, но **не внедряет `window.Telegram`** (в отличие от мобильного клиента). Скрипт `telegram-web-app.js` создаёт SDK только при внедрении интерфейса клиентом.
+- **Исправление (применено, `app/web/static/app.js`):**
+  Добавлен фоллбек `extractInitDataFromUrl()`: если `window.Telegram` нет, initData извлекается из `#tgWebAppData=` в URL-фрагменте. Это тот же initData (user/hash/auth_date), который `validate_init_data` на бэкенде уже умеет парсить (HMAC-проверка проходит).
+- **Связанные ошибки:** нет
