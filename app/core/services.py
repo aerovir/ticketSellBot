@@ -60,6 +60,17 @@ class UserService:
 
         return user
 
+    async def get_by_platform_user_id(self, platform: PlatformType, platform_user_id: str) -> User | None:
+        """Find a user by platform+id WITHOUT creating (unlike get_or_create).
+
+        Used for admin lookups — do not create a side-effect user on view.
+        """
+        stmt = select(User).where(
+            and_(User.platform == platform, User.platform_user_id == platform_user_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def update_name(self, user_id: uuid.UUID, name: str | None) -> User | None:
         """Update a user's display name. Returns updated user or None."""
         user = await self.session.get(User, user_id)

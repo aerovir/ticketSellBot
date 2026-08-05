@@ -132,6 +132,18 @@ class MeUpdateIn(BaseModel):
     name: Optional[str] = None
 
 
+class ChannelSubscribeIn(BaseModel):
+    """Создать канал (если нет) и активировать подписку."""
+    telegram_channel_id: str  # @username или числовой ID
+    title: Optional[str] = None
+    duration_days: int = Field(default=30, gt=0)
+    tier: SubscriptionTier = SubscriptionTier.basic
+
+
+class BroadcastIn(BaseModel):
+    text: str
+
+
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):

@@ -637,6 +637,18 @@ function showAdminDashboard() {
             <button class="admin-menu-card" onclick="showAdminStats()">
                 <div class="admin-menu-icon">📊</div>
                 <div>Статистика</div>
+            </button>
+            <button class="admin-menu-card" onclick="showBroadcast()">
+                <div class="admin-menu-icon">📣</div>
+                <div>Рассылка</div>
+            </button>
+            <button class="admin-menu-card" onclick="showUserInfo()">
+                <div class="admin-menu-icon">👥</div>
+                <div>Инфо о юзере</div>
+            </button>
+            <button class="admin-menu-card" onclick="showAdminHealth()">
+                <div class="admin-menu-icon">🩺</div>
+                <div>Здоровье</div>
             </button>` : ''}
         </div>
     `;
@@ -997,6 +1009,7 @@ function renderAdminChannels(channels) {
         return;
     }
     container.innerHTML = `
+        <button class="btn btn-primary" onclick="adminAddChannelPrompt()">➕ Добавить канал</button>
         <button class="btn btn-secondary" onclick="adminCheckExpired()">🔍 Проверить просроченные подписки</button>
         <div class="admin-list" style="margin-top:12px">
             ${channels.map(ch => `
@@ -1096,4 +1109,140 @@ function renderAdminStats(s) {
             <div class="stat-card stat-revenue"><div class="stat-value">${formatPrice(s.revenue)}</div><div class="stat-label">💰 Выручка</div></div>
         </div>
     `;
+}
+
+// ─── Добавить канал (super-admin) ─────────────────────────────
+
+async function adminAddChannelPrompt() {
+    const telegramChannelId = prompt("Telegram ID канала (@username или числовой):");
+    if (!telegramChannelId) return;
+    const days = prompt("Срок подписки (дней):", "30");
+    if (!days) return;
+    const tier = prompt("Тариф (basic/pro):", "basic") === "pro" ? "pro" : "basic";
+    const title = prompt("Название (необязательно):", "") || null;
+    try {
+        await api("/api/admin/channels", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                telegram_channel_id: telegramChannelId.trim(),
+                title,
+                duration_days: parseInt(days, 10) || 30,
+                tier,
+            }),
+        });
+        showToast("✅ Канал добавлен и подписка активирована");
+        await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ─── Рассылка (super-admin) ───────────────────────────────────
+
+function showBroadcast() {
+    updateToolbar("Рассылка", true, false);
+    showPage("admin-broadcast");
+    document.getElementById("adminBroadcastContent").innerHTML = `
+        <div class="form-field">
+            <label class="form-label">Сообщение для всех активных каналов</label>
+            <textarea class="form-input" id="bc_text" placeholder="Введите текст рассылки..." style="min-height:120px"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="doBroadcast()">📣 Отправить</button>
+        <div id="bcResult"></div>
+    `;
+}
+
+async function doBroadcast() {
+    const text = document.getElementById("bc_text").value.trim();
+    if (!text) { showToast("Введите текст", true); return; }
+    const btn = document.querySelector('#adminBroadcastContent .btn-primary');
+    btn.disabled = true;
+    try {
+        const res = await api("/api/admin/broadcast", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+        });
+        document.getElementById("bcResult").innerHTML =
+            `<div class="checkin-result checkin-ok">✅ Отправлено в ${res.sent}/${res.total} каналов</div>`;
+        document.getElementById("bc_text").value = "";
+    } catch (e) {
+        showToast(e.message || "Ошибка", true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ─── Инфо о пользователе (super-admin) ───────────────────────
+
+function showUserInfo() {
+    updateToolbar("Инфо о пользователе", true, false);
+    showPage("admin-userinfo");
+    document.getElementById("adminUserInfoContent").innerHTML = `
+        <div class="form-field">
+            <label class="form-label">Telegram ID пользователя</label>
+            <input class="form-input" id="ui_userid" placeholder="123456789" inputmode="numeric">
+        </div>
+        <button class="btn btn-primary" onclick="doUserInfoLookup()">🔍 Найти</button>
+        <div id="uiResult"></div>
+    `;
+    const input = document.getElementById("ui_userid");
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") doUserInfoLookup(); });
+}
+
+async function doUserInfoLookup() {
+    const id = document.getElementById("ui_userid").value.trim();
+    if (!id) { showToast("Введите Telegram ID", true); return; }
+    const resultBox = document.getElementById("uiResult");
+    resultBox.innerHTML = '<p class="hint">Поиск...</p>';
+    try {
+        const user = await api(`/api/admin/users/${encodeURIComponent(id)}`);
+        const channels = user.channels || [];
+        resultBox.innerHTML = `
+            <div class="profile-card" style="margin-top:16px">
+                <div class="profile-avatar">👤</div>
+                <h2>${escapeHtml(user.name || "Без имени")}</h2>
+                <p class="hint">Telegram ID: <code>${escapeHtml(user.telegram_user_id)}</code></p>
+            </div>
+            <h3 style="margin:16px 0 8px">Каналы (${channels.length})</h3>
+            ${channels.length === 0
+                ? '<p class="hint">Нет каналов</p>'
+                : `<div class="admin-list">${channels.map(ch => `
+                    <div class="admin-list-item">
+                        <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
+                            <span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>
+                            ${ch.is_subscription_active ? '<span class="badge badge-published">активна</span>' : '<span class="badge badge-off">нет</span>'}
+                        </div>
+                    </div>`).join('')}</div>`}
+        `;
+    } catch (e) {
+        resultBox.innerHTML = `<div class="checkin-result checkin-fail">❌ ${escapeHtml(e.message || "Пользователь не найден")}</div>`;
+    }
+}
+
+// ─── Здоровье (super-admin) ───────────────────────────────────
+
+async function showAdminHealth() {
+    updateToolbar("Здоровье", true, false);
+    showPage("admin-health");
+    showLoading();
+    try {
+        const h = await api("/api/admin/health");
+        hideLoading();
+        document.getElementById("adminHealthContent").innerHTML = `
+            <div class="stat-grid">
+                <div class="stat-card ${h.status === 'ok' ? 'checkin-ok' : 'checkin-fail'}">
+                    <div class="stat-value">${h.status === 'ok' ? '✅' : '⚠️'}</div>
+                    <div class="stat-label">Статус</div>
+                </div>
+                <div class="stat-card"><div class="stat-value">${h.db_ok ? '✅' : '❌'}</div><div class="stat-label">База данных</div></div>
+            </div>
+            <div class="admin-list-item" style="margin-top:12px">
+                <div><b>🤖 Бот</b></div>
+                <div class="hint">${h.bot_username ? '@' + escapeHtml(h.bot_username) : 'неизвестно'}</div>
+            </div>
+        `;
+    } catch (e) {
+        hideLoading();
+        showError(e.message || "Ошибка загрузки");
+    }
 }

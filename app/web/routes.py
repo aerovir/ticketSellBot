@@ -15,7 +15,9 @@ from fastapi.responses import StreamingResponse
 from app.core.database import async_session_factory
 from app.core.models import PlatformType
 from app.core.schemas import (
+    BroadcastIn,
     ChangeAdminIn,
+    ChannelSubscribeIn,
     CheckInIn,
     EventCreate,
     EventUpdateIn,
@@ -37,7 +39,7 @@ from app.web.dependencies import (
     require_super_admin,
     validate_init_data,
 )
-from app.web.announce import post_event_announcement
+from app.web.announce import _get_bot, post_event_announcement, send_broadcast
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
@@ -844,3 +846,124 @@ async def admin_global_stats(current: CurrentUser = Depends(require_super_admin)
         stats_svc = StatsService(session)
         stats = await stats_svc.get_global_stats()
     return stats
+
+
+# ═══════════════════════════════════════════════════════════════
+# Админ: создать канал + подписка, инфо о пользователе,
+#        рассылка, здоровье (super-admin)
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.post("/admin/channels", status_code=status.HTTP_201_CREATED)
+async def admin_create_channel(
+    body: ChannelSubscribeIn,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Создать канал (если нет в БД) и активировать подписку.
+
+    Зеркалит бота admin_subscribe: по @username/ID создаёт канал,
+    если он ещё не зарегистрирован, затем активирует подписку.
+    """
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        try:
+            channel = await channel_svc.get_by_telegram_id(body.telegram_channel_id)
+            if channel is None:
+                channel = await channel_svc.create(
+                    telegram_channel_id=body.telegram_channel_id,
+                    admin_telegram_user_id="",
+                    title=body.title or f"Канал {body.telegram_channel_id}",
+                )
+            channel = await channel_svc.activate_subscription(
+                channel.id,
+                duration_days=body.duration_days,
+                tier=body.tier,
+            )
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "channel_id": str(channel.id),
+        "telegram_channel_id": channel.telegram_channel_id,
+        "is_subscription_active": channel.is_subscription_active,
+        "subscription_tier": channel.subscription_tier.value,
+        "subscription_until": channel.subscription_until.isoformat() if channel.subscription_until else None,
+    }
+
+
+@router.get("/admin/users/{telegram_user_id}")
+async def admin_user_info(
+    telegram_user_id: str,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Информация о пользователе по Telegram ID (без создания).
+
+    Зеркалит бота sa_user_info, но без side-effect get_or_create.
+    """
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_by_platform_user_id(PlatformType.telegram, telegram_user_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+        channel_svc = ChannelService(session)
+        channels = await channel_svc.get_channels_by_admin(telegram_user_id)
+
+    return {
+        "id": str(user.id),
+        "telegram_user_id": telegram_user_id,
+        "name": user.name,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "channels": [
+            {
+                "id": str(ch.id),
+                "telegram_channel_id": ch.telegram_channel_id,
+                "title": ch.title,
+                "is_subscription_active": ch.is_subscription_active,
+                "subscription_tier": ch.subscription_tier.value,
+            }
+            for ch in channels
+        ],
+    }
+
+
+@router.post("/admin/broadcast")
+async def admin_broadcast(
+    body: BroadcastIn,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Разослать сообщение во все активные каналы."""
+    if not body.text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Сообщение не может быть пустым")
+    sent, total = await send_broadcast(body.text.strip())
+    return {"sent": sent, "total": total}
+
+
+@router.get("/admin/health")
+async def admin_health(current: CurrentUser = Depends(require_super_admin)):
+    """Здоровье бота: статус, username, БД."""
+    from sqlalchemy import text as sqltext
+
+    db_ok = False
+    async with async_session_factory() as session:
+        try:
+            await session.execute(sqltext("SELECT 1"))
+            db_ok = True
+        except Exception:
+            db_ok = False
+
+    bot_username = None
+    bot = _get_bot()
+    if bot is not None:
+        try:
+            me = await bot.get_me()
+            bot_username = me.username
+        except Exception:
+            bot_username = None
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "bot_username": bot_username,
+        "db_ok": db_ok,
+    }

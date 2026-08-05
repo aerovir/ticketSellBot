@@ -872,3 +872,24 @@ class TestWebAdminServices:
         user = await svc.update_name(sample_user.id, "Новое Имя")
         assert user is not None
         assert user.name == "Новое Имя"
+
+
+class TestUserLookup:
+    """Тесты поиска пользователя без создания."""
+
+    async def test_get_by_platform_user_id_found(self, db_session, sample_user):
+        """Находит существующего пользователя по platform+id."""
+        from app.core.services import UserService
+        from app.core.models import PlatformType
+        svc = UserService(db_session)
+        user = await svc.get_by_platform_user_id(PlatformType.telegram, sample_user.platform_user_id)
+        assert user is not None
+        assert user.id == sample_user.id
+
+    async def test_get_by_platform_user_id_missing(self, db_session):
+        """Возвращает None для отсутствующего (без создания)."""
+        from app.core.services import UserService
+        from app.core.models import PlatformType
+        svc = UserService(db_session)
+        user = await svc.get_by_platform_user_id(PlatformType.telegram, "nonexistent_999")
+        assert user is None
