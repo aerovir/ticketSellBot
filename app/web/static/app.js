@@ -81,6 +81,19 @@ function showNoInitData() {
     // Кабинет открыт вне Telegram Mini App — initData недоступен.
     updateToolbar("TicketBot", false, false);
     showPage("events");
+
+    // Диагностика причины: есть ли Telegram SDK, что в initDataUnsafe
+    let diag = "window.Telegram: " + (window.Telegram ? "есть" : "нет");
+    if (window.Telegram && window.Telegram.WebApp) {
+        const tg = window.Telegram.WebApp;
+        diag += "<br>WebApp: есть, initData len=" + (tg.initData ? tg.initData.length : 0);
+        const u = (tg.initDataUnsafe && tg.initDataUnsafe.user) || {};
+        diag += ", user.id=" + (u.id ?? "—");
+    } else {
+        diag += "<br>WebApp: НЕТ";
+    }
+    diag += "<br>URL: " + window.location.href;
+
     document.getElementById("eventsContent").innerHTML = `
         <div class="empty-state">
             <div class="empty-icon">⚠️</div>
@@ -88,6 +101,7 @@ function showNoInitData() {
             <p>Личный кабинет работает только внутри Telegram Mini App.<br>
             Откройте чат с ботом и нажмите кнопку <b>«Мероприятия»</b> внизу,
             либо кнопку <b>«🎫 Открыть кабинет»</b> в анонсах канала.</p>
+            <div style="font-size:11px;color:#999;margin-top:16px;word-break:break-all">${diag}</div>
         </div>
     `;
 }
