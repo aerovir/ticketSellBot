@@ -277,16 +277,7 @@ jobs:
         run: |
           if [ ! -d "/etc/letsencrypt/live/pochtibot.online" ]; then
             echo "🔐 Получение SSL-сертификата для pochtibot.online..."
-            docker run --rm 
-              -v /etc/letsencrypt:/etc/letsencrypt 
-              -v /var/www/certbot:/var/www/certbot 
-              -p 80:80 
-              certbot/certbot:latest 
-              certonly --standalone 
-              -d pochtibot.online 
-              --non-interactive --agree-tos 
-              -m admin@pochtibot.online 
-              --preferred-challenges http || true
+            docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot -p 80:80 certbot/certbot:latest certonly --standalone -d pochtibot.online --non-interactive --agree-tos -m admin@pochtibot.online --preferred-challenges http || true
           else
             echo "✅ SSL-сертификат уже есть"
           fi
