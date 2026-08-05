@@ -40,6 +40,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         console.warn("Telegram WebApp SDK not found — running in dev mode");
     }
 
+    // Если initData пуст — кабинет открыт вне Telegram (не как Mini App).
+    // Показываем понятное сообщение вместо пустого списка.
+    if (!state.initData && window.location.hostname !== "localhost") {
+        showNoInitData();
+        return;
+    }
+
     // Загружаем профиль/роль и строим таб-бар (best-effort: не блокируем покупку)
     try {
         await loadMe();
@@ -68,6 +75,21 @@ async function loadMe() {
     state.me = me;
     state.role = me.role || "user";
     return me;
+}
+
+function showNoInitData() {
+    // Кабинет открыт вне Telegram Mini App — initData недоступен.
+    updateToolbar("TicketBot", false, false);
+    showPage("events");
+    document.getElementById("eventsContent").innerHTML = `
+        <div class="empty-state">
+            <div class="empty-icon">⚠️</div>
+            <h3>Откройте кабинет в Telegram</h3>
+            <p>Личный кабинет работает только внутри Telegram Mini App.<br>
+            Откройте чат с ботом и нажмите кнопку <b>«Мероприятия»</b> внизу,
+            либо кнопку <b>«🎫 Открыть кабинет»</b> в анонсах канала.</p>
+        </div>
+    `;
 }
 
 function renderTabBar() {

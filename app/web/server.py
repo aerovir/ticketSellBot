@@ -81,11 +81,12 @@ def create_app() -> FastAPI:
     # Include API routes
     app.include_router(router, prefix="/api")
 
-    # Root redirects to Telegram Mini App
+    # Root serves the Telegram Mini App directly.
+    # НЕ используем редирект: Telegram передаёт initData только когда
+    # страница открывается напрямую (без 30x), иначе контекст WebApp теряется.
     @app.get("/")
     async def root():
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/static/index.html")
+        return FileResponse(STATIC_DIR / "index.html")
 
     @app.get("/health")
     async def health():
