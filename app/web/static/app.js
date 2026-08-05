@@ -1005,7 +1005,10 @@ function renderAdminChannels(channels) {
     hideLoading();
     const container = document.getElementById("adminChannelsContent");
     if (!channels || channels.length === 0) {
-        container.innerHTML = '<div class="empty-state"><div class="empty-icon">📢</div><h3>Нет каналов</h3></div>';
+        container.innerHTML = `
+            <button class="btn btn-primary" onclick="adminAddChannelPrompt()">➕ Добавить канал</button>
+            <div class="empty-state"><div class="empty-icon">📢</div><h3>Нет каналов</h3></div>
+        `;
         return;
     }
     container.innerHTML = `
