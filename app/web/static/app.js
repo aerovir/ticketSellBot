@@ -113,20 +113,23 @@ function renderTabBar() {
         return;
     }
     const tabs = [
-        { id: "events", label: "Мероприятия", fn: "showEvents" },
-        { id: "tickets", label: "Билеты", fn: "showMyTickets" },
-        { id: "profile", label: "Профиль", fn: "showProfile" },
+        { id: "events", label: "Мероприятия", icon: "🎫", fn: "showEvents" },
+        { id: "tickets", label: "Билеты", icon: "🎟", fn: "showMyTickets" },
+        { id: "profile", label: "Профиль", icon: "👤", fn: "showProfile" },
     ];
     if (state.role !== "user") {
-        tabs.push({ id: "admin", label: "Панель", fn: "showAdminDashboard" });
-        tabs.push({ id: "checkin", label: "Проверка", fn: "showCheckin" });
+        tabs.push({ id: "admin", label: "Панель", icon: "🎛", fn: "showAdminDashboard" });
+        tabs.push({ id: "checkin", label: "Проверка", icon: "🔍", fn: "showCheckin" });
     }
     if (state.role === "super_admin") {
-        tabs.push({ id: "channels", label: "Каналы", fn: "showAdminChannels" });
-        tabs.push({ id: "stats", label: "Статистика", fn: "showAdminStats" });
+        tabs.push({ id: "channels", label: "Каналы", icon: "📢", fn: "showAdminChannels" });
+        tabs.push({ id: "stats", label: "Статистика", icon: "📊", fn: "showAdminStats" });
     }
     bar.innerHTML = tabs.map(t =>
-        `<button class="tab" data-tab="${t.id}" onclick="window['${t.fn}']()">${t.label}</button>`
+        `<button class="tab" data-tab="${t.id}" onclick="window['${t.fn}']()">
+            <span class="tab-icon">${t.icon}</span>
+            <span>${t.label}</span>
+        </button>`
     ).join("");
     bar.style.display = "flex";
 }
@@ -263,6 +266,7 @@ function hideLoading() {
 
 async function showEvents() {
     state.lastAction = "showEvents";
+    setActiveTab("events");
     updateToolbar("TicketBot", false, true);
     showPage("events");
     showLoading();
@@ -459,6 +463,7 @@ function copyTicketId() {
 
 async function showMyTickets() {
     state.lastAction = "showMyTickets";
+    setActiveTab("tickets");
     pushNav("tickets");
     updateToolbar("Мои билеты", true, false);
     showPage("tickets");
