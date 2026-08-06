@@ -802,3 +802,29 @@
 - **Исправление (применено, `tests/test_telegram_sim.py`):**
   `feed_update` (и весь сценарий) перенесён внутрь `with patch(...)`-блока — патчи активны на всё время конвейера. Использован `patch.object` вместо `patch`-строки.
 - **Связанные ошибки:** #045
+
+## 047 — Харнесс имитации: TelegramBot создавал реальный Bot (DM уходил в сеть)
+
+- **Дата:** 2026-08-06
+- **Статус:** ✅ Исправлено
+- **Описание:** В харнессе имитации `_make_bot` патчил `async_session_factory`, но **не патчил `Bot`**. При `TelegramBot()` создавался реальный `aiogram.Bot` с `AiohttpSession` — `send_message` (DM после покупки) уходил в сеть и падал (поймано `except Exception`), поэтому DM-уведомления не появлялись в `fake.calls`. Ответы `callback.message.edit_text` шли через fake (у Message из Update `.bot` = тестовый bot), что маскировало проблему.
+- **Анализ:**
+  - **Подтверждено (тест `test_inline_buy_legacy`):** `assert tb.bot is bot` → `False` (разные объекты). `fake.calls` содержал только `AnswerCallbackQuery`, `EditMessageText` — DM-`SendMessage` отсутствовал, хотя edit_text содержал код.
+  - **Подтверждено (debug):** прямой `bot.send_message(...)` через fake работает; через `tb.bot` — падал (сетевой AiohttpSession).
+  - Причина: в `_make_bot` был запатчен `async_session_factory`, но не `Bot` (в отличие от базовых тестов `TestTelegramSimulation`, где `patch("...Bot")` был).
+- **Исправление (применено, `tests/test_telegram_sim.py`):**
+  В `_make_bot` добавлен `patch.object(_bot_mod, "Bot", lambda token, **kw: bot)` — `TelegramBot()` теперь получает тестового бота с фейк-сессией.
+- **Связанные ошибки:** #046
+
+## 048 — Сквозной web-flow: TestClient зависал (кросс-loop с db_session)
+
+- **Дата:** 2026-08-06
+- **Статус:** ✅ Исправлено
+- **Описание:** Фикстура `db_client` для сквозного web-flow на реальной БД использовала `fastapi.testclient.TestClient` + передачу `db_session` (созданного в pytest event loop). Тест **зависал** (выхода не было до timeout). Причина — кросс-loop: TestClient запускает приложение в собственном event loop (portal), а `AsyncSession` из pytest loop несовместим.
+- **Анализ:**
+  - **Подтверждено:** `TestClient` использует `portal.call(self.app, ...)` в отдельном loop (starlette/testclient.py); `db_session` создан в loop pytest. Доступ к `AsyncSession` из чужого loop → дедлок.
+  - Дополнительно: `admin_auth` мокает `UserService.get_or_create` на уровне класса — ломало и `buy` (реальный юзер не создавался, FK violation на tickets).
+- **Исправление (применено, `tests/conftest.py` + `tests/test_web_api.py`):**
+  - `db_client` переписан как `pytest_asyncio` фикстура, возвращающая `httpx.AsyncClient(transport=ASGITransport(app))` — тот же event loop, что и `db_session`.
+  - В сквозном тесте вместо `admin_auth` (мокает UserService) — юзер 12345 назначен channel-admin через `ChannelAdminService.sync_admins`, роль через реальные зависимости.
+- **Связанные ошибки:** нет

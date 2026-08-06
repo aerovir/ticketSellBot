@@ -956,3 +956,323 @@ class TestInviteApi:
             resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
         assert "image/png" in resp.headers["content-type"]
+
+
+@pytest.mark.integration
+class TestCabinetFlow:
+    """Сквозной web-flow пользователя на реальной БД (db_client, async)."""
+
+    async def test_full_cabinet_flow(self, db_client, db_session, sample_channel, sample_event):
+        """browse → buy → my tickets → admin → invite → checkin → stats."""
+        from app.core.models import SubscriptionTier
+        from app.core.services import ChannelAdminService
+
+        event_id = str(sample_event.id)
+
+        # Роль: юзер 12345 (X-Skip-Auth) — АДМИН КАНАЛА sample_channel (не супер:
+        # суперадмин не выдаёт пригласительные). Реальный юзер создаётся
+        # get_or_create (не мокаем) — buy и админка используют одного юзера.
+        assert sample_channel.subscription_tier == SubscriptionTier.pro
+        await ChannelAdminService(db_session).sync_admins(sample_channel.id, ["12345"])
+        await db_session.commit()
+
+        # 1. browse — событие видно
+        resp = await db_client.get("/api/events", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        events = [e for e in resp.json() if e["id"] == event_id]
+        assert len(events) == 1
+
+        # 2. buy — билет создан
+        resp = await db_client.post(f"/api/events/{event_id}/buy", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 201, resp.text
+        ticket_id = resp.json()["ticket_id"]
+
+        # 3. my tickets — билет с кодом
+        resp = await db_client.get("/api/tickets", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        tickets = [t for t in resp.json() if t["id"] == ticket_id]
+        assert len(tickets) == 1
+        assert tickets[0]["validation_code"] is not None
+
+        # 4. admin — событие в списке и его билеты
+        resp = await db_client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert any(e["id"] == event_id for e in resp.json())
+
+        resp = await db_client.get(f"/api/admin/events/{event_id}/tickets", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert len(resp.json()["tickets"]) == 1
+
+        # 5. invite — пригласительное (нужна квота + pro)
+        from app.core.services import EventService
+        await EventService(db_session).update(sample_event.id, invites_quota=5)
+        await db_session.commit()
+        assert sample_channel.subscription_tier == SubscriptionTier.pro
+        resp = await db_client.post(
+                f"/api/admin/events/{event_id}/invites",
+                headers={"X-Skip-Auth": "1"},
+                json={"seats": 1},
+        )
+        assert resp.status_code == 201, resp.text
+
+        # 6. checkin — отметка входа по коду купленного билета
+        code = tickets[0]["validation_code"]
+        resp = await db_client.post(
+                "/api/admin/tickets/checkin",
+                headers={"X-Skip-Auth": "1"},
+                json={"code": code},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["ok"] is True
+
+        # 7. stats — sold=0 (билет использован), invites_issued=1, quota=5
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        stats = resp.json()
+        # sold считает АКТИВНЫЕ оплаченные; после checkin билет не active → 0
+        assert stats["sold"] == 0, f"sold={stats['sold']}"
+        assert stats["invites_issued"] == 1, f"invites_issued={stats['invites_issued']}"
+        assert stats["invites_quota"] == 5
+
+
+class TestCoverageGaps:
+    """Покрытие эндпоинтов, не имевших тестов."""
+
+    def test_patch_me(self, client):
+        """PATCH /api/me — обновление имени."""
+        _u = Mock()
+        _u.name = "Новое"
+        with (
+            admin_auth(is_super=False, channel_ids=[]),
+            patch("app.web.routes.UserService.update_name", new_callable=AsyncMock, return_value=_u),
+        ):
+            resp = client.patch("/api/me", headers={"X-Skip-Auth": "1"}, json={"name": "Новое"})
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Новое"
+
+    def test_admin_get_event(self, client):
+        """GET /api/admin/events/{id} — детали (админ)."""
+        from datetime import datetime, timezone
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+        mock_event.title = "Test"
+        mock_event.description = None
+        mock_event.date = datetime.now(timezone.utc)
+        mock_event.location = None
+        mock_event.price = 100.0
+        mock_event.total_tickets = 10
+        mock_event.available_tickets = 10
+        mock_event.is_active = True
+        mock_event.is_published = True
+        mock_event.is_free = False
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=Mock(title="Ch")),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Test"
+
+    def test_admin_update_event(self, client):
+        """PATCH /api/admin/events/{id} — обновление."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.update", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.patch(f"/api/admin/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"}, json={"title": "New"})
+        assert resp.status_code == 200
+        assert resp.json()["updated"] is True
+
+    def test_admin_toggle(self, client):
+        """POST /api/admin/events/{id}/toggle."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+        mock_event.is_active = False
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.set_active", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(f"/api/admin/events/{EVENT_ID}/toggle", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is False
+
+    def test_admin_delete(self, client):
+        """POST /api/admin/events/{id}/delete."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.soft_delete", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(f"/api/admin/events/{EVENT_ID}/delete", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+
+    def test_admin_repost(self, client):
+        """POST /api/admin/events/{id}/repost."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=True),
+        ):
+            resp = client.post(f"/api/admin/events/{EVENT_ID}/repost", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["announced"] is True
+
+    def test_admin_event_tickets_list(self, client):
+        """GET /api/admin/events/{id}/tickets."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.TicketService.get_event_tickets", new_callable=AsyncMock, return_value=[{"id": "t1"}]),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/tickets", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert len(resp.json()["tickets"]) == 1
+
+    def test_admin_ticket_cancel(self, client):
+        """POST /api/admin/tickets/{id}/cancel (admin)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+        mock_ticket = Mock()
+        mock_ticket.status.value = "refunded"
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
+            patch("app.web.routes.TicketService.admin_cancel_ticket", new_callable=AsyncMock, return_value=mock_ticket),
+        ):
+            resp = client.post(f"/api/admin/tickets/{EVENT_ID}/cancel", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "refunded"
+
+    def test_admin_channel_info(self, client):
+        """GET /api/admin/channels/{id} — детальная информация."""
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.ChannelService.get_channel_summary", new_callable=AsyncMock, return_value={"id": CHANNEL_ID, "events_count": 2}),
+        ):
+            resp = client.get(f"/api/admin/channels/{CHANNEL_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["events_count"] == 2
+
+    def test_admin_unsubscribe(self, client):
+        """POST /api/admin/channels/{id}/unsubscribe."""
+        mock_channel = Mock()
+        mock_channel.is_subscription_active = False
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.ChannelService.deactivate_subscription", new_callable=AsyncMock, return_value=mock_channel),
+        ):
+            resp = client.post(f"/api/admin/channels/{CHANNEL_ID}/unsubscribe", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["is_subscription_active"] is False
+
+    def test_admin_change_admin(self, client):
+        """POST /api/admin/channels/{id}/change_admin."""
+        mock_channel = Mock()
+        mock_channel.id = CHANNEL_ID
+        mock_channel.telegram_channel_id = "@chan"
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=mock_channel),
+            patch("app.web.routes.ChannelService.change_admin", new_callable=AsyncMock, return_value=(mock_channel, ["old1"])),
+        ):
+            resp = client.post(
+                f"/api/admin/channels/{CHANNEL_ID}/change_admin",
+                headers={"X-Skip-Auth": "1"},
+                json={"new_admin_id": "999"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["new_admin_id"] == "999"
+
+    def test_admin_check_expired(self, client):
+        """POST /api/admin/channels/check_expired."""
+        mock_channel = Mock()
+        mock_channel.id = CHANNEL_ID
+        mock_channel.is_subscription_active = True
+
+        # Fake-сессия: execute возвращает список каналов
+        class _FakeResult:
+            def scalars(self):
+                return self
+            def all(self):
+                return [mock_channel]
+        class _FakeSession:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *exc):
+                return False
+            async def execute(self, *a, **kw):
+                return _FakeResult()
+            async def commit(self):
+                pass
+        class _FakeFactory:
+            def __call__(self):
+                return _FakeSession()
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.async_session_factory", _FakeFactory()),
+            patch("app.web.routes.ChannelService.is_subscription_valid", new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.post("/api/admin/channels/check_expired", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["deactivated"] == 1
+
+    def test_csv_export_empty_404(self, client):
+        """GET tickets.csv без билетов — 404."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = CHANNEL_ID
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.TicketService.export_event_tickets", new_callable=AsyncMock, return_value=[]),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/tickets.csv", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 404
+
+    def test_events_channel_filter(self, client):
+        """GET /api/events?channel_id= фильтрует."""
+        with (
+            patch("app.web.routes.EventService.list_upcoming", new_callable=AsyncMock, return_value=[]),
+        ):
+            resp = client.get(f"/api/events?channel_id={CHANNEL_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_vk_me(self, client):
+        """GET /api/vk/me — без auth."""
+        with (
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock, return_value=Mock()),
+        ):
+            resp = client.get("/api/vk/me?user_id=123&user_name=Test")
+        assert resp.status_code == 200
+        assert resp.json()["platform"] == "vk"

@@ -143,3 +143,10 @@
 | 113 | TDD: сначала тесты, потом код (правило в CLAUDE.md + memory) | ✅ done | 2026-08-05 | — |
 | 114 | Тесты: +23 (пригласительные 15, web-api 8) — всего 204 | ✅ done (код) | 2026-08-05 | — |
 | 115 | Деплой пригласительных + QR на прод и живой тест | 📌 pending | 2026-08-05 | — |
+| 116 | Feat: полный контур тестирования — харнесс имитации пользователя (Подход A) покрывает весь user-flow | ✅ done (код) | 2026-08-06 | — |
+| 117 | Харнесс: Update-билдеры (callback/channel_post/my_chat_member), FakeSession GetChatAdministrators/DeleteMessage | ✅ done | 2026-08-06 | — |
+| 118 | Бот-сценарии: inline buy legacy, channel_buy redirect, FSM create, publish, /check, invite deep-link, my_tickets+cancel, анонс с WebApp | ✅ done | 2026-08-06 | — |
+| 119 | Web-сквозной flow на реальной БД (db_client + httpx ASGITransport): browse→buy→tickets→admin→invite→checkin→stats | ✅ done | 2026-08-06 | — |
+| 120 | Покрытие непокрытых эндпоинтов (toggle/delete/repost/update/… +14 тестов) | ✅ done | 2026-08-06 | — |
+| 121 | Тесты: всего 230 (206 → +24) | ✅ done | 2026-08-06 | — |
+| 122 | Deploy: полный контур тестирования на CI | 📌 pending | 2026-08-06 | — |

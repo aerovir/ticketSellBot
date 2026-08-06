@@ -22,6 +22,7 @@ from aiogram.client.session.base import BaseSession
 from aiogram.types import (
     Chat,
     ChatMemberAdministrator,
+    ChatMemberUpdated,
     Message,
     Update,
     User,
@@ -74,6 +75,33 @@ class FakeTelegramSession(BaseSession):
                 can_pin_messages=True,
             )
 
+        if name == "GetChatAdministrators":
+            # Синхронизация админов канала (subscribe/on_chat_member_update)
+            return [
+                ChatMemberAdministrator(
+                    user=User(id=123, is_bot=False, first_name="Admin"),
+                    status="administrator",
+                    is_anonymous=False,
+                    can_be_edited=False,
+                    can_manage_chat=True,
+                    can_delete_messages=True,
+                    can_manage_video_chats=True,
+                    can_restrict_members=True,
+                    can_promote_members=True,
+                    can_change_info=True,
+                    can_invite_users=True,
+                    can_post_messages=True,
+                    can_edit_messages=True,
+                    can_pin_messages=True,
+                    can_post_stories=True,
+                    can_edit_stories=True,
+                    can_delete_stories=True,
+                ),
+            ]
+
+        if name == "DeleteMessage":
+            return True
+
         if name in (
             "SendMessage", "EditMessageText", "SendPhoto", "SendVideo",
             "SendAnimation", "SendAudio", "SendDocument", "SendVoice",
@@ -122,6 +150,106 @@ def make_message_update(user_id: int, text: str, bot: Bot, chat_id: int | None =
             "from": {"id": user_id, "is_bot": False, "first_name": "Test"},
             "chat": {"id": chat_id, "type": "private", "first_name": "Test"},
             "text": text,
+        },
+    }
+    return Update.model_validate(raw, context={"bot": bot})
+
+
+def make_callback_update(
+    user_id: int,
+    callback_data: str,
+    bot: Bot,
+    chat_type: str = "private",
+    message: dict | None = None,
+) -> Update:
+    """Построить Update с callback_query (нажатие inline-кнопки).
+
+    Args:
+        user_id: Telegram ID пользователя (нажавшего).
+        callback_data: Строка callback_data (например "buy:<event_id>").
+        bot: Бот (для context).
+        chat_type: "private" или "channel" — откуда нажата кнопка.
+        message: Если нужен конкретный message (для channel-контекста),
+                dict вида {"message_id", "chat": {"id", "type", "title"}}.
+    """
+    if message is None:
+        msg = {
+            "message_id": 10,
+            "date": int(datetime.now(timezone.utc).timestamp()),
+            "chat": {"id": user_id, "type": chat_type, "first_name": "Test"},
+        }
+    else:
+        msg = message
+
+    raw = {
+        "update_id": 2,
+        "callback_query": {
+            "id": "callback_id_1",
+            "from": {"id": user_id, "is_bot": False, "first_name": "Test"},
+            "data": callback_data,
+            "chat_instance": "1234567890",
+            "message": msg,
+        },
+    }
+    return Update.model_validate(raw, context={"bot": bot})
+
+
+def make_channel_post_update(channel_id: int, text: str, bot: Bot) -> Update:
+    """Построить Update с channel_post (сообщение в канале)."""
+    raw = {
+        "update_id": 3,
+        "channel_post": {
+            "message_id": 5,
+            "date": int(datetime.now(timezone.utc).timestamp()),
+            "chat": {"id": channel_id, "type": "channel", "title": "Test Channel"},
+            "text": text,
+        },
+    }
+    return Update.model_validate(raw, context={"bot": bot})
+
+
+def _admin_member_dict(user: dict, status: str = "administrator") -> dict:
+    """Полный ChatMemberAdministrator как dict (для my_chat_member)."""
+    base = {
+        "user": user,
+        "status": status,
+        "is_anonymous": False,
+        "can_be_edited": False,
+        "can_manage_chat": True,
+        "can_delete_messages": True,
+        "can_manage_video_chats": True,
+        "can_restrict_members": True,
+        "can_promote_members": True,
+        "can_change_info": True,
+        "can_invite_users": True,
+        "can_post_messages": True,
+        "can_edit_messages": True,
+        "can_pin_messages": True,
+        "can_post_stories": True,
+        "can_edit_stories": True,
+        "can_delete_stories": True,
+    }
+    return base
+
+
+def make_chat_member_update(channel_id: int, bot: Bot, status: str = "administrator") -> Update:
+    """Построить Update с my_chat_member (бот добавлен в канал).
+
+    Событие провижининга: бот становится администратором канала.
+    """
+    raw = {
+        "update_id": 4,
+        "my_chat_member": {
+            "chat": {"id": channel_id, "type": "channel", "title": "Test Channel"},
+            "from": {"id": 999, "is_bot": False, "first_name": "Admin"},
+            "date": int(datetime.now(timezone.utc).timestamp()),
+            "old_chat_member": {
+                "user": {"id": 123, "is_bot": True, "first_name": "Bot"},
+                "status": "left",
+            },
+            "new_chat_member": _admin_member_dict(
+                {"id": 123, "is_bot": True, "first_name": "Bot"}, status,
+            ),
         },
     }
     return Update.model_validate(raw, context={"bot": bot})

@@ -96,6 +96,46 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
     await connection.close()
 
 
+@pytest_asyncio.fixture
+async def db_client(db_session: AsyncSession):
+    """Async HTTP-клиент FastAPI с патчем async_session_factory на db_session.
+
+    Использует httpx.AsyncClient + ASGITransport — тот же event loop, что и
+    db_session (SAVEPOINT-изоляция conftest работает). Роуты и зависимости
+    обращаются к реальной тестовой БД: сквозной web-flow в одном сценарии.
+    """
+    import httpx
+    from unittest.mock import AsyncMock, patch
+    from app.web.server import create_app
+
+    app = create_app()
+
+    # Фабрика, отдающая одну и ту же db_session
+    class _SessionCM:
+        def __init__(self, session):
+            self._session = session
+        async def __aenter__(self):
+            return self._session
+        async def __aexit__(self, *exc):
+            return False
+
+    class _OneSessionFactory:
+        def __call__(self):
+            return _SessionCM(db_session)
+
+    factory = _OneSessionFactory()
+
+    with (
+        patch("app.web.routes.async_session_factory", factory),
+        patch("app.web.dependencies.async_session_factory", factory),
+        patch("app.web.server.init_db", new_callable=AsyncMock),
+        patch("app.web.server.close_db", new_callable=AsyncMock),
+    ):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+
 # ─── Фабрики моделей ────────────────────────────────────────────
 
 @pytest_asyncio.fixture
