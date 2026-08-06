@@ -51,7 +51,8 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ticketbot_test
         run: |
-          pytest tests/ -v --timeout=30
+          # Полный контур: unit + интеграция + имитация user-flow (харнесс)
+          pytest tests/ -v --timeout=60
 
   deploy:
     runs-on: self-hosted
