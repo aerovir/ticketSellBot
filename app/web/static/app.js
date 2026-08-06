@@ -1129,6 +1129,7 @@ function renderAdminChannels(channels) {
                         ${ch.is_subscription_active
                             ? `<button class="btn btn-sm btn-secondary" onclick="adminUnsubscribe('${ch.id}')">Отписать</button>`
                             : `<button class="btn btn-sm btn-primary" onclick="adminSubscribePrompt('${ch.id}')">Подписать</button>`}
+                        <button class="btn btn-sm btn-secondary" onclick="showAdminChannelSubscription('${ch.id}')">⚙️ Подписка</button>
                         <button class="btn btn-sm btn-secondary" onclick="adminChangeAdminPrompt('${ch.id}')">Сменить админа</button>
                     </div>
                 </div>`).join('')}
@@ -1349,4 +1350,76 @@ async function showAdminHealth() {
         hideLoading();
         showError(e.message || "Ошибка загрузки");
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Управление подпиской канала (super-admin): тип + срок
+// ═══════════════════════════════════════════════════════════════
+
+function showAdminChannelSubscription(channelId) {
+    const channel = (state.adminChannels || []).find(c => c.id === channelId);
+    if (!channel) { showToast("Канал не найден", true); return; }
+
+    updateToolbar("Подписка канала", true, false);
+    showPage("admin-channel-subscription");
+
+    const curTier = channel.subscription_tier === "pro" ? "pro" : "basic";
+    document.getElementById("adminChannelSubContent").innerHTML = `
+        <h2 style="margin-bottom:8px">${escapeHtml(channel.title || channel.telegram_channel_id)}</h2>
+        <p class="hint">${escapeHtml(channel.telegram_channel_id)}${channel.subscription_until ? ' · до ' + formatDate(channel.subscription_until) : ''}</p>
+
+        <div class="form-field">
+            <label class="form-label">Тип подписки (тариф)</label>
+            <select class="form-input" id="sub_tier">
+                <option value="basic" ${curTier === 'basic' ? 'selected' : ''}>Basic</option>
+                <option value="pro" ${curTier === 'pro' ? 'selected' : ''}>Pro</option>
+            </select>
+        </div>
+        <div class="form-field">
+            <label class="form-label">Период</label>
+            <div style="display:flex;gap:8px">
+                <input class="form-input" type="number" min="1" step="1" id="sub_period" value="1" style="flex:1">
+                <select class="form-input" id="sub_unit" style="flex:1">
+                    <option value="days">Дней</option>
+                    <option value="months" selected>Месяцев</option>
+                    <option value="years">Лет</option>
+                </select>
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="applySubscription('${channelId}')">💾 Применить (тип + срок)</button>
+        <button class="btn btn-secondary" onclick="changeTierPrompt('${channelId}', '${curTier}')">🔄 Только сменить тариф</button>
+        <button class="btn btn-secondary" onclick="showAdminChannels()">← К списку</button>
+    `;
+}
+
+async function applySubscription(channelId) {
+    const tier = document.getElementById("sub_tier").value;
+    const period = parseInt(document.getElementById("sub_period").value, 10);
+    const period_unit = document.getElementById("sub_unit").value;
+    if (!period || period <= 0) { showToast("Укажите количество", true); return; }
+    try {
+        await api(`/api/admin/channels/${channelId}/subscription`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tier, period, period_unit }),
+        });
+        showToast("✅ Подписка обновлена");
+        await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function changeTierPrompt(channelId, currentTier) {
+    const tier = prompt("Новый тариф (basic/pro):", currentTier);
+    if (!tier) return;
+    const t = tier.trim().toLowerCase();
+    if (t !== "basic" && t !== "pro") { showToast("Тариф: basic или pro", true); return; }
+    try {
+        await api(`/api/admin/channels/${channelId}/tier`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tier: t }),
+        });
+        showToast("✅ Тариф сменён");
+        await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
 }

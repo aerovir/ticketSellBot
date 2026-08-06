@@ -1148,3 +1148,101 @@ class TestTicketExtraFields:
         assert len(rows) == 1
         assert "is_invite" in rows[0]
         assert "seats" in rows[0]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Управление подпиской: смена типа + срока (дни/месяцы/годы)
+# ═══════════════════════════════════════════════════════════════
+
+class TestSubscriptionDuration:
+    """Тесты change_subscription / change_tier (TDD: до реализации)."""
+
+    async def test_change_subscription_months(self, db_session, sample_channel):
+        """change_subscription с months — срок ≈ now + 1 месяц (календарный)."""
+        from app.core.services import ChannelService
+        from app.core.models import SubscriptionTier, PeriodUnit
+        from datetime import datetime, timezone
+        from dateutil.relativedelta import relativedelta
+
+        svc = ChannelService(db_session)
+        before = datetime.now(timezone.utc)
+        channel = await svc.change_subscription(
+            sample_channel.id, SubscriptionTier.pro, period=1, period_unit=PeriodUnit.months,
+        )
+        await db_session.commit()
+        await db_session.refresh(channel)
+
+        assert channel is not None
+        assert channel.subscription_tier == SubscriptionTier.pro
+        expected = before + relativedelta(months=1)
+        # срок ~ now+1 мес (допуск 5 мин на время выполнения)
+        diff = abs((channel.subscription_until - expected).total_seconds())
+        assert diff < 300, f"срок {channel.subscription_until} != ~{expected}"
+
+    async def test_change_subscription_days(self, db_session, sample_channel):
+        """change_subscription с days — срок = now + N дней."""
+        from app.core.services import ChannelService
+        from app.core.models import SubscriptionTier, PeriodUnit
+        from datetime import datetime, timezone, timedelta
+
+        svc = ChannelService(db_session)
+        before = datetime.now(timezone.utc)
+        channel = await svc.change_subscription(
+            sample_channel.id, SubscriptionTier.basic, period=30, period_unit=PeriodUnit.days,
+        )
+        await db_session.commit()
+        await db_session.refresh(channel)
+
+        expected = before + timedelta(days=30)
+        diff = abs((channel.subscription_until - expected).total_seconds())
+        assert diff < 300
+
+    async def test_change_subscription_years(self, db_session, sample_channel):
+        """change_subscription с years — срок = now + N лет."""
+        from app.core.services import ChannelService
+        from app.core.models import SubscriptionTier, PeriodUnit
+        from datetime import datetime, timezone
+        from dateutil.relativedelta import relativedelta
+
+        svc = ChannelService(db_session)
+        before = datetime.now(timezone.utc)
+        channel = await svc.change_subscription(
+            sample_channel.id, SubscriptionTier.pro, period=1, period_unit=PeriodUnit.years,
+        )
+        await db_session.commit()
+        await db_session.refresh(channel)
+
+        expected = before + relativedelta(years=1)
+        diff = abs((channel.subscription_until - expected).total_seconds())
+        assert diff < 300
+
+    async def test_change_subscription_missing_channel(self, db_session):
+        """change_subscription для несуществующего канала → None."""
+        from app.core.services import ChannelService
+        from app.core.models import SubscriptionTier, PeriodUnit
+        from uuid import uuid4
+        svc = ChannelService(db_session)
+        result = await svc.change_subscription(
+            uuid4(), SubscriptionTier.pro, period=1, period_unit=PeriodUnit.months,
+        )
+        assert result is None
+
+    async def test_change_tier_keeps_until(self, db_session, sample_channel):
+        """change_tier меняет тип, НЕ трогая срок."""
+        from app.core.services import ChannelService
+        from app.core.models import SubscriptionTier, PeriodUnit
+
+        svc = ChannelService(db_session)
+        # задаём известный срок
+        channel = await svc.change_subscription(
+            sample_channel.id, SubscriptionTier.pro, period=30, period_unit=PeriodUnit.days,
+        )
+        await db_session.commit()
+        old_until = channel.subscription_until
+
+        await svc.change_tier(sample_channel.id, SubscriptionTier.basic)
+        await db_session.commit()
+        await db_session.refresh(channel)
+
+        assert channel.subscription_tier == SubscriptionTier.basic
+        assert channel.subscription_until == old_until, "срок не должен меняться при смене типа"

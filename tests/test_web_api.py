@@ -1276,3 +1276,67 @@ class TestCoverageGaps:
             resp = client.get("/api/vk/me?user_id=123&user_name=Test")
         assert resp.status_code == 200
         assert resp.json()["platform"] == "vk"
+
+
+class TestSubscriptionApi:
+    """Тесты смены подписки (TDD: до реализации)."""
+
+    def test_admin_update_subscription(self, client):
+        """POST /admin/channels/{id}/subscription — тип+срок."""
+        mock_channel = Mock()
+        mock_channel.id = CHANNEL_ID
+        mock_channel.subscription_tier.value = "pro"
+        mock_channel.subscription_until = None
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.ChannelService.change_subscription", new_callable=AsyncMock, return_value=mock_channel),
+        ):
+            resp = client.post(
+                f"/api/admin/channels/{CHANNEL_ID}/subscription",
+                headers={"X-Skip-Auth": "1"},
+                json={"tier": "pro", "period": 3, "period_unit": "months"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["subscription_tier"] == "pro"
+
+    def test_admin_change_tier(self, client):
+        """POST /admin/channels/{id}/tier — только тип."""
+        mock_channel = Mock()
+        mock_channel.id = CHANNEL_ID
+        mock_channel.subscription_tier.value = "basic"
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.ChannelService.change_tier", new_callable=AsyncMock, return_value=mock_channel),
+        ):
+            resp = client.post(
+                f"/api/admin/channels/{CHANNEL_ID}/tier",
+                headers={"X-Skip-Auth": "1"},
+                json={"tier": "basic"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["subscription_tier"] == "basic"
+
+    def test_admin_update_subscription_forbidden(self, client):
+        """POST subscription — 403 для channel-admin."""
+        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+            resp = client.post(
+                f"/api/admin/channels/{CHANNEL_ID}/subscription",
+                headers={"X-Skip-Auth": "1"},
+                json={"tier": "pro", "period": 3, "period_unit": "months"},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_update_subscription_not_found(self, client):
+        """POST subscription — 404 если канал не найден."""
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.ChannelService.change_subscription", new_callable=AsyncMock, return_value=None),
+        ):
+            resp = client.post(
+                f"/api/admin/channels/{CHANNEL_ID}/subscription",
+                headers={"X-Skip-Auth": "1"},
+                json={"tier": "pro", "period": 3, "period_unit": "months"},
+            )
+        assert resp.status_code == 404

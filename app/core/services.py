@@ -8,7 +8,8 @@ from typing import Optional
 from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType, SubscriptionTier
+from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit
+from dateutil.relativedelta import relativedelta
 from app.core.schemas import EventOut, EventShortOut, TicketOut, UserOut
 
 logger = logging.getLogger("ticketbot.services")
@@ -457,6 +458,101 @@ class ChannelService:
             "upcoming_count": upcoming,
             "tickets_sold": tickets_sold,
         }
+
+    # ─── Управление подпиской (смена типа + срока) ────────────────
+
+    @staticmethod
+    def _add_period(now: datetime, period: int, unit: PeriodUnit) -> datetime:
+        """Прибавить период (дни/месяцы/годы) к моменту времени.
+
+        Календарно-корректно для месяцев/лет (relativedelta): 31 янв + 1 мес = 28 фев.
+        """
+        if unit == PeriodUnit.days:
+            return now + timedelta(days=period)
+        if unit == PeriodUnit.months:
+            return now + relativedelta(months=period)
+        return now + relativedelta(years=period)
+
+    async def change_subscription(
+        self,
+        channel_id: uuid.UUID,
+        tier: SubscriptionTier,
+        period: int,
+        period_unit: PeriodUnit,
+    ) -> Channel | None:
+        """Сменить подписку канала: тип + срок (от текущей даты).
+
+        Args:
+            channel_id: UUID канала.
+            tier: Новый уровень (basic/pro).
+            period: Количество периодов.
+            period_unit: Единица (days/months/years).
+
+        Returns:
+            Channel | None: обновлённый канал или None, если канал не найден.
+        """
+        start = time.perf_counter()
+        channel = await self.session.get(Channel, channel_id)
+        if channel is None:
+            logger.warning("", extra={
+                "event_type": "subscription.change_failed",
+                "channel_id": str(channel_id),
+                "status": "error",
+                "error": "Channel not found",
+                "duration_ms": _ms(start),
+            })
+            return None
+
+        channel.subscription_tier = tier
+        channel.is_subscription_active = True
+        channel.subscription_until = self._add_period(
+            datetime.now(timezone.utc), period, period_unit,
+        )
+        await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "subscription.changed",
+            "channel_id": str(channel.id),
+            "telegram_channel_id": channel.telegram_channel_id,
+            "tier": channel.subscription_tier.value,
+            "period": period,
+            "period_unit": period_unit.value,
+            "subscription_until": channel.subscription_until.isoformat(),
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return channel
+
+    async def change_tier(self, channel_id: uuid.UUID, tier: SubscriptionTier) -> Channel | None:
+        """Сменить ТОЛЬКО тип подписки (срок не трогаем).
+
+        Returns:
+            Channel | None: обновлённый канал или None, если канал не найден.
+        """
+        start = time.perf_counter()
+        channel = await self.session.get(Channel, channel_id)
+        if channel is None:
+            logger.warning("", extra={
+                "event_type": "subscription.tier_change_failed",
+                "channel_id": str(channel_id),
+                "status": "error",
+                "error": "Channel not found",
+                "duration_ms": _ms(start),
+            })
+            return None
+
+        channel.subscription_tier = tier
+        await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "subscription.tier_changed",
+            "channel_id": str(channel.id),
+            "telegram_channel_id": channel.telegram_channel_id,
+            "tier": channel.subscription_tier.value,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
+        return channel
 
 
 # ─── Channel Admin Service ──────────────────────────────────────────────────

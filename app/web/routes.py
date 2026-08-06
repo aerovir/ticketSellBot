@@ -18,6 +18,7 @@ from app.core.qr import generate_qr_png
 from app.core.schemas import (
     BroadcastIn,
     ChangeAdminIn,
+    ChangeTierIn,
     ChannelSubscribeIn,
     CheckInIn,
     EventCreate,
@@ -25,6 +26,7 @@ from app.core.schemas import (
     InviteIssueIn,
     MeUpdateIn,
     SubscribeIn,
+    UpdateSubscriptionIn,
 )
 from app.core.services import (
     ChannelAdminService,
@@ -834,6 +836,62 @@ async def admin_check_expired(current: CurrentUser = Depends(require_super_admin
         await session.commit()
 
     return {"checked": len(channels), "deactivated": deactivated}
+
+
+@router.post("/admin/channels/{channel_id}/subscription")
+async def admin_update_subscription(
+    channel_id: str,
+    body: UpdateSubscriptionIn,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Сменить подписку канала: тип + срок (дни/месяцы/годы)."""
+    try:
+        cid = UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        channel = await channel_svc.change_subscription(
+            cid,
+            tier=body.tier,
+            period=body.period,
+            period_unit=body.period_unit,
+        )
+        if channel is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Канал не найден")
+        await session.commit()
+
+    return {
+        "channel_id": str(cid),
+        "subscription_tier": channel.subscription_tier.value,
+        "subscription_until": channel.subscription_until.isoformat() if channel.subscription_until else None,
+    }
+
+
+@router.post("/admin/channels/{channel_id}/tier")
+async def admin_change_tier(
+    channel_id: str,
+    body: ChangeTierIn,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Сменить только тип подписки канала (срок не меняется)."""
+    try:
+        cid = UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        channel = await channel_svc.change_tier(cid, tier=body.tier)
+        if channel is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Канал не найден")
+        await session.commit()
+
+    return {
+        "channel_id": str(cid),
+        "subscription_tier": channel.subscription_tier.value,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.core.models import SubscriptionTier
+from app.core.models import SubscriptionTier, PeriodUnit
 
 
 # ─── User ────────────────────────────────────────────────────────────────────
@@ -149,6 +149,18 @@ class ChannelSubscribeIn(BaseModel):
 
 class BroadcastIn(BaseModel):
     text: str
+
+
+class UpdateSubscriptionIn(BaseModel):
+    """Сменить подписку канала: тип + срок (дни/месяцы/годы)."""
+    tier: SubscriptionTier
+    period: int = Field(gt=0)
+    period_unit: PeriodUnit = PeriodUnit.months
+
+
+class ChangeTierIn(BaseModel):
+    """Сменить только тип подписки (срок не меняется)."""
+    tier: SubscriptionTier
 
 
 # ─── Payment ─────────────────────────────────────────────────────────────────

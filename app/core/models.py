@@ -17,6 +17,13 @@ class SubscriptionTier(str, enum.Enum):
     pro = "pro"      # платные мероприятия + QR
 
 
+class PeriodUnit(str, enum.Enum):
+    """Единица измерения срока подписки."""
+    days = "days"
+    months = "months"
+    years = "years"
+
+
 class TicketStatus(str, enum.Enum):
     active = "active"
     checked_in = "checked_in"
