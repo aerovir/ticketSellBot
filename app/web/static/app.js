@@ -178,6 +178,7 @@ function renderProfile() {
             <h2>${escapeHtml(me.name || "Пользователь")}</h2>
             <p class="hint">Telegram ID: <code>${escapeHtml(me.telegram_user_id)}</code></p>
             <span class="badge badge-role">${roleText}</span>
+            <button class="btn btn-sm btn-secondary" style="margin-top:12px" onclick="editName()">✏️ Изменить имя</button>
         </div>
         <h3 style="margin:20px 0 10px">Мои каналы</h3>
         ${channels.length === 0
@@ -193,6 +194,24 @@ function renderProfile() {
             </div>`}
         <button class="btn btn-secondary" style="margin-top:16px" onclick="showMyTickets()">🎫 Мои билеты</button>
     `;
+}
+
+async function editName() {
+    const me = state.me;
+    const newName = prompt("Ваше имя:", me.name || "");
+    if (newName === null) return;  // отмена
+    const name = newName.trim();
+    if (!name) { showToast("Имя не может быть пустым", true); return; }
+    try {
+        await api("/api/me", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+        });
+        showToast("✅ Имя обновлено");
+        await loadMe();
+        renderProfile();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
 // ─── API helper ─────────────────────────────────────────────────
@@ -1134,6 +1153,7 @@ function renderAdminChannels(channels) {
                             ? `<button class="btn btn-sm btn-secondary" onclick="adminUnsubscribe('${ch.id}')">Отписать</button>`
                             : `<button class="btn btn-sm btn-primary" onclick="adminSubscribePrompt('${ch.id}')">Подписать</button>`}
                         <button class="btn btn-sm btn-secondary" onclick="showAdminChannelSubscription('${ch.id}')">⚙️ Подписка</button>
+                        <button class="btn btn-sm btn-secondary" onclick="showChannelInfo('${ch.id}')">ℹ️ Инфо</button>
                         <button class="btn btn-sm btn-secondary" onclick="adminChangeAdminPrompt('${ch.id}')">Сменить админа</button>
                     </div>
                 </div>`).join('')}
@@ -1426,4 +1446,36 @@ async function changeTierPrompt(channelId, currentTier) {
         showToast("✅ Тариф сменён");
         await showAdminChannels();
     } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Инфо о канале (детальная сводка, super-admin)
+// ═══════════════════════════════════════════════════════════════
+
+async function showChannelInfo(channelId) {
+    updateToolbar("Инфо о канале", true, false);
+    showPage("admin-channels");
+    const container = document.getElementById("adminChannelsContent");
+    showLoading();
+    try {
+        const info = await api(`/api/admin/channels/${channelId}`);
+        hideLoading();
+        container.innerHTML = `
+            <h2 style="margin-bottom:8px">${escapeHtml(info.title || info.telegram_channel_id)}</h2>
+            <p class="hint">${escapeHtml(info.telegram_channel_id)}</p>
+            <div class="event-meta">
+                <div class="meta-row"><span class="meta-label">Статус</span><span>${info.is_subscription_active ? '🟢 Активна' : '🔴 Неактивна'}</span></div>
+                <div class="meta-row"><span class="meta-label">Тариф</span><span>${info.subscription_tier}</span></div>
+                <div class="meta-row"><span class="meta-label">Подписка до</span><span>${info.subscription_until ? formatDate(info.subscription_until) : '—'}</span></div>
+                <div class="meta-row"><span class="meta-label">Админы</span><span>${(info.admins || []).length ? info.admins.map(escapeHtml).join(', ') : '—'}</span></div>
+                <div class="meta-row"><span class="meta-label">Мероприятий</span><span>${info.events_count}</span></div>
+                <div class="meta-row"><span class="meta-label">Предстоящих</span><span>${info.upcoming_count}</span></div>
+                <div class="meta-row"><span class="meta-label">Продано билетов</span><span>${info.tickets_sold}</span></div>
+            </div>
+            <button class="btn btn-secondary" onclick="showAdminChannels()">← К списку каналов</button>
+        `;
+    } catch (e) {
+        hideLoading();
+        showError(e.message || "Ошибка загрузки канала");
+    }
 }
