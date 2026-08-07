@@ -1072,10 +1072,16 @@ def _can_manage_event(current: CurrentUser, event) -> bool:
 
 
 def _can_issue_invites(current: CurrentUser, event) -> bool:
-    """Правило: пригласительные выдаёт только админ канала (не суперадмин)."""
+    """Правило: пригласительные выдаёт организатор (не суперадмин).
+
+    Канальный организатор — управляет каналом; организатор без канала —
+    владелец (owner) мероприятия. Pro-подписка проверяется в эндпоинте.
+    """
     if current.is_super_admin:
         return False
-    return event.channel_id in current.managed_channel_ids
+    if event.channel_id is not None:
+        return event.channel_id in current.managed_channel_ids
+    return event.owner_user_id == current.user_id
 
 
 @router.post("/admin/events/{event_id}/invites", status_code=status.HTTP_201_CREATED)
@@ -1098,8 +1104,14 @@ async def admin_issue_invite(
         if not _can_issue_invites(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пригласительные выдаёт только админ канала")
 
-        channel_svc = ChannelService(session)
-        if not await channel_svc.require_feature(event.channel_id, "invite_tickets"):
+        # Pro-гейт: канальный организатор — подписка канала; организатор без канала — подписка пользователя
+        if event.channel_id is not None:
+            channel_svc = ChannelService(session)
+            has_feature = await channel_svc.require_feature(event.channel_id, "invite_tickets")
+        else:
+            user_svc = UserService(session)
+            has_feature = await user_svc.require_feature(event.owner_user_id, "invite_tickets")
+        if not has_feature:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Для пригласительных нужна подписка Pro")
 
         ticket_svc = TicketService(session)

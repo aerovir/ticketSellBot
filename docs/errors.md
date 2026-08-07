@@ -869,3 +869,17 @@
 - **Исправление (применено, `pyproject.toml`):**
   Добавлен `"python-dateutil>=2.9"` в `[project.dependencies]`.
 - **Связанные ошибки:** нет
+
+## 052 — Организатор без канала не мог выдавать пригласительные (403)
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено
+- **Описание:** После введения роли «Организатор» (owner-мероприятия) организатор БЕЗ канала не мог выдавать пригласительные: даже с pro-подпиской и квотой получал 403 «Пригласительные выдаёт только админ канала». Обнаружено QA-агентром при сквозном тестировании полного цикла организатора.
+- **Анализ:**
+  - **Подтверждено (`app/web/routes.py`):** `_can_issue_invites` допускал только `event.channel_id in managed_channel_ids` — для owner-события (`channel_id=None`) → False.
+  - **Подтверждено (эндпоинт issue_invite):** pro-гейт вызывал `ChannelService.require_feature(event.channel_id, "invite_tickets")` — для owner-события `channel_id=None` → False.
+- **Исправление (применено, `app/web/routes.py`):**
+  - `_can_issue_invites`: для owner-мероприятия → `event.owner_user_id == current.user_id` (организатор без канала).
+  - Pro-гейт: если `channel_id` есть → `ChannelService.require_feature`; если нет (owner) → `UserService.require_feature(event.owner_user_id, "invite_tickets")`.
+  - Тест обновлён: `test_owner_event_invites_blocked` → `test_owner_event_invites_allowed` (201).
+- **Связанные ошибки:** #050
