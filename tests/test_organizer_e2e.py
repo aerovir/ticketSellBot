@@ -621,8 +621,8 @@ class TestSelfServiceChannels:
             json={"telegram_channel_id": "@myownchannel", "title": "Мой канал"},
         )
         assert resp.status_code == 201, resp.text
-        assert resp.json()["status"] == "inactive"
         assert resp.json()["title"] == "Мой канал"
+        assert "telegram_channel_id" in resp.json()
 
         # Канал в списке
         resp = await db_client.get("/api/me/channels", headers=HEADERS)

@@ -314,23 +314,12 @@ async def subscribe_me(
 # ─── Мои каналы (самообслуживание) ────────────────────────────
 
 
-def _channel_status(ch) -> str:
-    """Статус канала: active если подписка активна (бот в канале), иначе inactive."""
-    if ch.is_subscription_active:
-        return "active"
-    return "inactive"
-
-
 def _channel_dict(ch) -> dict:
     """Сериализация канала для /api/me/channels."""
     return {
         "id": str(ch.id),
         "telegram_channel_id": ch.telegram_channel_id,
         "title": ch.title,
-        "is_subscription_active": ch.is_subscription_active,
-        "subscription_tier": ch.subscription_tier.value,
-        "subscription_until": ch.subscription_until.isoformat() if ch.subscription_until else None,
-        "status": _channel_status(ch),
     }
 
 

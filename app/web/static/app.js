@@ -1343,15 +1343,11 @@ function renderMyChannels(channels) {
     } else {
         html += `<div class="admin-list" style="margin-top:12px">`;
         for (const ch of channels) {
-            const isActive = ch.status === "active";
             html += `
                 <div class="admin-list-item">
                     <div style="flex:1">
-                        <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
-                            <span class="badge ${isActive ? 'badge-published' : 'badge-off'}">${isActive ? '🟢 подписка активна' : '🔴 нет подписки'}</span>
-                            ${ch.subscription_tier ? `<span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>` : ''}
-                        </div>
-                        <div class="hint">${escapeHtml(ch.telegram_channel_id)}${ch.subscription_until ? ' · подписка до ' + formatDate(ch.subscription_until) : ''}</div>
+                        <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b></div>
+                        <div class="hint">${escapeHtml(ch.telegram_channel_id)}</div>
                     </div>
                 </div>`;
         }

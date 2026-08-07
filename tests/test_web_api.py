@@ -1696,7 +1696,6 @@ class TestMyChannelsApi:
         assert resp.status_code == 201, resp.text
         body = resp.json()
         assert body["telegram_channel_id"] == "@test"
-        assert body["status"] == "inactive"
         mock_sync.assert_called_once()
 
     def test_post_me_channels_allows_regular_user(self, client):
@@ -1720,7 +1719,6 @@ class TestMyChannelsApi:
                 json={"telegram_channel_id": "@mychan"},
             )
         assert resp.status_code == 201, resp.text
-        assert resp.json()["status"] == "inactive"
 
     def test_post_me_channels_existing_idempotent(self, client):
         """POST /api/me/channels — канал уже есть и пользователь админ → 200."""
@@ -1773,23 +1771,23 @@ class TestMyChannelsApi:
             )
         assert resp.status_code == 400, resp.text
 
-    def test_get_me_channels_list_with_status(self, client):
-        """GET /api/me/channels — список каналов пользователя со статусами."""
-        active_ch = _mock_channel()
-        active_ch.is_subscription_active = True
-        inactive_ch = _mock_channel()
-        inactive_ch.id = CHANNEL_ID_2
-        inactive_ch.is_subscription_active = False
+    def test_get_me_channels_list(self, client):
+        """GET /api/me/channels — список каналов пользователя."""
+        ch1 = _mock_channel()
+        ch2 = _mock_channel()
+        ch2.id = CHANNEL_ID_2
 
         with (
             admin_auth(is_super=False, channel_ids=[], organizer=True),
             patch("app.web.routes.ChannelService.get_channels_by_admin",
-                  new_callable=AsyncMock, return_value=[active_ch, inactive_ch]),
+                  new_callable=AsyncMock, return_value=[ch1, ch2]),
         ):
             resp = client.get("/api/me/channels", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200, resp.text
         channels = resp.json()
         assert len(channels) == 2
-        # active — бот в канале (is_subscription_active=True означает что канал синхронизирован ботом)
-        assert channels[0]["status"] == "active"
-        assert channels[1]["status"] == "inactive"
+        assert channels[0]["id"] == CHANNEL_ID
+        assert channels[1]["id"] == CHANNEL_ID_2
+        # Без subscription-полей — только идентификация канала
+        assert "is_subscription_active" not in channels[0]
+        assert "status" not in channels[0]
