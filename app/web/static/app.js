@@ -1487,7 +1487,7 @@ function showAdminChannelSubscription(channelId) {
             </div>
         </div>
         <button class="btn btn-primary" onclick="applySubscription('${channelId}')">💾 Применить (тип + срок)</button>
-        <button class="btn btn-secondary" onclick="changeTierPrompt('${channelId}', '${curTier}')">🔄 Только сменить тариф</button>
+        <button class="btn btn-secondary" onclick="changeTier('${channelId}')">🔄 Только сменить тариф</button>
         <button class="btn btn-secondary" onclick="showAdminChannels()">← К списку</button>
     `;
 }
@@ -1508,16 +1508,15 @@ async function applySubscription(channelId) {
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
-async function changeTierPrompt(channelId, currentTier) {
-    const tier = prompt("Новый тариф (basic/pro):", currentTier);
-    if (!tier) return;
-    const t = tier.trim().toLowerCase();
-    if (t !== "basic" && t !== "pro") { showToast("Тариф: basic или pro", true); return; }
+async function changeTier(channelId) {
+    // Используем выбранный в форме тариф (не prompt — он дублирует select и не работает в Telegram)
+    const tier = document.getElementById("sub_tier").value;
+    if (tier !== "basic" && tier !== "pro") { showToast("Тариф: basic или pro", true); return; }
     try {
         await api(`/api/admin/channels/${channelId}/tier`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tier: t }),
+            body: JSON.stringify({ tier }),
         });
         showToast("✅ Тариф сменён");
         await showAdminChannels();
