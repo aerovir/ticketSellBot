@@ -857,3 +857,15 @@
 - **Исправление (не применено):**
   Во всех гейтах добавить owner-проверку: `event.channel_id is None and event.owner_user_id == current.user_id`, по образцу `admin_get_event`.
 - **Связанные ошибки:** нет
+
+## 051 — CI: ModuleNotFoundError: No module named 'dateutil' (python-dateutil не в deps)
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено
+- **Описание:** CI-деплой (`d1ccedf`) упал на шаге «Запуск тестов»: `ImportError while loading conftest / ModuleNotFoundError: No module named 'dateutil'`. Локально всё зелёное (262 теста).
+- **Анализ:**
+  - **Подтверждено (лог CI через API):** `ImportError ... No module named 'dateutil'` при загрузке `tests/conftest.py`.
+  - **Подтверждено (`app/core/services.py`):** в `_add_period` используется `from dateutil.relativedelta import relativedelta` (добавлено в фиче «смена типа+срока подписки»), но `python-dateutil` **не был указан в `pyproject.toml` dependencies**. Локально пакет тянулся транзитивно (через другой пакет), а в чистой установке CI (`pip install -e ".[dev]"`) отсутствовал.
+- **Исправление (применено, `pyproject.toml`):**
+  Добавлен `"python-dateutil>=2.9"` в `[project.dependencies]`.
+- **Связанные ошибки:** нет

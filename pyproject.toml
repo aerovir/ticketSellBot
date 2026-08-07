@@ -16,6 +16,7 @@ dependencies = [
     "uvicorn>=0.32",
     "psutil>=5.9",
     "qrcode[pil]>=7.4",
+    "python-dateutil>=2.9",
 ]
 
 [project.optional-dependencies]
