@@ -1,0 +1,53 @@
+# Dev-копия TicketBot (изолированный проект на VDS)
+# Используется для «живого» тестирования без загрязнения прода.
+# Отдельная сеть (ticketbot-dev_default), своя БД ticketbot_dev, порт 8081.
+#
+# Запуск на VDS:
+#   cd /opt/ticketbot-dev (или ~/ticketbot-dev)
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# Доступ: web-dev на http://localhost:8081 (внутри VDS).
+
+services:
+  db-dev:
+    image: postgres:16-alpine
+    container_name: ticketbot-dev-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ticketbot_dev
+    volumes:
+      - ticketbot_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticketbot_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    # Не публикуем порт наружу — только внутренняя сеть
+
+  web-dev:
+    image: ticketsellbot-web:latest
+    container_name: ticketbot-dev-web
+    restart: unless-stopped
+    depends_on:
+      db-dev:
+        condition: service_healthy
+    env_file: .env.dev
+    command: ["python", "-m", "app.bot.web"]
+    ports:
+      - "8081:8080"  # только на VDS (не наружу через nginx)
+
+  telegram-dev:
+    image: ticketsellbot-telegram:latest
+    container_name: ticketbot-dev-telegram
+    restart: unless-stopped
+    depends_on:
+      db-dev:
+        condition: service_healthy
+    env_file: .env.dev
+    command: ["python", "-m", "app.bot.telegram"]
+
+volumes:
+  ticketbot_dev_data:
