@@ -963,3 +963,25 @@
   - Платное по-прежнему требует pro (`require_feature("paid_events")` в EventService.create).
   - Тесты: `TestOpenCreateAndSubscribe`, `TestRealUserPath` (E2E), `TestRoleContract`.
 - **Связанные ошибки:** нет
+
+---
+
+## 059 — Расхождение frontend/backend: обычный пользователь не может создать мероприятие через UI
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено
+- **Описание:** Пользователь сообщил, что не может создать мероприятие. Бэкенд `POST /admin/events` был открыт (использовал `get_current_user`, не `require_admin`) — ошибка 058 частично открыла создание. Но фронтенд `app.js` скрывал вкладку «Панель» для `role === "user"`, а 6 event-management эндпоинтов (`GET /:id`, `PATCH`, `toggle`, `delete`, `publish`, `GET /admin/events`) использовали `require_admin` — пользователь не мог управлять даже своими созданными мероприятиями.
+- **Анализ:**
+  - **Подтверждено (`app/web/static/app.js:223`):** вкладка «Панель» добавлялась только при `state.role !== "user"`. Обычный пользователь → `role === "user"` → вкладка скрыта.
+  - **Подтверждено (`app/web/routes.py:319,421,461,493,517,541`):** 6 эндпоинтов использовали `require_admin`, блокируя управление собственными мероприятиями.
+  - **Подтверждено (`app/web/dependencies.py:181-182`):** `is_admin = is_super_admin or is_organizer or bool(managed_channel_ids)` → для обычного пользователя всегда `False`.
+  - **Подтверждено (QA-агент, эксперимент):** временный возврат `require_admin` на `GET /admin/events` → контрактный тест `test_contract_user_role_must_have_create_access` падает с диагностическим сообщением.
+- **Исправление (применено, 5 файлов, +243/−35):**
+  - `app/web/routes.py`: 6 эндпоинтов переведены с `require_admin` на `get_current_user`. Доступ к мероприятию — через `_can_manage_event` (проверка владения). `GET /admin/events` возвращает owner-мероприятия для обычных пользователей.
+  - `app/web/static/app.js`: вкладка «Панель» видна всем ролям. Обычные пользователи видят «Мероприятия», организаторы — ещё «Проверку билета», super-admin — всё.
+  - `tests/test_role_contract.py`: +7 контрактных тестов, включая ключевой `test_contract_user_role_must_have_create_access` — проверяет что role='user' → доступ к созданию и списку мероприятий. Ловит регресс: если бэкенд закроет эндпоинт, но роль останется 'user', тест падает с инструкцией что чинить.
+  - `tests/test_organizer_e2e.py`: обновлён `test_buyer_cannot_admin` под новое поведение.
+  - `tests/test_web_api.py`: `test_admin_events_forbidden_for_user` → `test_admin_events_open_for_regular_user`.
+- **Коммит:** `fc3a115`
+- **Тесты:** 277 (было 274, +3)
+- **Связанные ошибки:** 058 (открытое создание мероприятий — неполное: создание открыто, но управление и UI остались закрыты)
