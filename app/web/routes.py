@@ -1218,10 +1218,13 @@ def _can_manage_event(current: CurrentUser, event) -> bool:
     или организатор канала."""
     if current.is_super_admin:
         return True
+    # Сначала владелец (owner-событие) — даже если event привязан к каналу
+    if event.owner_user_id == current.user_id:
+        return True
+    # Затем канал — организатор управляет мероприятиями своего канала
     if event.channel_id is not None:
         return current.can_manage(event.channel_id)
-    # owner-мероприятие (организатор без канала)
-    return event.owner_user_id == current.user_id
+    return False
 
 
 def _can_issue_invites(current: CurrentUser, event) -> bool:
