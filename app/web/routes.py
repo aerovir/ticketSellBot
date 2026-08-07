@@ -9,7 +9,7 @@ import io
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.core.database import async_session_factory
@@ -625,30 +625,50 @@ async def admin_delete_event(
 async def admin_publish_event(
     event_id: str,
     current: CurrentUser = Depends(get_current_user),
+    channel_id: str | None = Body(None, embed=True),
 ):
-    """Опубликовать мероприятие + отправить анонс в канал.
+    """Опубликовать мероприятие + отправить анонс в выбранный канал.
 
-    Ошибка анонса не откатывает флаг публикации (логируется и возвращается announced=false).
+    Если channel_id передан — мероприятие привязывается к этому каналу
+    и анонс отправляется туда. Если не передан — используется текущий канал
+    мероприятия. Ошибка анонса не откатывает флаг публикации.
+
+    Публикацию можно делать многократно (разные каналы, репосты).
     """
     try:
         uid = UUID(event_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
 
+    target_channel_id: UUID | None = None
+    if channel_id:
+        try:
+            target_channel_id = UUID(channel_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+
     async with async_session_factory() as session:
         event_svc = EventService(session)
+        channel_svc = ChannelService(session)
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
         if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-        await event_svc.update(uid, is_published=True)
+
+        # Если указан канал — проверить доступ и привязать мероприятие
+        if target_channel_id:
+            if not current.can_manage(target_channel_id) and not current.is_super_admin:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому каналу")
+            # Привязать мероприятие к выбранному каналу
+            await event_svc.update(uid, channel_id=target_channel_id, is_published=True)
+        else:
+            await event_svc.update(uid, is_published=True)
         await session.commit()
 
     announced = await post_event_announcement(uid)
     dm_sent = False
     if not announced:
-        # Бот не в канале (или канал не указан) — отправляем анонс в личку
         dm_sent = await send_announcement_dm(uid, current.telegram_user_id)
     return {
         "id": str(uid),

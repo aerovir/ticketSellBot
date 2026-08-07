@@ -1015,9 +1015,15 @@ function renderAdminEventDetail(event, stats, tickets, invites) {
         ${invitesHtml}
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
-            ${event.is_published
-                ? `<button class="btn btn-sm btn-secondary" onclick="adminRepost('${event.id}')">🔄 Репост</button>`
-                : `<button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>`}
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <select class="form-input" id="publish_channel_${event.id}" style="width:auto;min-width:180px">
+                    <option value="">Без канала (DM)</option>
+                    ${(state.me?.channels || []).map(c =>
+                        `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}</option>`
+                    ).join('')}
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>
+            </div>
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
@@ -1091,9 +1097,19 @@ async function downloadQr(ticketId) {
 }
 
 async function adminPublish(eventId) {
+    const channelSelect = document.getElementById(`publish_channel_${eventId}`);
+    const channelId = channelSelect ? channelSelect.value : "";
     try {
-        const res = await api(`/api/admin/events/${eventId}/publish`, { method: "POST" });
-        showToast(res.announced ? "✅ Опубликовано, анонс отправлен" : "✅ Опубликовано (анонс не отправлен)");
+        const body = channelId ? JSON.stringify({ channel_id: channelId }) : undefined;
+        const res = await api(`/api/admin/events/${eventId}/publish`, {
+            method: "POST",
+            headers: body ? { "Content-Type": "application/json" } : undefined,
+            body,
+        });
+        const where = channelId ? "" : " в DM";
+        showToast(res.announced
+            ? `✅ Опубликовано${where}, анонс отправлен`
+            : `✅ Опубликовано${where} (анонс не отправлен)`);
     } catch (e) { showToast(e.message || "Ошибка", true); }
     await showAdminEventDetail(eventId);
 }
