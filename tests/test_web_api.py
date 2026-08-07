@@ -1699,15 +1699,28 @@ class TestMyChannelsApi:
         assert body["status"] == "inactive"
         mock_sync.assert_called_once()
 
-    def test_post_me_channels_requires_organizer(self, client):
-        """POST /api/me/channels — обычный покупатель → 403."""
-        with admin_auth(is_super=False, channel_ids=[], organizer=False):
+    def test_post_me_channels_allows_regular_user(self, client):
+        """POST /api/me/channels — обычный пользователь может добавить СВОЙ канал (201)."""
+        mock_channel = _mock_channel()
+        mock_channel.is_subscription_active = False
+        mock_channel.subscription_until = None
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.ChannelService.get_by_telegram_id",
+                  new_callable=AsyncMock, return_value=None),
+            patch("app.web.routes.ChannelService.create",
+                  new_callable=AsyncMock, return_value=mock_channel),
+            patch("app.web.routes.ChannelAdminService.sync_admins",
+                  new_callable=AsyncMock),
+        ):
             resp = client.post(
                 "/api/me/channels",
                 headers={"X-Skip-Auth": "1"},
-                json={"telegram_channel_id": "@chan"},
+                json={"telegram_channel_id": "@mychan"},
             )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["status"] == "inactive"
 
     def test_post_me_channels_existing_idempotent(self, client):
         """POST /api/me/channels — канал уже есть и пользователь админ → 200."""

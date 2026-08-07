@@ -358,12 +358,6 @@ async def register_my_channel(
     """
     from fastapi.responses import JSONResponse
 
-    if not current.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Нет доступа к управлению каналами",
-        )
-
     telegram_channel_id = body.telegram_channel_id.strip()
     if not telegram_channel_id:
         raise HTTPException(

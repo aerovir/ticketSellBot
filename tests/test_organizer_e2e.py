@@ -601,3 +601,82 @@ class TestRealUserPath:
             json=_event_payload(owner_user_id=str(user.id), price=500, total=10),
         )
         assert resp.status_code == 201, resp.text
+
+
+class TestSelfServiceChannels:
+    """Самообслуживание: обычный пользователь добавляет свой канал."""
+
+    async def test_regular_user_adds_own_channel(self, db_client, db_session):
+        """Обычный пользователь (без подписки) может добавить канал → 201."""
+        user = await _organizer_user(db_session)
+        await db_session.commit()
+        # Без подписки — роль user
+        resp = await db_client.get("/api/me", headers=HEADERS)
+        assert resp.json()["role"] == "user"
+
+        # Добавить канал → 201
+        resp = await db_client.post(
+            "/api/me/channels",
+            headers=HEADERS,
+            json={"telegram_channel_id": "@myownchannel", "title": "Мой канал"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["status"] == "inactive"
+        assert resp.json()["title"] == "Мой канал"
+
+        # Канал в списке
+        resp = await db_client.get("/api/me/channels", headers=HEADERS)
+        assert resp.status_code == 200
+        channels = resp.json()
+        assert len(channels) == 1
+        assert channels[0]["telegram_channel_id"] == "@myownchannel"
+
+        # Идемпотентно: повторный POST → 200
+        resp = await db_client.post(
+            "/api/me/channels",
+            headers=HEADERS,
+            json={"telegram_channel_id": "@myownchannel"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def test_cannot_claim_other_users_channel(self, db_client, db_session):
+        """Пользователь не может забрать чужой канал → 409."""
+        from app.core.models import PlatformType
+
+        # Первый пользователь регистрирует канал
+        user1 = await _organizer_user(db_session)
+        await db_session.commit()
+        resp = await db_client.post(
+            "/api/me/channels",
+            headers=HEADERS,
+            json={"telegram_channel_id": "@claimed"},
+        )
+        assert resp.status_code == 201, resp.text
+
+        # Второй пользователь пытается забрать тот же канал → 409
+        user2 = await UserService(db_session).get_or_create(
+            PlatformType.telegram, "67890", "Second",
+        )
+        await db_session.commit()
+
+        # X-Skip-Auth: 1 всегда резолвится в platform_user_id=12345 (первый пользователь).
+        # Для честной проверки создаём канал через сервис от имени второго пользователя,
+        # затем проверяем что первый не может его забрать.
+        from app.core.services import ChannelService, ChannelAdminService
+        channel_svc = ChannelService(db_session)
+        admin_svc = ChannelAdminService(db_session)
+        other_channel = await channel_svc.create(
+            telegram_channel_id="@otherclaim",
+            admin_telegram_user_id="67890",
+            title="Second user channel",
+        )
+        await admin_svc.sync_admins(other_channel.id, ["67890"])
+        await db_session.commit()
+
+        # Первый пользователь (12345) пытается забрать → 409
+        resp = await db_client.post(
+            "/api/me/channels",
+            headers=HEADERS,
+            json={"telegram_channel_id": "@otherclaim"},
+        )
+        assert resp.status_code == 409, resp.text
