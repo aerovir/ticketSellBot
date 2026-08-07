@@ -245,6 +245,9 @@ async def get_me(current: CurrentUser = Depends(get_current_user)):
     async with async_session_factory() as session:
         channel_svc = ChannelService(session)
         channels = await channel_svc.get_channels_by_admin(current.telegram_user_id)
+        # Подписка пользователя (организатор без канала)
+        user_svc = UserService(session)
+        user = await user_svc.get_by_platform_user_id(PlatformType.telegram, current.telegram_user_id)
 
     return {
         "id": str(current.user_id),
@@ -252,6 +255,9 @@ async def get_me(current: CurrentUser = Depends(get_current_user)):
         "name": current.name,
         "role": current.role,
         "is_super_admin": current.is_super_admin,
+        "subscription_tier": user.subscription_tier.value if user else None,
+        "is_subscription_active": user.is_subscription_active if user else False,
+        "subscription_until": user.subscription_until.isoformat() if user and user.subscription_until else None,
         "channels": [
             {
                 "id": str(ch.id),
@@ -1211,6 +1217,16 @@ async def admin_ticket_qr(
         ticket, event = pair
         if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+
+        # QR-коды — фича pro (матрица qr_codes)
+        if event.channel_id is not None:
+            channel_svc = ChannelService(session)
+            has_qr = await channel_svc.require_feature(event.channel_id, "qr_codes")
+        else:
+            user_svc = UserService(session)
+            has_qr = await user_svc.require_feature(event.owner_user_id, "qr_codes")
+        if not has_qr:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="QR-коды доступны на подписке Pro")
 
     code = ticket.validation_code or str(ticket.id)
     png = generate_qr_png(code)

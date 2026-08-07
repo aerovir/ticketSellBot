@@ -157,6 +157,15 @@ async function loadMe() {
     return me;
 }
 
+// Есть ли у организатора pro-подписка (пользователь или хотя бы один канал pro)?
+function isPro() {
+    if (!state.me) return false;
+    if (state.me.subscription_tier === "pro") return true;
+    // организатор с pro-каналом
+    if ((state.me.channels || []).some(c => c.subscription_tier === "pro")) return true;
+    return false;
+}
+
 function extractInitDataFromUrl() {
     // Telegram Desktop передаёт initData в фрагменте URL: #tgWebAppData=...
     // Это тот же initData, что mobile отдаёт через window.Telegram.WebApp.initData.
@@ -836,18 +845,19 @@ async function showAdminEventForm(eventId) {
                 <input class="form-input" id="f_location" value="${escapeHtml(event ? (event.location || '') : '')}">
             </div>
             <div class="form-field">
-                <label class="form-label">Цена (₽, 0 = бесплатно)</label>
-                <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}">
+                <label class="form-label">Цена (₽, 0 = бесплатно)${isPro() ? '' : ' — только бесплатные на вашем тарифе'}</label>
+                <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}" ${isPro() ? '' : 'disabled'}>
             </div>
             <div class="form-field">
                 <label class="form-label">Количество билетов *</label>
                 <input class="form-input" type="number" min="1" step="1" id="f_tickets" required value="${event ? event.total_tickets : 100}">
             </div>
+            ${isPro() ? `
             <div class="form-field">
                 <label class="form-label">Пригласительных (лимит, Pro)</label>
                 <input class="form-input" type="number" min="0" step="1" id="f_invites" value="${event ? (event.invites_quota || 0) : 0}">
                 <div class="hint" style="margin:4px 0 0">Сколько пригласительных можно выдать из непроданных мест</div>
-            </div>
+            </div>` : ''}
             ${!event ? `
             <div class="form-field">
                 <label class="form-label">Канал (необязательно, если нет — через Mini App)</label>
@@ -960,7 +970,7 @@ function renderAdminEventDetail(event, stats, tickets, invites) {
     // Блок пригласительных
     const invitesHtml = `
         <h3 style="margin:16px 0 8px">Пригласительные ${stats && stats.invites_quota != null ? `(лимит ${stats.invites_quota})` : ''}</h3>
-        <button class="btn btn-sm btn-primary" onclick="adminIssueInvitePrompt('${event.id}')">🎟 Выдать пригласительное</button>
+        ${isPro() ? `<button class="btn btn-sm btn-primary" onclick="adminIssueInvitePrompt('${event.id}')">🎟 Выдать пригласительное</button>` : '<p class="hint">Пригласительные доступны на подписке Pro</p>'}
         ${invites.length === 0
             ? '<p class="hint">Пригласительных пока нет</p>'
             : `<div class="admin-list" style="margin-top:10px">${invites.map(iv => `

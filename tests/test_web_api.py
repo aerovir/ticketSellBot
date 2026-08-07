@@ -348,6 +348,10 @@ def admin_auth(is_super=False, channel_ids=None, sub_valid=True, organizer=False
         _mock_user = Mock(id=_UUID(USER_ID))
         _mock_user.name = "Dev"
         _mock_user.platform_user_id = "12345"
+        _mock_user.subscription_tier = Mock()
+        _mock_user.subscription_tier.value = "basic"
+        _mock_user.is_subscription_active = False
+        _mock_user.subscription_until = None
         stack.enter_context(patch(
             "app.web.dependencies.UserService.get_or_create",
             new_callable=AsyncMock,
@@ -357,6 +361,11 @@ def admin_auth(is_super=False, channel_ids=None, sub_valid=True, organizer=False
             "app.web.dependencies.UserService.is_subscription_valid",
             new_callable=AsyncMock,
             return_value=organizer,
+        ))
+        stack.enter_context(patch(
+            "app.web.routes.UserService.get_by_platform_user_id",
+            new_callable=AsyncMock,
+            return_value=_mock_user,
         ))
         stack.enter_context(patch(
             "app.web.dependencies.ChannelService.get_channel_ids_by_admin",
@@ -963,6 +972,8 @@ class TestInviteApi:
         with (
             admin_auth(is_super=True, channel_ids=[]),
             patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
+            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.generate_qr_png", new_callable=Mock, return_value=b"\x89PNG..."),
         ):
             resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
@@ -1539,3 +1550,47 @@ class TestCheckinAccess:
                 json={"code": "AB3X-K7M9"},
             )
         assert resp.status_code == 403
+
+
+class TestQrGate:
+    """QR-коды — фича pro (матрица qr_codes)."""
+
+    def test_basic_organizer_cannot_qr(self, client):
+        """Организатор на basic (без канала) НЕ получает QR (403)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.validation_code = "AB3X-K7M9"
+
+        # owner-мероприятие, basic-подписка (require_feature False)
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.UserService.require_feature", new_callable=AsyncMock, return_value=False),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
+        ):
+            resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+    def test_pro_organizer_can_qr(self, client):
+        """Организатор на pro получает QR (200)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.validation_code = "AB3X-K7M9"
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.UserService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
+            patch("app.web.routes.generate_qr_png", new_callable=Mock, return_value=b"\x89PNG..."),
+        ):
+            resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
