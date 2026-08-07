@@ -297,8 +297,11 @@ async def admin_list_events(current: CurrentUser = Depends(require_admin)):
             events = await event_svc.list_all()
         else:
             events = []
+            # мероприятия по каналам организатора
             for cid in current.managed_channel_ids:
                 events.extend(await event_svc.list_all(channel_id=cid))
+            # мероприятия организатора без канала (по owner)
+            events.extend(await event_svc.list_all(owner_user_id=current.user_id))
 
         # Карта каналов для названий
         channel_ids = {e.channel_id for e in events}
@@ -311,8 +314,9 @@ async def admin_list_events(current: CurrentUser = Depends(require_admin)):
     return [
         {
             "id": str(e.id),
-            "channel_id": str(e.channel_id),
-            "channel_title": channels.get(e.channel_id).title if e.channel_id in channels else None,
+            "channel_id": str(e.channel_id) if e.channel_id else None,
+            "channel_title": channels.get(e.channel_id).title if e.channel_id and e.channel_id in channels else None,
+            "owner_user_id": str(e.owner_user_id) if e.owner_user_id else None,
             "title": e.title,
             "date": e.date.isoformat(),
             "location": e.location,
@@ -332,12 +336,30 @@ async def admin_create_event(
     body: EventCreate,
     current: CurrentUser = Depends(require_admin),
 ):
-    """Создать мероприятие (черновик). Проверка канального доступа."""
-    if not current.can_manage(body.channel_id):
+    """Создать мероприятие (черновик).
+
+    Мероприятие принадлежит каналу (если указан) ИЛИ организатору-пользователю
+    (owner_user_id = текущий организатор). Проверка доступа.
+    """
+    # Канальный путь: организатор должен управлять каналом
+    if body.channel_id is not None and not current.can_manage(body.channel_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="У вас нет доступа к этому каналу",
         )
+    # Путь организатора без канала: owner_user_id должен быть текущим пользователем
+    if body.channel_id is None:
+        if body.owner_user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Укажите канал или владельца мероприятия",
+            )
+        if not current.is_super_admin and body.owner_user_id != current.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Вы не можете создавать мероприятия от имени другого пользователя",
+            )
+
     async with async_session_factory() as session:
         event_svc = EventService(session)
         try:
@@ -349,6 +371,8 @@ async def admin_create_event(
                 price=body.price,
                 total_tickets=body.total_tickets,
                 channel_id=body.channel_id,
+                invites_quota=body.invites_quota,
+                owner_user_id=body.owner_user_id,
             )
             await session.commit()
         except ValueError as e:
@@ -374,14 +398,16 @@ async def admin_get_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        # Доступ: организатор-владелец ИЛИ супер-админ ИЛИ управляет каналом
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         channel_svc = ChannelService(session)
-        channel = await channel_svc.get_by_id(event.channel_id)
+        channel = await channel_svc.get_by_id(event.channel_id) if event.channel_id else None
 
     return {
         "id": str(event.id),
-        "channel_id": str(event.channel_id),
+        "channel_id": str(event.channel_id) if event.channel_id else None,
+        "owner_user_id": str(event.owner_user_id) if event.owner_user_id else None,
         "channel_title": channel.title if channel else None,
         "title": event.title,
         "description": event.description,
@@ -415,7 +441,7 @@ async def admin_update_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         if not data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
@@ -445,7 +471,7 @@ async def admin_toggle_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         event = await event_svc.set_active(uid, not event.is_active)
         await session.commit()
@@ -469,7 +495,7 @@ async def admin_delete_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         await event_svc.soft_delete(uid)
         await session.commit()
@@ -496,7 +522,7 @@ async def admin_publish_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         await event_svc.update(uid, is_published=True)
         await session.commit()
@@ -521,7 +547,7 @@ async def admin_repost_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
 
     announced = await post_event_announcement(uid)
@@ -544,7 +570,7 @@ async def admin_event_stats(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         stats = await event_svc.get_event_stats(uid)
 
@@ -567,7 +593,7 @@ async def admin_event_tickets(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         ticket_svc = TicketService(session)
         tickets = await ticket_svc.get_event_tickets(uid)
@@ -591,7 +617,7 @@ async def admin_event_tickets_csv(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         ticket_svc = TicketService(session)
         tickets = await ticket_svc.export_event_tickets(uid)
@@ -675,7 +701,7 @@ async def admin_cancel_ticket(
         if pair is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Билет не найден")
         ticket, event = pair
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         try:
             ticket = await ticket_svc.admin_cancel_ticket(tid)
@@ -1034,6 +1060,17 @@ async def admin_health(current: CurrentUser = Depends(require_super_admin)):
 # ═══════════════════════════════════════════════════════════════
 
 
+def _can_manage_event(current: CurrentUser, event) -> bool:
+    """Доступ к мероприятию: супер-админ, организатор-владелец (без канала)
+    или организатор канала."""
+    if current.is_super_admin:
+        return True
+    if event.channel_id is not None:
+        return current.can_manage(event.channel_id)
+    # owner-мероприятие (организатор без канала)
+    return event.owner_user_id == current.user_id
+
+
 def _can_issue_invites(current: CurrentUser, event) -> bool:
     """Правило: пригласительные выдаёт только админ канала (не суперадмин)."""
     if current.is_super_admin:
@@ -1154,7 +1191,7 @@ async def admin_ticket_qr(
         if pair is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Билет не найден")
         ticket, event = pair
-        if not current.can_manage(event.channel_id):
+        if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
 
     code = ticket.validation_code or str(ticket.id)

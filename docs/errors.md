@@ -828,3 +828,32 @@
   - `db_client` переписан как `pytest_asyncio` фикстура, возвращающая `httpx.AsyncClient(transport=ASGITransport(app))` — тот же event loop, что и `db_session`.
   - В сквозном тесте вместо `admin_auth` (мокает UserService) — юзер 12345 назначен channel-admin через `ChannelAdminService.sync_admins`, роль через реальные зависимости.
 - **Связанные ошибки:** нет
+
+## 049 — VDS: postgres (ticketbot-db) аномально грузил CPU 333% без запросов
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено (перезапуск контейнера)
+- **Описание:** На VDS пришло уведомление о превышении лимитов. `ticketbot-db` (PostgreSQL) жрал **333% CPU** (load ~4.7 при 4 ядрах) и **2.5 GiB RAM**. При этом:
+  - Активных запросов нет (`pg_stat_activity` пуст)
+  - Автовакуум не работал (dead_tup=0, xid_age мал)
+  - `restarts=0`, uptime контейнера нормальный
+  - 4 потока postgres (PID внутри контейнера) активно крутили CPU в цикле
+- **Анализ:**
+  - **Подтверждено (`top -H`):** 4 треда postgres `R` состояние, ~54+54+45+18% CPU каждый
+  - **Подтверждено (`pg_stat_activity`):** нет ни активных клиентских запросов, ни autovacuum — аномалия на уровне потоков (спин-луп / зависший background worker)
+  - Все остальные контейнеры (seeker, ticketbot-web/telegram) — <1.5% CPU
+- **Исправление (применено):**
+  `docker restart ticketbot-db` — сбросил зависшие потоки. CPU → 0.04%, RAM → 17 MB, load → 2.34. Данные на volume не пострадали.
+- **Связанные ошибки:** нет
+
+## 050 — Owner-мероприятия недоступны организатору на админ-действиях (403)
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено
+- **Описание:** После введения роли «Организатор» и `Event.owner_user_id` организатор **без канала** может создать своё мероприятие (owner), но не может им управлять: статистика, toggle, update, delete, publish, repost, билеты → **403**.
+- **Анализ:**
+  - **Подтверждено (QA-агент, сквозные e2e на реальной БД):** все админ-эндпоинты гейтят `current.can_manage(event.channel_id)`. Для owner-мероприятия `channel_id=None` → `can_manage(None)` всегда False для не-суперадмина → 403 владельцу.
+  - **Подтверждено (`app/web/routes.py`):** работает только `admin_get_event` (owner-проверка есть); остальные (update 447, toggle 477, delete 501, stats 576, tickets 599, csv 623, cancel 707, qr 1186, publish 528, repost 553) — только can_manage.
+- **Исправление (не применено):**
+  Во всех гейтах добавить owner-проверку: `event.channel_id is None and event.owner_user_id == current.user_id`, по образцу `admin_get_event`.
+- **Связанные ошибки:** нет

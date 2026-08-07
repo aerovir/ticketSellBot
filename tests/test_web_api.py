@@ -7,6 +7,7 @@ initData validation тестируем отдельно с известными 
 
 import contextlib
 import hashlib
+from uuid import UUID as _UUID
 import hmac
 import json
 import time
@@ -339,18 +340,23 @@ USER_ID = "33333333-3333-4333-8333-333333333333"
 
 
 @contextlib.contextmanager
-def admin_auth(is_super=False, channel_ids=None, sub_valid=True):
+def admin_auth(is_super=False, channel_ids=None, sub_valid=True, organizer=False):
     """Контекст-менеджер: резолв текущего пользователя с заданной ролью."""
     channel_ids = channel_ids or []
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch("app.web.dependencies.settings.admin_telegram_ids", "12345" if is_super else ""))
-        _mock_user = Mock(id=USER_ID)
+        _mock_user = Mock(id=_UUID(USER_ID))
         _mock_user.name = "Dev"
         _mock_user.platform_user_id = "12345"
         stack.enter_context(patch(
             "app.web.dependencies.UserService.get_or_create",
             new_callable=AsyncMock,
             return_value=_mock_user,
+        ))
+        stack.enter_context(patch(
+            "app.web.dependencies.UserService.is_subscription_valid",
+            new_callable=AsyncMock,
+            return_value=organizer,
         ))
         stack.enter_context(patch(
             "app.web.dependencies.ChannelService.get_channel_ids_by_admin",
@@ -391,15 +397,15 @@ class TestAdminAPI:
         assert data["role"] == "user"
         assert data["is_super_admin"] is False
 
-    def test_me_role_channel_admin(self, client):
-        """GET /api/me — роль channel_admin при канале с активной подпиской."""
+    def test_me_role_organizer_with_channel(self, client):
+        """GET /api/me — роль organizer при канале с активной подпиской."""
         with (
             admin_auth(is_super=False, channel_ids=[CHANNEL_ID], sub_valid=True),
             patch("app.web.routes.ChannelService.get_channels_by_admin", new_callable=AsyncMock, return_value=[_mock_channel()]),
         ):
             resp = client.get("/api/me", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
-        assert resp.json()["role"] == "channel_admin"
+        assert resp.json()["role"] == "organizer"
 
     def test_me_role_super_admin(self, client):
         """GET /api/me — роль super_admin по config."""
@@ -1340,3 +1346,141 @@ class TestSubscriptionApi:
                 json={"tier": "pro", "period": 3, "period_unit": "months"},
             )
         assert resp.status_code == 404
+
+
+class TestOrganizerApi:
+    """Тесты роли организатора (TDD: до реализации)."""
+
+    def test_create_event_as_organizer_without_channel(self, client):
+        """Организатор без канала создаёт мероприятие (owner_user_id)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.is_published = False
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], sub_valid=True, organizer=True),
+            patch("app.web.routes.EventService.create", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(
+                "/api/admin/events",
+                headers={"X-Skip-Auth": "1"},
+                json={
+                    "title": "Org Event",
+                    "date": "2026-12-01T19:00:00Z",
+                    "price": 0,
+                    "total_tickets": 50,
+                    "channel_id": None,
+                    "owner_user_id": USER_ID,
+                },
+            )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["is_published"] is False
+
+    def test_create_event_no_channel_no_owner(self, client):
+        """Без channel и owner → 400/409 (организатор без канала)."""
+        with admin_auth(is_super=False, channel_ids=[], organizer=True):
+            resp = client.post(
+                "/api/admin/events",
+                headers={"X-Skip-Auth": "1"},
+                json={
+                    "title": "No Target",
+                    "date": "2026-12-01T19:00:00Z",
+                    "price": 0,
+                    "total_tickets": 50,
+                    "channel_id": None,
+                    "owner_user_id": None,
+                },
+            )
+        assert resp.status_code in (400, 409)
+
+    def test_organizer_own_events(self, client):
+        """Организатор видит свои мероприятия (по owner)."""
+        from datetime import datetime, timezone
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = USER_ID
+        mock_event.title = "My"
+        mock_event.date = datetime.now(timezone.utc)
+        mock_event.location = None
+        mock_event.price = 0.0
+        mock_event.total_tickets = 10
+        mock_event.available_tickets = 10
+        mock_event.is_active = True
+        mock_event.is_published = True
+        mock_event.is_free = True
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], sub_valid=True, organizer=True),
+            patch("app.web.routes.EventService.list_all", new_callable=AsyncMock, return_value=[mock_event]),
+            patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=None),
+        ):
+            resp = client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+
+
+class TestOwnerAccess:
+    """Доступ организатора-владельца к своим owner-мероприятиям (баг #050)."""
+
+    def test_owner_can_stats(self, client):
+        """Владелец owner-мероприятия видит статистику (не 403)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.get_event_stats", new_callable=AsyncMock, return_value={"sold": 1}),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/stats", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["sold"] == 1
+
+    def test_owner_can_toggle(self, client):
+        """Владелец может toggle своё owner-мероприятие."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
+        mock_event.is_active = True
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.set_active", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(f"/api/admin/events/{EVENT_ID}/toggle", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+
+    def test_owner_can_delete(self, client):
+        """Владелец может удалить своё owner-мероприятие."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.soft_delete", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(f"/api/admin/events/{EVENT_ID}/delete", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+
+    def test_other_user_cannot_stats(self, client):
+        """Другой пользователь не видит чужое owner-мероприятие (403)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID("99999999-9999-4999-8999-999999999999")  # другой владелец
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/stats", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403

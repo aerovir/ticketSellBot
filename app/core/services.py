@@ -81,6 +81,73 @@ class UserService:
         await self.session.flush()
         return user
 
+    # ─── Подписка пользователя (организатор без канала) ───────────
+
+    async def activate_subscription(
+        self,
+        user_id: uuid.UUID,
+        days: int = 30,
+        tier: SubscriptionTier | None = None,
+    ) -> User | None:
+        """Активировать подписку пользователя (срок от текущей даты)."""
+        user = await self.session.get(User, user_id)
+        if user is None:
+            return None
+        user.is_subscription_active = True
+        user.subscription_until = datetime.now(timezone.utc) + timedelta(days=days)
+        if tier is not None:
+            user.subscription_tier = tier
+        await self.session.flush()
+        return user
+
+    async def deactivate_subscription(self, user_id: uuid.UUID) -> User | None:
+        """Отключить подписку пользователя."""
+        user = await self.session.get(User, user_id)
+        if user is None:
+            return None
+        user.is_subscription_active = False
+        user.subscription_until = None
+        await self.session.flush()
+        return user
+
+    async def is_subscription_valid(self, user_id: uuid.UUID) -> bool:
+        """Активна ли подписка пользователя (не просрочена)."""
+        user = await self.session.get(User, user_id)
+        if user is None or not user.is_subscription_active:
+            return False
+        if user.subscription_until and user.subscription_until < datetime.now(timezone.utc):
+            user.is_subscription_active = False
+            user.subscription_until = None
+            await self.session.flush()
+            return False
+        return True
+
+    async def get_subscription_tier(self, user_id: uuid.UUID) -> SubscriptionTier | None:
+        """Уровень подписки пользователя."""
+        user = await self.session.get(User, user_id)
+        if user is None:
+            return None
+        return user.subscription_tier
+
+    async def require_feature(self, user_id: uuid.UUID, feature: str) -> bool:
+        """Проверить фичу подписки пользователя (аналог ChannelService.require_feature)."""
+        if not await self.is_subscription_valid(user_id):
+            return False
+        tier = await self.get_subscription_tier(user_id)
+        if tier is None:
+            return False
+        FEATURES = {
+            "free_events": {SubscriptionTier.basic, SubscriptionTier.pro},
+            "paid_events": {SubscriptionTier.pro},
+            "qr_codes": {SubscriptionTier.pro},
+            "invite_tickets": {SubscriptionTier.pro},
+        }
+        return tier in FEATURES.get(feature, set())
+
+    async def is_organizer(self, user_id: uuid.UUID) -> bool:
+        """Является ли пользователь организатором (есть активная подписка)."""
+        return await self.is_subscription_valid(user_id)
+
 
 # ─── Channel Service ─────────────────────────────────────────────────────────
 
@@ -701,14 +768,23 @@ class EventService:
 
     async def create(self, title: str, description: Optional[str], date: datetime,
                      location: Optional[str], price: float,
-                     total_tickets: int, channel_id: uuid.UUID,
-                     invites_quota: int = 0) -> Event:
+                     total_tickets: int, channel_id: uuid.UUID | None,
+                     invites_quota: int = 0, owner_user_id: uuid.UUID | None = None) -> Event:
         start = time.perf_counter()
 
-        # Проверка: если мероприятие платное, канал должен иметь Pro-подписку
+        # Мероприятие принадлежит каналу ИЛИ организатору-пользователю (не оба, не никого)
+        if (channel_id is None) == (owner_user_id is None):
+            raise ValueError("Мероприятие должно принадлежать каналу или организатору")
+
+        # Проверка: если мероприятие платное, нужна Pro-подписка (канала ИЛИ пользователя)
         if price > 0:
-            channel_svc = ChannelService(self.session)
-            if not await channel_svc.require_feature(channel_id, "paid_events"):
+            if channel_id is not None:
+                channel_svc = ChannelService(self.session)
+                has_feature = await channel_svc.require_feature(channel_id, "paid_events")
+            else:
+                user_svc = UserService(self.session)
+                has_feature = await user_svc.require_feature(owner_user_id, "paid_events")
+            if not has_feature:
                 raise ValueError(
                     "Ваш тариф поддерживает только бесплатные мероприятия. "
                     "Для платных мероприятий необходима подписка Pro."
@@ -727,6 +803,7 @@ class EventService:
             is_free=is_free,
             invites_quota=invites_quota,
             channel_id=channel_id,
+            owner_user_id=owner_user_id,
         )
         self.session.add(event)
         await self.session.flush()
@@ -734,7 +811,8 @@ class EventService:
             "event_type": "event.created",
             "event_id": str(event.id),
             "event_title": title,
-            "channel_id": str(channel_id),
+            "channel_id": str(channel_id) if channel_id else None,
+            "owner_user_id": str(owner_user_id) if owner_user_id else None,
             "price": price,
             "total_tickets": total_tickets,
             "is_free": is_free,
@@ -745,18 +823,25 @@ class EventService:
 
     # ─── Admin methods ───────────────────────────────────────────────────
 
-    async def list_all(self, channel_id: uuid.UUID | None = None) -> list[Event]:
+    async def list_all(
+        self,
+        channel_id: uuid.UUID | None = None,
+        owner_user_id: uuid.UUID | None = None,
+    ) -> list[Event]:
         """Get ALL events that are not deleted, newest first.
-        Optionally filtered by channel."""
+        Optionally filtered by channel or owner."""
         start = time.perf_counter()
         stmt = select(Event).where(Event.deleted_at.is_(None)).order_by(Event.date.desc())
         if channel_id is not None:
             stmt = stmt.where(Event.channel_id == channel_id)
+        if owner_user_id is not None:
+            stmt = stmt.where(Event.owner_user_id == owner_user_id)
         result = await self.session.execute(stmt)
         events = list(result.scalars().all())
         logger.info("", extra={
             "event_type": "event.list_all",
             "channel_id": str(channel_id) if channel_id else "all",
+            "owner_user_id": str(owner_user_id) if owner_user_id else "all",
             "count": len(events),
             "status": "success",
             "duration_ms": _ms(start),

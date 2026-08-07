@@ -168,7 +168,7 @@ async function showProfile() {
 
 function renderProfile() {
     const me = state.me;
-    const roleNames = { user: "Покупатель", channel_admin: "Админ канала", super_admin: "Супер-админ" };
+    const roleNames = { user: "Покупатель", organizer: "Организатор", super_admin: "Супер-админ" };
     const roleText = roleNames[me.role] || me.role;
     const channels = me.channels || [];
 
@@ -755,9 +755,9 @@ async function showAdminEventForm(eventId) {
             </div>
             ${!event ? `
             <div class="form-field">
-                <label class="form-label">Канал *</label>
-                <select class="form-input" id="f_channel" required>
-                    <option value="">Выберите канал</option>
+                <label class="form-label">Канал (необязательно, если нет — через Mini App)</label>
+                <select class="form-input" id="f_channel">
+                    <option value="">Без канала (Mini App)</option>
                     ${options}
                 </select>
             </div>` : ''}
@@ -794,7 +794,11 @@ async function submitAdminEventForm(eventId) {
         location, price, total_tickets,
     };
     if (invites_quota !== undefined) payload.invites_quota = invites_quota;
-    if (!eventId) payload.channel_id = document.getElementById("f_channel").value;
+    if (!eventId) {
+        const channelId = document.getElementById("f_channel").value;
+        payload.channel_id = channelId || null;
+        if (!channelId && state.me) payload.owner_user_id = state.me.id;
+    }
 
     try {
         if (eventId) {

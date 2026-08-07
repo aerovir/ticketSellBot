@@ -174,17 +174,19 @@ class CurrentUser:
     is_super_admin: bool
     #: Каналы с активной подпиской, где пользователь — админ (channel_admins).
     managed_channel_ids: list[UUID] = field(default_factory=list)
+    #: Организатор без канала — есть активная подписка пользователя.
+    is_organizer: bool = False
 
     @property
     def is_admin(self) -> bool:
-        return self.is_super_admin or bool(self.managed_channel_ids)
+        return self.is_super_admin or self.is_organizer or bool(self.managed_channel_ids)
 
     @property
     def role(self) -> str:
         if self.is_super_admin:
             return "super_admin"
-        if self.managed_channel_ids:
-            return "channel_admin"
+        if self.is_organizer or self.managed_channel_ids:
+            return "organizer"
         return "user"
 
     def can_manage(self, channel_id: UUID) -> bool:
@@ -218,6 +220,8 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
             cid for cid in raw_ids
             if await channel_svc.is_subscription_valid(cid)
         ]
+        # Организатор без канала: активная подписка пользователя
+        is_organizer = await user_svc.is_subscription_valid(user.id)
         # Persist the row if get_or_create inserted a new user (read-only requests
         # still carry this dependency); commit is a no-op when nothing changed.
         await session.commit()
@@ -228,6 +232,7 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
         name=user.name,
         is_super_admin=_is_super_admin(platform_user_id),
         managed_channel_ids=managed,
+        is_organizer=is_organizer,
     )
 
 

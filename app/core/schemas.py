@@ -35,7 +35,8 @@ class EventCreate(BaseModel):
     price: float = Field(default=0.0, ge=0)
     total_tickets: int = Field(default=0, ge=0)
     available_tickets: int = Field(default=0, ge=0)
-    channel_id: UUID
+    channel_id: Optional[UUID] = None
+    owner_user_id: Optional[UUID] = None
     invites_quota: int = Field(default=0, ge=0)
 
 

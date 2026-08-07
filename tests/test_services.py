@@ -1246,3 +1246,159 @@ class TestSubscriptionDuration:
 
         assert channel.subscription_tier == SubscriptionTier.basic
         assert channel.subscription_until == old_until, "срок не должен меняться при смене типа"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Роль «Организатор» + подписка на пользователя (TDD)
+# ═══════════════════════════════════════════════════════════════
+
+class TestUserSubscription:
+    """Подписка на пользователя (организатор без канала)."""
+
+    async def test_activate_user_subscription(self, db_session, sample_user):
+        """activate_subscription для User — tier + срок."""
+        from app.core.services import UserService
+        from app.core.models import SubscriptionTier
+        from datetime import datetime, timezone
+
+        svc = UserService(db_session)
+        user = await svc.activate_subscription(sample_user.id, days=30, tier=SubscriptionTier.pro)
+        await db_session.commit()
+
+        assert user is not None
+        assert user.is_subscription_active is True
+        assert user.subscription_tier == SubscriptionTier.pro
+        assert user.subscription_until is not None
+
+    async def test_deactivate_user_subscription(self, db_session, sample_user):
+        """deactivate_subscription для User."""
+        from app.core.services import UserService
+        from app.core.models import SubscriptionTier
+
+        svc = UserService(db_session)
+        await svc.activate_subscription(sample_user.id, days=30, tier=SubscriptionTier.pro)
+        await db_session.commit()
+        await svc.deactivate_subscription(sample_user.id)
+        await db_session.commit()
+        await db_session.refresh(sample_user)
+
+        assert sample_user.is_subscription_active is False
+        assert sample_user.subscription_until is None
+
+    async def test_user_subscription_valid(self, db_session, sample_user):
+        """is_subscription_valid для активной подписки пользователя."""
+        from app.core.services import UserService
+        from app.core.models import SubscriptionTier
+
+        svc = UserService(db_session)
+        await svc.activate_subscription(sample_user.id, days=30, tier=SubscriptionTier.pro)
+        await db_session.commit()
+
+        assert await svc.is_subscription_valid(sample_user.id) is True
+
+    async def test_user_require_feature_pro(self, db_session, sample_user):
+        """require_feature(user_id) — pro даёт paid_events."""
+        from app.core.services import UserService
+        from app.core.models import SubscriptionTier
+
+        svc = UserService(db_session)
+        await svc.activate_subscription(sample_user.id, days=30, tier=SubscriptionTier.pro)
+        await db_session.commit()
+
+        assert await svc.require_feature(sample_user.id, "paid_events") is True
+
+    async def test_user_require_feature_basic_no_paid(self, db_session, sample_user):
+        """basic-пользователь НЕ может платные мероприятия."""
+        from app.core.services import UserService
+        from app.core.models import SubscriptionTier
+
+        svc = UserService(db_session)
+        await svc.activate_subscription(sample_user.id, days=30, tier=SubscriptionTier.basic)
+        await db_session.commit()
+
+        assert await svc.require_feature(sample_user.id, "paid_events") is False
+
+
+class TestEventOwner:
+    """Создание мероприятий владельцем-пользователем (без канала)."""
+
+    async def test_create_event_with_owner(self, db_session, sample_user):
+        """create с owner_user_id (без канала) — ok."""
+        from app.core.services import EventService
+        from app.core.models import SubscriptionTier
+        from datetime import datetime, timezone, timedelta
+        from uuid import uuid4
+
+        # даём пользователю подписку
+        from app.core.services import UserService
+        await UserService(db_session).activate_subscription(sample_user.id, 30, SubscriptionTier.basic)
+        await db_session.commit()
+
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Org Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=0, total_tickets=10,
+            channel_id=None, owner_user_id=sample_user.id,
+        )
+        await db_session.commit()
+
+        assert event is not None
+        assert event.owner_user_id == sample_user.id
+        assert event.channel_id is None
+
+    async def test_create_event_without_owner_or_channel(self, db_session, sample_user):
+        """create без owner и без канала → ValueError."""
+        from app.core.services import EventService
+        from datetime import datetime, timezone, timedelta
+        import pytest
+
+        svc = EventService(db_session)
+        with pytest.raises(ValueError):
+            await svc.create(
+                title="No Target", description=None,
+                date=datetime.now(timezone.utc) + timedelta(days=7),
+                location=None, price=0, total_tickets=10,
+                channel_id=None, owner_user_id=None,
+            )
+
+    async def test_create_paid_event_owner_pro(self, db_session, sample_user):
+        """Организатор с pro может платное мероприятие (owner)."""
+        from app.core.services import EventService, UserService
+        from app.core.models import SubscriptionTier
+        from datetime import datetime, timezone, timedelta
+
+        await UserService(db_session).activate_subscription(sample_user.id, 30, SubscriptionTier.pro)
+        await db_session.commit()
+
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Paid Org Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=500, total_tickets=10,
+            channel_id=None, owner_user_id=sample_user.id,
+        )
+        await db_session.commit()
+        assert event.price == 500
+
+
+class TestRoleOrganizer:
+    """Роль организатора (web-роль) — через подписку пользователя."""
+
+    async def test_user_with_subscription_is_organizer(self, db_session, sample_user):
+        """Пользователь с активной подпиской (без канала) — организатор."""
+        from app.core.services import UserService
+        from app.core.models import SubscriptionTier
+
+        svc = UserService(db_session)
+        await svc.activate_subscription(sample_user.id, 30, SubscriptionTier.basic)
+        await db_session.commit()
+
+        assert await svc.is_organizer(sample_user.id) is True
+
+    async def test_user_without_subscription_not_organizer(self, db_session, sample_user):
+        """Пользователь без подписки и без канала — не организатор."""
+        from app.core.services import UserService
+
+        svc = UserService(db_session)
+        assert await svc.is_organizer(sample_user.id) is False

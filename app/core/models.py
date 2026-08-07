@@ -82,8 +82,15 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    # Подписка пользователя (организатор без канала)
+    is_subscription_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    subscription_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    subscription_tier: Mapped[SubscriptionTier] = mapped_column(
+        SAEnum(SubscriptionTier), default=SubscriptionTier.basic, nullable=False
+    )
 
     tickets = relationship("Ticket", back_populates="user", lazy="raise")
+    owned_events = relationship("Event", back_populates="owner", lazy="raise")
 
     def __repr__(self):
         return f"<User {self.platform}:{self.platform_user_id}>"
@@ -95,8 +102,12 @@ class Event(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    channel_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False
+    # channel_id nullable: мероприятие может принадлежать каналу ИЛИ владельцу-пользователю
+    channel_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id"), nullable=True
+    )
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -118,6 +129,7 @@ class Event(Base):
 
     tickets = relationship("Ticket", back_populates="event", lazy="raise")
     channel = relationship("Channel", back_populates="events", lazy="raise")
+    owner = relationship("User", back_populates="owned_events", lazy="raise")
 
     def __repr__(self):
         return f"<Event {self.title}>"

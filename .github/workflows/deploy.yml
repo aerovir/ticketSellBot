@@ -214,6 +214,13 @@ jobs:
             ALTER TABLE tickets ADD COLUMN IF NOT EXISTS invited_by VARCHAR(255);
             ALTER TABLE tickets ALTER COLUMN user_id DROP NOT NULL;
 
+            -- Организатор: подписка на пользователя + owner-мероприятия
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier subscriptiontier NOT NULL DEFAULT 'basic';
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS owner_user_id UUID REFERENCES users(id);
+            ALTER TABLE events ALTER COLUMN channel_id DROP NOT NULL;
+
             -- channel_admins (multi-admin support)
             CREATE TABLE IF NOT EXISTS channel_admins (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
