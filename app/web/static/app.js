@@ -219,9 +219,11 @@ function renderTabBar() {
         { id: "events", label: "Мероприятия", icon: "🎫", fn: "showEvents" },
         { id: "tickets", label: "Билеты", icon: "🎟", fn: "showMyTickets" },
         { id: "profile", label: "Профиль", icon: "👤", fn: "showProfile" },
+        // Панель доступна всем: открытое создание мероприятий для обычных пользователей,
+        // организаторы дополнительно видят проверку билетов и статистику.
+        { id: "admin", label: "Панель", icon: "🎛", fn: "showAdminDashboard" },
     ];
     if (state.role !== "user") {
-        tabs.push({ id: "admin", label: "Панель", icon: "🎛", fn: "showAdminDashboard" });
         tabs.push({ id: "checkin", label: "Проверка", icon: "🔍", fn: "showCheckin" });
     }
     if (state.role === "super_admin") {
@@ -722,6 +724,7 @@ function showAdminDashboard() {
     updateToolbar("Панель", false, false);
     showPage("admin");
     const isSuper = state.role === "super_admin";
+    const isOrganizer = state.role !== "user";  // organizer или super_admin
     document.getElementById("adminContent").innerHTML = `
         <h2 style="margin-bottom:16px">Панель управления</h2>
         <div class="admin-menu-grid">
@@ -729,10 +732,11 @@ function showAdminDashboard() {
                 <div class="admin-menu-icon">🎫</div>
                 <div>Мероприятия</div>
             </button>
+            ${isOrganizer ? `
             <button class="admin-menu-card" onclick="showCheckin()">
                 <div class="admin-menu-icon">🔍</div>
                 <div>Проверка билета</div>
-            </button>
+            </button>` : ''}
             ${isSuper ? `
             <button class="admin-menu-card" onclick="showAdminChannels()">
                 <div class="admin-menu-icon">📢</div>

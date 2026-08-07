@@ -428,11 +428,17 @@ class TestAdminAPI:
         assert data["role"] == "super_admin"
         assert data["is_super_admin"] is True
 
-    def test_admin_events_forbidden_for_user(self, client):
-        """GET /api/admin/events — 403 для обычного пользователя."""
-        with admin_auth(is_super=False, channel_ids=[]):
+    def test_admin_events_open_for_regular_user(self, client):
+        """GET /api/admin/events — 200 для обычного пользователя (открытое создание).
+        Возвращает список своих owner-мероприятий (пустой, если нет)."""
+        with (
+            admin_auth(is_super=False, channel_ids=[]),
+            patch("app.web.routes.EventService.list_all", new_callable=AsyncMock, return_value=[]),
+            patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=None),
+        ):
             resp = client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
-        assert resp.status_code == 403
+        assert resp.status_code == 200
+        assert resp.json() == []
 
     def test_admin_events_list_super(self, client):
         """GET /api/admin/events — super-admin видит все."""

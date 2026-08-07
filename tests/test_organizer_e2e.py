@@ -513,7 +513,8 @@ class TestOrganizerE2E:
         assert resp.json()["available"] == 20, resp.json()
 
     async def test_buyer_cannot_admin(self, db_client, db_session):
-        """Покупатель (без подписки и канала) не имеет доступа к админке (п.13)."""
+        """Покупатель (без подписки и канала): открытое создание мероприятий,
+        но нет доступа к организаторским функциям (статистика, каналы)."""
         await _organizer_user(db_session)
         await db_session.commit()
 
@@ -521,22 +522,26 @@ class TestOrganizerE2E:
         assert resp.status_code == 200
         assert resp.json()["role"] == "user"
 
-        # GET /admin/events — 403
+        # GET /admin/events — 200 (открыто: свои owner-мероприятия)
         resp = await db_client.get("/api/admin/events", headers=HEADERS)
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 200, resp.text
 
-        # POST /admin/events — 403 (нельзя создать мероприятие)
+        # POST /admin/events — 201 для бесплатного своего (открытое создание)
+        me = await db_client.get("/api/me", headers=HEADERS)
+        my_uid = me.json()["id"]
         resp = await db_client.post(
             "/api/admin/events",
             headers=HEADERS,
-            json=_event_payload(owner_user_id=str(uuid.uuid4())),
+            json=_event_payload(owner_user_id=my_uid, price=0),
         )
+        assert resp.status_code == 201, resp.text
+
+        # Статистика (GET /admin/stats) — 403 (только организатор)
+        resp = await db_client.get("/api/admin/stats", headers=HEADERS)
         assert resp.status_code == 403, resp.text
 
-        # POST /admin/events/{id}/toggle — 403
-        resp = await db_client.post(
-            f"/api/admin/events/{uuid.uuid4()}/toggle", headers=HEADERS,
-        )
+        # Каналы (GET /admin/channels) — 403 (только super-admin)
+        resp = await db_client.get("/api/admin/channels", headers=HEADERS)
         assert resp.status_code == 403, resp.text
 
 

@@ -316,23 +316,27 @@ async def subscribe_me(
 
 
 @router.get("/admin/events")
-async def admin_list_events(current: CurrentUser = Depends(require_admin)):
-    """Список всех мероприятий доступных админу (по его каналам).
+async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
+    """Список мероприятий доступных текущему пользователю.
 
-    Суперадмин видит все каналы.
+    Суперадмин видит всё. Организатор — свои каналы + owner-мероприятия.
+    Обычный пользователь — свои owner-мероприятия (открытое создание).
     """
     async with async_session_factory() as session:
         event_svc = EventService(session)
         channel_svc = ChannelService(session)
         if current.is_super_admin:
             events = await event_svc.list_all()
-        else:
+        elif current.is_admin:
             events = []
             # мероприятия по каналам организатора
             for cid in current.managed_channel_ids:
                 events.extend(await event_svc.list_all(channel_id=cid))
             # мероприятия организатора без канала (по owner)
             events.extend(await event_svc.list_all(owner_user_id=current.user_id))
+        else:
+            # Обычный пользователь: только свои owner-мероприятия
+            events = await event_svc.list_all(owner_user_id=current.user_id)
 
         # Карта каналов для названий (owner-события без канала — пропускаем None)
         channel_ids = {e.channel_id for e in events if e.channel_id is not None}
@@ -416,7 +420,7 @@ async def admin_create_event(
 @router.get("/admin/events/{event_id}")
 async def admin_get_event(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Детали мероприятия (админ)."""
     try:
@@ -457,7 +461,7 @@ async def admin_get_event(
 async def admin_update_event(
     event_id: str,
     body: EventUpdateIn,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Частичное обновление мероприятия."""
     try:
@@ -489,7 +493,7 @@ async def admin_update_event(
 @router.post("/admin/events/{event_id}/toggle")
 async def admin_toggle_event(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Включить/отключить мероприятие."""
     try:
@@ -513,7 +517,7 @@ async def admin_toggle_event(
 @router.post("/admin/events/{event_id}/delete")
 async def admin_delete_event(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Мягко удалить мероприятие."""
     try:
@@ -537,7 +541,7 @@ async def admin_delete_event(
 @router.post("/admin/events/{event_id}/publish")
 async def admin_publish_event(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Опубликовать мероприятие + отправить анонс в канал.
 
