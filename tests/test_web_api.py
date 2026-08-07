@@ -534,9 +534,14 @@ class TestAdminAPI:
         mock_ticket.event_id = EVENT_ID
         mock_ticket.checked_in_at = None
 
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
         with (
             admin_auth(is_super=True, channel_ids=[]),
             patch("app.web.routes.TicketService.check_in_by_code", new_callable=AsyncMock, return_value=mock_ticket),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
         ):
             resp = client.post(
                 "/api/admin/tickets/checkin",
@@ -1483,4 +1488,54 @@ class TestOwnerAccess:
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
         ):
             resp = client.get(f"/api/admin/events/{EVENT_ID}/stats", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+
+class TestCheckinAccess:
+    """Доступ к check-in: только организатор мероприятия (замечание C)."""
+
+    def test_owner_can_checkin_own(self, client):
+        """Владелец owner-мероприятия может checkin свой билет."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.status.value = "checked_in"
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.checked_in_at = None
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.TicketService.check_in_by_code", new_callable=AsyncMock, return_value=mock_ticket),
+        ):
+            resp = client.post(
+                "/api/admin/tickets/checkin",
+                headers={"X-Skip-Auth": "1"},
+                json={"code": "AB3X-K7M9"},
+            )
+        assert resp.status_code == 200
+
+    def test_other_organizer_cannot_checkin(self, client):
+        """Чужой организатор НЕ может checkin чужое owner-мероприятие (403)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID("99999999-9999-4999-8999-999999999999")  # другой владелец
+
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.event_id = EVENT_ID
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.TicketService.check_in_by_code", new_callable=AsyncMock, return_value=mock_ticket),
+        ):
+            resp = client.post(
+                "/api/admin/tickets/checkin",
+                headers={"X-Skip-Auth": "1"},
+                json={"code": "AB3X-K7M9"},
+            )
         assert resp.status_code == 403

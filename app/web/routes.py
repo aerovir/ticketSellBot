@@ -303,8 +303,8 @@ async def admin_list_events(current: CurrentUser = Depends(require_admin)):
             # мероприятия организатора без канала (по owner)
             events.extend(await event_svc.list_all(owner_user_id=current.user_id))
 
-        # Карта каналов для названий
-        channel_ids = {e.channel_id for e in events}
+        # Карта каналов для названий (owner-события без канала — пропускаем None)
+        channel_ids = {e.channel_id for e in events if e.channel_id is not None}
         channels = {}
         for cid in channel_ids:
             ch = await channel_svc.get_by_id(cid)
@@ -670,6 +670,12 @@ async def admin_checkin_ticket(
         ticket_svc = TicketService(session)
         try:
             ticket = await ticket_svc.check_in_by_code(code, current.telegram_user_id)
+            # Проверка доступа: организатор должен управлять мероприятием билета
+            event_svc = EventService(session)
+            event = await event_svc.get_by_id(ticket.event_id)
+            if event is not None and not _can_manage_event(current, event):
+                await session.rollback()
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому билету")
             await session.commit()
         except ValueError as e:
             await session.rollback()

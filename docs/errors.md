@@ -883,3 +883,17 @@
   - Pro-гейт: если `channel_id` есть → `ChannelService.require_feature`; если нет (owner) → `UserService.require_feature(event.owner_user_id, "invite_tickets")`.
   - Тест обновлён: `test_owner_event_invites_blocked` → `test_owner_event_invites_allowed` (201).
 - **Связанные ошибки:** #050
+
+## 053 — Замечания QA: checkin без проверки доступа + SAWarning на owner-событиях
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено
+- **Описание:** QA-агент при сквозном тестировании организатора отметил 2 замечания (не блокеры): (C) любой админ мог checkin/validate чужой билет (нет проверки доступа к мероприятию); (B) SAWarning при списке owner-событий (`channel_svc.get_by_id(None)`).
+- **Анализ:**
+  - **C (подтверждено, `app/web/routes.py` admin_checkin_ticket):** после `check_in_by_code` не загружалось событие и не проверялся доступ. Чужой организатор мог отметить вход по чужому коду.
+  - **B (подтверждено, `app/web/routes.py` admin_list_events):** `channel_ids = {e.channel_id for e in events}` включал None для owner-событий → `get_by_id(None)` делал NULL-pk запрос (SQLAlchemy предупреждение, в будущем ошибка).
+- **Исправление (применено, `app/web/routes.py`):**
+  - **C:** в `admin_checkin_ticket` после нахождения билета загружается его событие (`EventService.get_by_id`) и проверяется `_can_manage_event` → 403 если нет доступа (rollback).
+  - **B:** `channel_ids` фильтрует `e.channel_id is not None`.
+  - Тесты: `TestCheckinAccess` (owner может / чужой 403), обновлён `test_admin_checkin_ok`.
+- **Связанные ошибки:** #050
