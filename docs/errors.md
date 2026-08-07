@@ -897,3 +897,18 @@
   - **B:** `channel_ids` фильтрует `e.channel_id is not None`.
   - Тесты: `TestCheckinAccess` (owner может / чужой 403), обновлён `test_admin_checkin_ok`.
 - **Связанные ошибки:** #050
+
+## 054 — Нативные confirm()/prompt() не работают в Telegram Mini App (кнопка «Отменить подписку» молчит)
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено (confirm); prompt — требует доработки
+- **Описание:** При нажатии «Отменить подписку» не происходит видимых действий. Причина — `confirm("Отключить подписку?")` не работает в Telegram WebView (диалог не показывается, функция молча возвращает false). Проблема затрагивает все кнопки с `confirm()`/`prompt()`.
+- **Анализ:**
+  - **Подтверждено (`app/web/static/app.js`):** `adminUnsubscribe` (было) начинался с `confirm()`. Всего 5 мест `confirm()` и 11 мест `prompt()`.
+  - **Подтверждено (исследование):** Telegram Mini App не поддерживает нативные браузерные `confirm`/`prompt` в WebView. Официальное решение — `window.Telegram.WebApp.showPopup` / `showAlert`.
+  - **Подтверждено (dev-копия):** эндпоинт `/unsubscribe` работает (200 при супер-админе), значит баг именно в UI-диалоге, не в API.
+- **Исправление (применено, `app/web/static/app.js`):**
+  - Добавлены обёртки `tgConfirm`, `tgPrompt`, `tgAlert`, `tgShowPopup` — используют Telegram PopUp API с fallback на нативный `confirm`/`prompt` вне Telegram.
+  - Все 5 `confirm()` → `await tgConfirm()`.
+  - **Ограничение:** Telegram PopUp не поддерживает текстовый ввод — `tgPrompt` в Telegram показывает подсказку и возвращает null. Формы ввода (prompt для кодов/имени/тарифа) требуют замены на отдельные страницы-формы (TODO).
+- **Связанные ошибки:** нет

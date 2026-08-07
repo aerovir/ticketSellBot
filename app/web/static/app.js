@@ -25,6 +25,82 @@ const state = {
     adminTab: "events",
 };
 
+// ═══════════════════════════════════════════════════════════════
+// Telegram PopUp API (замена нативных confirm/prompt)
+//
+// Нативные confirm()/prompt() НЕ работают в Telegram WebView — диалог
+// не показывается, функция молча возвращает false. Используем
+// window.Telegram.WebApp.showPopup / showAlert, с fallback на
+// confirm/prompt вне Telegram (браузер/dev).
+// ═══════════════════════════════════════════════════════════════
+
+function tgShowPopup(title, message, buttons) {
+    // buttons: [{id, type, text}] — type: default/ok/cancel/close/destructive
+    return new Promise(resolve => {
+        const tg = window.Telegram && window.Telegram.WebApp;
+        if (tg && tg.showPopup) {
+            tg.showPopup({
+                title: title || "TicketBot",
+                message: message || "",
+                buttons: buttons || [{ type: "close" }],
+            }, (buttonId) => resolve(buttonId));
+        } else {
+            // fallback: последняя кнопка = подтверждение
+            const last = buttons && buttons.length ? buttons[buttons.length - 1] : null;
+            resolve(last ? last.id : null);
+        }
+    });
+}
+
+function tgConfirm(message, okText = "OK", cancelText = "Отмена") {
+    return new Promise(resolve => {
+        const tg = window.Telegram && window.Telegram.WebApp;
+        if (tg && tg.showPopup) {
+            tg.showPopup({
+                title: "Подтверждение",
+                message: message,
+                buttons: [
+                    { id: "cancel", type: "cancel", text: cancelText },
+                    { id: "ok", type: "ok", text: okText },
+                ],
+            }, (buttonId) => resolve(buttonId === "ok"));
+        } else {
+            // Вне Telegram — нативный confirm
+            resolve(window.confirm(message));
+        }
+    });
+}
+
+function tgPrompt(message, defaultValue = "") {
+    return new Promise(resolve => {
+        const tg = window.Telegram && window.Telegram.WebApp;
+        if (tg && tg.showPopup) {
+            // Telegram PopUp не поддерживает ввод текста. Показываем подсказку,
+            // что ввод через popup невозможен — возвращаем null (отмена).
+            tg.showPopup({
+                title: "Ввод не поддерживается",
+                message: message + "\n\nВвод текста недоступен в Telegram Mini App. " +
+                    "Пожалуйста, используйте поле ввода рядом.",
+                buttons: [{ id: "close", type: "close", text: "Ок" }],
+            }, () => resolve(null));
+        } else {
+            resolve(window.prompt(message, defaultValue));
+        }
+    });
+}
+
+function tgAlert(message) {
+    return new Promise(resolve => {
+        const tg = window.Telegram && window.Telegram.WebApp;
+        if (tg && tg.showAlert) {
+            tg.showAlert({ message: message }, () => resolve());
+        } else {
+            window.alert(message);
+            resolve();
+        }
+    });
+}
+
 // ─── Init ───────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -557,7 +633,7 @@ function renderTickets(tickets) {
 }
 
 async function cancelTicket(ticketId) {
-    if (!confirm("Вы уверены, что хотите отменить билет?")) return;
+    if (!(await tgConfirm("Вы уверены, что хотите отменить билет?"))) return;
 
     try {
         const result = await api(`/api/tickets/${ticketId}/cancel`, { method: "POST" });
@@ -950,7 +1026,7 @@ async function adminIssueInvitePrompt(eventId) {
 }
 
 async function adminCancelInvite(eventId, ticketId) {
-    if (!confirm("Отменить пригласительное?")) return;
+    if (!(await tgConfirm("Отменить пригласительное?"))) return;
     try {
         await api(`/api/admin/events/${eventId}/invites/${ticketId}/cancel`, { method: "POST" });
         showToast("✅ Пригласительное отменено, места возвращены");
@@ -1017,13 +1093,13 @@ async function adminToggle(eventId) {
 }
 
 async function adminDelete(eventId) {
-    if (!confirm("Удалить мероприятие?")) return;
+    if (!(await tgConfirm("Удалить мероприятие?"))) return;
     try { await api(`/api/admin/events/${eventId}/delete`, { method: "POST" }); showToast("✅ Удалено"); await showAdminEvents(); }
     catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
 async function adminCancelTicket(ticketId) {
-    if (!confirm("Отменить билет?")) return;
+    if (!(await tgConfirm("Отменить билет?"))) return;
     try {
         await api(`/api/admin/tickets/${ticketId}/cancel`, { method: "POST" });
         showToast("✅ Билет отменён");
@@ -1177,7 +1253,7 @@ async function adminSubscribePrompt(channelId) {
 }
 
 async function adminUnsubscribe(channelId) {
-    if (!confirm("Отключить подписку?")) return;
+    if (!(await tgConfirm("Отключить подписку?"))) return;
     try {
         await api(`/api/admin/channels/${channelId}/unsubscribe`, { method: "POST" });
         showToast("✅ Подписка отключена");
