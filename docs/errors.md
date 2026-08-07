@@ -937,3 +937,15 @@
   - **Бэкенд (`routes.py get_me`):** `/api/me` теперь возвращает `subscription_tier`/`is_subscription_active`/`subscription_until` пользователя.
   - **Фронтенд (`app.js`):** хелпер `isPro()` (пользователь pro ИЛИ pro-канал); скрыты/заблокированы: поле «Пригласительных» (только pro), кнопка «Выдать пригласительное» (только pro), поле «Цена» (basic → disabled).
 - **Связанные ошибки:** нет
+
+## 057 — Режим «только web»: убраны все команды бота кроме входа
+
+- **Дата:** 2026-08-07
+- **Статус:** ✅ Исправлено
+- **Описание:** Решение перейти на «только web»: бот служит только входом в веб-кабинет. Все пользовательские и админ-команды бота (покупка, билеты, /check, FSM-создание, супер-админ команды, channel_post) убраны из регистрации.
+- **Анализ:**
+  - **Подтверждено (`app/platforms/telegram/bot.py` _register_handlers):** регистрировались /events, /event, /buy, /my_tickets, /cancel, /check, /stats_all, /list_channels, /channel_info, /user_info, /admin_cancel, /broadcast, /health, /check_expired, /change_admin, FSM, channel_post.
+- **Исправление (применено, `app/platforms/telegram/bot.py`):**
+  Оставлены: /start, /menu, /admin (→ WebApp-кнопка), my_chat_member (синхронизация админов канала), deep-links buy_/invite_ в /start. Всё остальное убрано — функции работают через Mini App.
+  Тесты: удалены 8 имитационных тестов убранных функций (TestBotFlows) — они переехали в web (покрыты web-тестами).
+- **Связанные ошибки:** нет

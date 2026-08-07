@@ -82,63 +82,22 @@ class TelegramBot(PlatformBot):
         self._register_handlers()
 
     def _register_handlers(self):
-        # ─── Личные сообщения (DM) ─────────────────────
+        """Регистрация хендлеров.
+
+        Режим «только web»: бот служит только входом в веб-кабинет.
+        Оставлены:
+        - /start, /menu, /admin → WebApp-кнопка в кабинет
+        - my_chat_member → синхронизация админов канала (инфраструктура)
+        - deep-links в /start: buy_<id>, invite_<code>
+        Все админ/пользовательские команды убраны — работают через Mini App.
+        """
+        # ─── Вход в кабинет ────────────────────────────
         self.dp.message.register(self.cmd_start, Command("start"))
-        self.dp.message.register(self.cmd_events, Command("events"))
-        self.dp.message.register(self.cmd_event, Command("event"))
-        self.dp.message.register(self.cmd_buy, Command("buy"))
-        self.dp.message.register(self.cmd_my_tickets, Command("my_tickets"))
-        self.dp.message.register(self.cmd_cancel, Command("cancel"))
-
-        # ─── Админ-команды (только /menu, остальное через inline) ──
         self.dp.message.register(self.admin_menu, Command("menu"))
-        self.dp.message.register(self.admin_menu, Command("admin"))  # алиас для обратной совместимости
-
-        # ─── Команда проверки билетов ─────────────
-        self.dp.message.register(self.cmd_check, Command("check"), StateFilter(None))
-
-        # ─── Супер-админ команды (текстовые) ─────────
-        self.dp.message.register(self.sa_stats_all, Command("stats_all"))
-        self.dp.message.register(self.sa_list_channels, Command("list_channels"))
-        self.dp.message.register(self.sa_channel_info, Command("channel_info"), StateFilter(None))
-        self.dp.message.register(self.sa_user_info, Command("user_info"), StateFilter(None))
-        self.dp.message.register(self.sa_admin_cancel, Command("admin_cancel"), StateFilter(None))
-        self.dp.message.register(self.sa_broadcast, Command("broadcast"))
-        self.dp.message.register(self.sa_health, Command("health"))
-        self.dp.message.register(self.sa_check_expired, Command("check_expired"))
-        self.dp.message.register(self.sa_change_admin, Command("change_admin"), StateFilter(None))
-
-        # ─── Обработчик текстового ввода для broadcast ──
-        self.dp.message.register(self._handle_broadcast_input, StateFilter(BroadcastFSM.text))
-
-        # ─── Обработчик ввода параметра для кнопок админ-меню ──
-        self.dp.message.register(self._handle_admin_input, StateFilter(AwaitingAdminInput.text))
+        self.dp.message.register(self.admin_menu, Command("admin"))  # алиас
 
         # ─── Обновления участников канала (my_chat_member) ──
         self.dp.my_chat_member.register(self.on_chat_member_update)
-
-        # ─── FSM: шаги создания мероприятия ────────────
-        self.dp.message.register(self.fsm_title, CreateEvent.title)
-        self.dp.message.register(self.fsm_description, CreateEvent.description)
-        self.dp.message.register(self.fsm_date, CreateEvent.date)
-        self.dp.message.register(self.fsm_location, CreateEvent.location)
-        self.dp.message.register(self.fsm_price, CreateEvent.price)
-        self.dp.message.register(self.fsm_tickets, CreateEvent.tickets)
-        self.dp.message.register(self.fsm_media, CreateEvent.media, F.photo | F.video)
-        # Если прислали не фото/видео на шаге media — перенаправить на тот же хендлер
-        self.dp.message.register(self.fsm_media, CreateEvent.media)
-
-        # Отмена во время FSM
-        self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(CreateEvent))
-        self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(BroadcastFSM))
-        self.dp.message.register(self.fsm_cancel, Command("cancel"), StateFilter(AwaitingAdminInput))
-
-        # ─── Callback-запросы (инлайн-кнопки) ──────────
-        self.dp.callback_query.register(self.cmd_callback)
-
-        # ─── Сообщения из канала (channel_post) ────────
-        self.dp.channel_post.register(self.channel_cmd_events, Command("events"))
-        self.dp.channel_post.register(self.channel_cmd_event, Command("event"))
 
     # ═══════════════════════════════════════════════════════
     # ХЕНДЛЕРЫ ЛИЧНЫХ СООБЩЕНИЙ
