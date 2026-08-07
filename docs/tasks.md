@@ -173,4 +173,4 @@
 | 143 | Fix: убрать гейт is_admin из POST /api/me/channels — любой пользователь может добавить СВОЙ канал. Защита: уникальность telegram_channel_id + анти-захват (409) + DM-fallback | ✅ done | 2026-08-07 | `da58353` |
 | 144 | Refactor: убрать статусы подписок из /api/me/channels — только id, telegram_channel_id, title. Подписка только у пользователя | ✅ done | 2026-08-07 | `30a2275` |
 | 145 | Feat: публикация с выбором канала на странице мероприятия. POST /admin/events/{id}/publish принимает channel_id. Публикация многократная в разные каналы | ✅ done | 2026-08-07 | `fc5f43b` |
-| 146 | Fix: `_can_manage_event` сначала owner_user_id, потом channel_id — владелец не теряет доступ при наличии канала | ✅ done | 2026-08-07 | |
+| 146 | Fix: `_can_manage_event` сначала owner_user_id, потом channel_id — владелец не теряет доступ при наличии канала | ✅ done | 2026-08-07 | `b0ba541` |

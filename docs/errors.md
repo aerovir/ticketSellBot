@@ -1016,6 +1016,6 @@
   - **Подтверждено (routes.py `_can_manage_event`):** порядок проверок: channel → owner. При наличии channel_id владелец не проверялся.
   - **Подтверждено (deploy.yml):** SQL назначает всем мероприятиям legacy-канал.
 - **Исправление:** `_can_manage_event`: сначала `owner_user_id == current.user_id`, потом `can_manage(channel_id)`.
-- **Коммит:** будет
+- **Коммит:** `b0ba541`
 - **Тесты:** 285
 - **Связанные ошибки:** 050, 053
