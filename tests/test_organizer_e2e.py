@@ -286,11 +286,10 @@ class TestOrganizerE2E:
         assert resp.json()["is_published"] is False
 
         # ── 3. Публикация: is_published=true. Анонс — внешний side-effect
-        #        (пост в Telegram): патчим только его, бизнес-логику НЕ мокаем. ──
-        with patch(
-            "app.web.routes.post_event_announcement",
-            new_callable=AsyncMock,
-            return_value=False,
+        #        (пост в Telegram): патчим оба, бизнес-логику НЕ мокаем. ──
+        with (
+            patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=False),
+            patch("app.web.routes.send_announcement_dm", new_callable=AsyncMock, return_value=False),
         ):
             resp = await db_client.post(
                 f"/api/admin/events/{event_id}/publish", headers=HEADERS,
@@ -299,6 +298,8 @@ class TestOrganizerE2E:
         assert resp.json()["is_published"] is True
         # owner-событие без канала — анонс не публикуется (announced=false)
         assert resp.json()["announced"] is False
+        # DM-fallback вызван (announced=false → send_announcement_dm)
+        assert resp.json()["dm_sent"] is False  # замокан
 
         resp = await db_client.get(f"/api/admin/events/{event_id}", headers=HEADERS)
         assert resp.status_code == 200

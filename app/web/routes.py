@@ -19,6 +19,7 @@ from app.core.schemas import (
     BroadcastIn,
     ChangeAdminIn,
     ChangeTierIn,
+    ChannelRegisterIn,
     ChannelSubscribeIn,
     CheckInIn,
     EventCreate,
@@ -44,7 +45,7 @@ from app.web.dependencies import (
     require_super_admin,
     validate_init_data,
 )
-from app.web.announce import _get_bot, post_event_announcement, send_broadcast
+from app.web.announce import _get_bot, post_event_announcement, send_announcement_dm, send_broadcast
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
@@ -310,6 +311,105 @@ async def subscribe_me(
     }
 
 
+# ─── Мои каналы (самообслуживание) ────────────────────────────
+
+
+def _channel_status(ch) -> str:
+    """Статус канала: active если подписка активна (бот в канале), иначе inactive."""
+    if ch.is_subscription_active:
+        return "active"
+    return "inactive"
+
+
+def _channel_dict(ch) -> dict:
+    """Сериализация канала для /api/me/channels."""
+    return {
+        "id": str(ch.id),
+        "telegram_channel_id": ch.telegram_channel_id,
+        "title": ch.title,
+        "is_subscription_active": ch.is_subscription_active,
+        "subscription_tier": ch.subscription_tier.value,
+        "subscription_until": ch.subscription_until.isoformat() if ch.subscription_until else None,
+        "status": _channel_status(ch),
+    }
+
+
+@router.get("/me/channels")
+async def list_my_channels(current: CurrentUser = Depends(get_current_user)):
+    """Список каналов текущего пользователя (где он админ)."""
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        channels = await channel_svc.get_channels_by_admin(current.telegram_user_id)
+
+    return [_channel_dict(ch) for ch in channels]
+
+
+@router.post("/me/channels")
+async def register_my_channel(
+    body: ChannelRegisterIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Добавить Telegram-канал в свой кабинет.
+
+    Канал создаётся без подписки (inactive). Когда бот будет добавлен в канал,
+    my_chat_member обновит telegram_channel_id и синхронизирует админов.
+
+    Returns 201 если канал создан, 200 если уже был привязан.
+    """
+    from fastapi.responses import JSONResponse
+
+    if not current.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Нет доступа к управлению каналами",
+        )
+
+    telegram_channel_id = body.telegram_channel_id.strip()
+    if not telegram_channel_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Укажите @username или ID канала",
+        )
+
+    async with async_session_factory() as session:
+        channel_svc = ChannelService(session)
+        admin_svc = ChannelAdminService(session)
+
+        channel = await channel_svc.get_by_telegram_id(telegram_channel_id)
+
+        if channel is None:
+            # Новый канал: создать и привязать пользователя как админа
+            channel = await channel_svc.create(
+                telegram_channel_id=telegram_channel_id,
+                admin_telegram_user_id=current.telegram_user_id,
+                title=body.title or f"Канал {telegram_channel_id}",
+            )
+            await admin_svc.sync_admins(channel.id, [current.telegram_user_id])
+            await session.commit()
+            logger.info("", extra={
+                "event_type": "channel.self_registered",
+                "channel_id": str(channel.id),
+                "telegram_channel_id": telegram_channel_id,
+                "user_id": current.telegram_user_id,
+            })
+            return JSONResponse(
+                content=_channel_dict(channel),
+                status_code=status.HTTP_201_CREATED,
+            )
+
+        # Канал уже существует — проверить что пользователь админ
+        is_admin = await admin_svc.user_is_admin(channel.id, current.telegram_user_id)
+        if is_admin:
+            # Идемпотентно: канал уже привязан
+            return _channel_dict(channel)
+
+        # Защита от захвата: канал принадлежит другому пользователю
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Канал уже зарегистрирован. Добавьте бота в канал — он привяжет вас автоматически.",
+        )
+
+
 # ═══════════════════════════════════════════════════════════════
 # Админ: мероприятия
 # ═══════════════════════════════════════════════════════════════
@@ -563,7 +663,16 @@ async def admin_publish_event(
         await session.commit()
 
     announced = await post_event_announcement(uid)
-    return {"id": str(uid), "is_published": True, "announced": announced}
+    dm_sent = False
+    if not announced:
+        # Бот не в канале (или канал не указан) — отправляем анонс в личку
+        dm_sent = await send_announcement_dm(uid, current.telegram_user_id)
+    return {
+        "id": str(uid),
+        "is_published": True,
+        "announced": announced,
+        "dm_sent": dm_sent,
+    }
 
 
 @router.post("/admin/events/{event_id}/repost")

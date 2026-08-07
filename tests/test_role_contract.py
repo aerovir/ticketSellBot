@@ -244,14 +244,19 @@ class TestRoleContract:
         assert resp.status_code == 201, resp.text
         event_id = resp.json()["id"]
 
-        # Публиковать — post_event_announcement замокан (в тестах нет сети)
-        with patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=False):
+        # Публиковать — post_event_announcement и send_announcement_dm замоканы (в тестах нет сети)
+        with (
+            patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=False),
+            patch("app.web.routes.send_announcement_dm", new_callable=AsyncMock, return_value=False),
+        ):
             resp = await db_client.post(f"/api/admin/events/{event_id}/publish", headers=HEADERS)
         assert resp.status_code == 200, (
             f"КОНТРАКТ НАРУШЕН: role='user', но POST /admin/events/{event_id}/publish "
             f"вернул {resp.status_code}. Пользователь должен мочь публиковать свои мероприятия."
         )
         assert resp.json()["is_published"] is True
+        # При недоступности канала должен быть вызван DM-fallback
+        assert resp.json()["dm_sent"] is False  # замокан
 
     # ────────────────────────────────────────────────────────────────
     # Organizer (с подпиской)

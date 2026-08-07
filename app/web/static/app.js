@@ -737,10 +737,14 @@ function showAdminDashboard() {
                 <div class="admin-menu-icon">🔍</div>
                 <div>Проверка билета</div>
             </button>` : ''}
+            <button class="admin-menu-card" onclick="showMyChannels()">
+                <div class="admin-menu-icon">📢</div>
+                <div>Мои каналы</div>
+            </button>
             ${isSuper ? `
             <button class="admin-menu-card" onclick="showAdminChannels()">
-                <div class="admin-menu-icon">📢</div>
-                <div>Каналы</div>
+                <div class="admin-menu-icon">📋</div>
+                <div>Все каналы</div>
             </button>
             <button class="admin-menu-card" onclick="showAdminStats()">
                 <div class="admin-menu-icon">📊</div>
@@ -823,10 +827,11 @@ async function showAdminEventForm(eventId) {
     }
 
     const me = state.me || {};
-    const myChannels = (me.channels || []).filter(c => c.is_subscription_active);
-    const options = myChannels.map(c =>
-        `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}</option>`
-    ).join('');
+    const myChannels = me.channels || [];
+    const options = myChannels.map(c => {
+        const hasSub = c.is_subscription_active;
+        return `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}${hasSub ? '' : ' (нет подписки)'}</option>`;
+    }).join('');
 
     const dateVal = event ? toLocalInputValue(event.date) : "";
 
@@ -1286,6 +1291,89 @@ async function adminChangeAdminPrompt(channelId) {
         });
         showToast("✅ Админ сменён");
         await showAdminChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ─── Мои каналы (самообслуживание для организаторов) ────────────
+
+async function showMyChannels() {
+    setActiveTab("admin");
+    state.lastAction = "showMyChannels";
+    updateToolbar("Мои каналы", false, false);
+    showPage("my-channels");
+    showLoading();
+    try {
+        const channels = await api("/api/me/channels");
+        state.myChannels = channels;
+        renderMyChannels(channels);
+    } catch (err) {
+        hideLoading();
+        showError(err.message || "Ошибка загрузки каналов");
+    }
+}
+
+function renderMyChannels(channels) {
+    hideLoading();
+    const container = document.getElementById("myChannelsContent");
+    // Форма добавления: <input> вместо prompt() — prompt не работает в Telegram WebView
+    let html = `
+        <h2 style="margin-bottom:16px">Мои каналы</h2>
+        <div class="form-inline" style="margin-bottom:16px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+            <div class="form-field" style="flex:1;min-width:150px">
+                <label class="form-label">@username или ID канала</label>
+                <input class="form-input" id="mc_telegram_id" placeholder="@channel">
+            </div>
+            <div class="form-field" style="flex:1;min-width:120px">
+                <label class="form-label">Название (необязательно)</label>
+                <input class="form-input" id="mc_title" placeholder="Мой канал">
+            </div>
+            <button class="btn btn-primary" onclick="addMyChannel()" style="margin-bottom:0">➕ Добавить</button>
+        </div>
+    `;
+    // Enter key listener
+    setTimeout(() => {
+        const idInput = document.getElementById("mc_telegram_id");
+        if (idInput) {
+            idInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addMyChannel(); });
+        }
+    }, 0);
+
+    if (!channels || channels.length === 0) {
+        html += `<div class="empty-state"><div class="empty-icon">📢</div><h3>Нет каналов</h3><p>Добавьте канал по @username — он появится здесь</p></div>`;
+    } else {
+        html += `<div class="admin-list" style="margin-top:12px">`;
+        for (const ch of channels) {
+            const isActive = ch.status === "active";
+            html += `
+                <div class="admin-list-item">
+                    <div style="flex:1">
+                        <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
+                            <span class="badge ${isActive ? 'badge-published' : 'badge-off'}">${isActive ? '🟢 подписка активна' : '🔴 нет подписки'}</span>
+                            ${ch.subscription_tier ? `<span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>` : ''}
+                        </div>
+                        <div class="hint">${escapeHtml(ch.telegram_channel_id)}${ch.subscription_until ? ' · подписка до ' + formatDate(ch.subscription_until) : ''}</div>
+                    </div>
+                </div>`;
+        }
+        html += `</div>`;
+    }
+    container.innerHTML = html;
+}
+
+async function addMyChannel() {
+    const telegramId = document.getElementById("mc_telegram_id").value.trim();
+    if (!telegramId) { showToast("Введите @username или ID канала", true); return; }
+    const title = document.getElementById("mc_title").value.trim() || null;
+    try {
+        await api("/api/me/channels", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ telegram_channel_id: telegramId, title }),
+        });
+        showToast("✅ Канал добавлен");
+        // Освежить список каналов и профиль
+        await loadMe();
+        await showMyChannels();
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 

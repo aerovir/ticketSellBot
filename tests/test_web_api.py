@@ -335,6 +335,7 @@ class TestAPIEndpoints:
 # ═══════════════════════════════════════════════════════════════
 
 CHANNEL_ID = "11111111-1111-4111-8111-111111111111"
+CHANNEL_ID_2 = "99999999-9999-4999-8999-999999999999"
 EVENT_ID = "22222222-2222-4222-8222-222222222222"
 USER_ID = "33333333-3333-4333-8333-333333333333"
 
@@ -1660,3 +1661,122 @@ class TestOpenCreateAndSubscribe:
             )
         assert resp.status_code == 200, resp.text
         assert resp.json()["subscription_tier"] == "pro"
+
+
+# ═══════════════════════════════════════════════════════════════
+# My Channels API (самообслуживание каналов)
+# ═══════════════════════════════════════════════════════════════
+
+class TestMyChannelsApi:
+    """Self-service channel management for organizers."""
+
+    def test_post_me_channels_creates_and_syncs_admin(self, client):
+        """POST /api/me/channels — организатор добавляет новый канал → 201."""
+        mock_channel = _mock_channel()
+        mock_channel.is_subscription_active = False
+        mock_channel.subscription_until = None
+        mock_channel.subscription_tier.value = "basic"
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.ChannelService.get_by_telegram_id",
+                  new_callable=AsyncMock, return_value=None),
+            patch("app.web.routes.ChannelService.create",
+                  new_callable=AsyncMock, return_value=mock_channel),
+            patch("app.web.routes.ChannelAdminService.sync_admins",
+                  new_callable=AsyncMock) as mock_sync,
+            patch("app.web.routes.ChannelAdminService.user_is_admin",
+                  new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.post(
+                "/api/me/channels",
+                headers={"X-Skip-Auth": "1"},
+                json={"telegram_channel_id": "@newchan"},
+            )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["telegram_channel_id"] == "@test"
+        assert body["status"] == "inactive"
+        mock_sync.assert_called_once()
+
+    def test_post_me_channels_requires_organizer(self, client):
+        """POST /api/me/channels — обычный покупатель → 403."""
+        with admin_auth(is_super=False, channel_ids=[], organizer=False):
+            resp = client.post(
+                "/api/me/channels",
+                headers={"X-Skip-Auth": "1"},
+                json={"telegram_channel_id": "@chan"},
+            )
+        assert resp.status_code == 403, resp.text
+
+    def test_post_me_channels_existing_idempotent(self, client):
+        """POST /api/me/channels — канал уже есть и пользователь админ → 200."""
+        mock_channel = _mock_channel()
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.ChannelService.get_by_telegram_id",
+                  new_callable=AsyncMock, return_value=mock_channel),
+            patch("app.web.routes.ChannelAdminService.user_is_admin",
+                  new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.ChannelService.create",
+                  new_callable=AsyncMock) as mock_create,
+        ):
+            resp = client.post(
+                "/api/me/channels",
+                headers={"X-Skip-Auth": "1"},
+                json={"telegram_channel_id": "@test"},
+            )
+        assert resp.status_code == 200, resp.text
+        mock_create.assert_not_called()
+
+    def test_post_me_channels_existing_not_admin_409(self, client):
+        """POST /api/me/channels — канал есть но пользователь не админ → 409."""
+        mock_channel = _mock_channel()
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.ChannelService.get_by_telegram_id",
+                  new_callable=AsyncMock, return_value=mock_channel),
+            patch("app.web.routes.ChannelAdminService.user_is_admin",
+                  new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.post(
+                "/api/me/channels",
+                headers={"X-Skip-Auth": "1"},
+                json={"telegram_channel_id": "@test"},
+            )
+        assert resp.status_code == 409, resp.text
+
+    def test_post_me_channels_empty_id_400(self, client):
+        """POST /api/me/channels — пустой telegram_channel_id → 400."""
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+        ):
+            resp = client.post(
+                "/api/me/channels",
+                headers={"X-Skip-Auth": "1"},
+                json={"telegram_channel_id": ""},
+            )
+        assert resp.status_code == 400, resp.text
+
+    def test_get_me_channels_list_with_status(self, client):
+        """GET /api/me/channels — список каналов пользователя со статусами."""
+        active_ch = _mock_channel()
+        active_ch.is_subscription_active = True
+        inactive_ch = _mock_channel()
+        inactive_ch.id = CHANNEL_ID_2
+        inactive_ch.is_subscription_active = False
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.ChannelService.get_channels_by_admin",
+                  new_callable=AsyncMock, return_value=[active_ch, inactive_ch]),
+        ):
+            resp = client.get("/api/me/channels", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        channels = resp.json()
+        assert len(channels) == 2
+        # active — бот в канале (is_subscription_active=True означает что канал синхронизирован ботом)
+        assert channels[0]["status"] == "active"
+        assert channels[1]["status"] == "inactive"

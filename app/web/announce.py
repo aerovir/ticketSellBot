@@ -69,6 +69,36 @@ async def post_event_announcement(event_id: UUID) -> bool:
         return False
 
 
+async def send_announcement_dm(event_id: UUID, user_telegram_id: str) -> bool:
+    """Отправить анонс мероприятия в личные сообщения пользователю.
+
+    Fallback когда бот не в канале: пользователь всё равно получает анонс.
+    """
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(event_id)
+        if event is None:
+            return False
+
+    bot = _get_bot()
+    if bot is None:
+        return False
+
+    text = format_event_text(event, mode="full")
+    try:
+        await bot.send_message(
+            chat_id=int(user_telegram_id),
+            text=f"📢 <b>Анонс мероприятия</b>\n\n{text}\n\n"
+                 f"<i>Бот не в канале — анонс отправлен вам в личные сообщения.</i>",
+            parse_mode="HTML",
+        )
+        logger.info("Анонс мероприятия %s отправлен в DM пользователю %s", event_id, user_telegram_id)
+        return True
+    except Exception as e:
+        logger.error("Ошибка отправки анонса в DM %s: %s", event_id, e)
+        return False
+
+
 async def send_broadcast(text: str) -> tuple[int, int]:
     """Разослать сообщение во все активные каналы.
 

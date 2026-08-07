@@ -169,6 +169,12 @@ class SubscribeMeIn(BaseModel):
     tier: SubscriptionTier = SubscriptionTier.basic
 
 
+class ChannelRegisterIn(BaseModel):
+    """Связать Telegram-канал с пользователем (без активации подписки)."""
+    telegram_channel_id: str   # @username или числовой ID
+    title: Optional[str] = None
+
+
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):
