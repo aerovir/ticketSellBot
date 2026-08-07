@@ -26,6 +26,7 @@ from app.core.schemas import (
     InviteIssueIn,
     MeUpdateIn,
     SubscribeIn,
+    SubscribeMeIn,
     UpdateSubscriptionIn,
 )
 from app.core.services import (
@@ -285,6 +286,30 @@ async def update_me(
     return {"id": str(current.user_id), "name": user.name if user else None}
 
 
+@router.post("/me/subscription")
+async def subscribe_me(
+    body: SubscribeMeIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Покупка/активация подписки пользователя (факт покупки = активация функций).
+
+    MVP: активация подписки без реальной оплаты. Выбор tier (basic/pro).
+    """
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.activate_subscription(
+            current.user_id, days=30, tier=body.tier,
+        )
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+        await session.commit()
+
+    return {
+        "subscription_tier": user.subscription_tier.value,
+        "subscription_until": user.subscription_until.isoformat() if user.subscription_until else None,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # Админ: мероприятия
 # ═══════════════════════════════════════════════════════════════
@@ -340,7 +365,7 @@ async def admin_list_events(current: CurrentUser = Depends(require_admin)):
 @router.post("/admin/events", status_code=status.HTTP_201_CREATED)
 async def admin_create_event(
     body: EventCreate,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Создать мероприятие (черновик).
 

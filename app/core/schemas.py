@@ -164,6 +164,11 @@ class ChangeTierIn(BaseModel):
     tier: SubscriptionTier
 
 
+class SubscribeMeIn(BaseModel):
+    """Покупка/активация подписки пользователя."""
+    tier: SubscriptionTier = SubscriptionTier.basic
+
+
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):

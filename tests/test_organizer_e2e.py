@@ -55,23 +55,27 @@ class TestOrganizerE2E:
         user = await _organizer_user(db_session)
         await db_session.commit()
 
-        # ── Фаза «покупатель» (без подписки, без канала): 403 + role=user ──
+        # ── Фаза «покупатель» (без подписки, без канала): создание ОТКРЫТО, role=user ──
         resp = await db_client.get("/api/me", headers=HEADERS)
         assert resp.status_code == 200
         assert resp.json()["role"] == "user"
 
+        # Создание бесплатного открыто даже без подписки (201)
         resp = await db_client.post(
             "/api/admin/events",
             headers=HEADERS,
             json=_event_payload(owner_user_id=str(user.id)),
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 201, resp.text
 
-        # ── Активируем реальную подписку пользователя ──
-        await UserService(db_session).activate_subscription(
-            user.id, days=30, tier=SubscriptionTier.basic,
+        # ── Активируем подписку пользователя через РЕАЛЬНЫЙ API (покупка) ──
+        resp = await db_client.post(
+            "/api/me/subscription",
+            headers=HEADERS,
+            json={"tier": "basic"},
         )
-        await db_session.commit()
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["subscription_tier"] == "basic"
 
         # role=organizer
         resp = await db_client.get("/api/me", headers=HEADERS)
@@ -534,3 +538,60 @@ class TestOrganizerE2E:
             f"/api/admin/events/{uuid.uuid4()}/toggle", headers=HEADERS,
         )
         assert resp.status_code == 403, resp.text
+
+
+class TestRealUserPath:
+    """Реальный путь пользователя через API (без моков ролей).
+
+    Создание открыто для всех; платное — только после покупки pro.
+    Факт покупки = активация функций матрицы.
+    """
+
+    async def test_real_user_path_creation_and_subscription(self, db_client, db_session):
+        """Пользователь: создать бесплатное → платное 409 → купить pro → платное 201."""
+        user = await _organizer_user(db_session)
+        await db_session.commit()
+
+        # 1. Роль user (без подписки)
+        resp = await db_client.get("/api/me", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "user"
+
+        # 2. Создание бесплатного — ОТКРЫТО (201)
+        resp = await db_client.post(
+            "/api/admin/events",
+            headers=HEADERS,
+            json=_event_payload(owner_user_id=str(user.id), price=0, total=10),
+        )
+        assert resp.status_code == 201, resp.text
+        free_event_id = resp.json()["id"]
+
+        # 3. Платное без pro → 409
+        resp = await db_client.post(
+            "/api/admin/events",
+            headers=HEADERS,
+            json=_event_payload(owner_user_id=str(user.id), price=500, total=10),
+        )
+        assert resp.status_code == 409, resp.text
+
+        # 4. Покупка pro через реальный API
+        resp = await db_client.post(
+            "/api/me/subscription",
+            headers=HEADERS,
+            json={"tier": "pro"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["subscription_tier"] == "pro"
+
+        # 5. Роль → organizer
+        resp = await db_client.get("/api/me", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "organizer"
+
+        # 6. Платное теперь можно → 201
+        resp = await db_client.post(
+            "/api/admin/events",
+            headers=HEADERS,
+            json=_event_payload(owner_user_id=str(user.id), price=500, total=10),
+        )
+        assert resp.status_code == 201, resp.text

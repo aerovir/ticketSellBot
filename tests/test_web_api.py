@@ -1594,3 +1594,63 @@ class TestQrGate:
         ):
             resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
+
+
+class TestOpenCreateAndSubscribe:
+    """Создание открыто + покупка подписки (TDD: до реализации)."""
+
+    def test_create_free_without_subscription(self, client):
+        """Пользователь БЕЗ подписки создаёт бесплатное мероприятие → 201."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.is_published = False
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.EventService.create", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.post(
+                "/api/admin/events",
+                headers={"X-Skip-Auth": "1"},
+                json={
+                    "title": "Free Event", "date": "2026-12-01T19:00:00Z",
+                    "price": 0, "total_tickets": 50,
+                    "channel_id": None, "owner_user_id": USER_ID,
+                },
+            )
+        assert resp.status_code == 201, resp.text
+
+    def test_create_paid_without_pro(self, client):
+        """Платное мероприятие БЕЗ pro-подписки → 409."""
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.EventService.create", new_callable=AsyncMock, side_effect=ValueError("Нужна подписка Pro")),
+        ):
+            resp = client.post(
+                "/api/admin/events",
+                headers={"X-Skip-Auth": "1"},
+                json={
+                    "title": "Paid", "date": "2026-12-01T19:00:00Z",
+                    "price": 500, "total_tickets": 50,
+                    "channel_id": None, "owner_user_id": USER_ID,
+                },
+            )
+        assert resp.status_code == 409, resp.text
+
+    def test_buy_subscription_me(self, client):
+        """POST /api/me/subscription — покупка подписки (активация)."""
+        _mock_user = Mock(id=_UUID(USER_ID))
+        _mock_user.subscription_tier.value = "pro"
+        _mock_user.subscription_until = None
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.UserService.activate_subscription", new_callable=AsyncMock, return_value=_mock_user),
+        ):
+            resp = client.post(
+                "/api/me/subscription",
+                headers={"X-Skip-Auth": "1"},
+                json={"tier": "pro"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["subscription_tier"] == "pro"
