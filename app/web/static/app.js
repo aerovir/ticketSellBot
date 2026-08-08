@@ -473,7 +473,12 @@ function hideLoading() {
 async function showEvents() {
     state.lastAction = "showEvents";
     setActiveTab("events");
-    updateToolbar("TicketBot", false, true);
+    updateToolbar("Мероприятия", false, false);
+    // Организаторы видят свои мероприятия с управлением, покупатели — публичную ленту
+    if (state.role !== "user") {
+        await showAdminEvents();
+        return;
+    }
     showPage("events");
     showLoading();
 
