@@ -125,9 +125,17 @@ async def db_client(db_session: AsyncSession):
 
     factory = _OneSessionFactory()
 
+    # В тестах get_session() отдаёт db_session напрямую (без close).
+    # FastAPI резолвит Depends(get_session) один раз на запрос.
+    async def _test_get_session():
+        yield db_session
+
     with (
         patch("app.web.routes.async_session_factory", factory),
         patch("app.web.dependencies.async_session_factory", factory),
+        patch("app.web.routes.get_session", _test_get_session),
+        patch("app.web.dependencies.get_session", _test_get_session),
+        patch("app.core.database.get_session", _test_get_session),
         patch("app.web.server.init_db", new_callable=AsyncMock),
         patch("app.web.server.close_db", new_callable=AsyncMock),
     ):
