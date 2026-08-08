@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.core.database import init_db, close_db
 from app.web.routes import router
+from prometheus_fastapi_instrumentator import Instrumentator
 
 logger = logging.getLogger("ticketbot.web")
 
@@ -80,6 +81,9 @@ def create_app() -> FastAPI:
 
     # Include API routes
     app.include_router(router, prefix="/api")
+
+    # Prometheus metrics endpoint: /metrics
+    Instrumentator().instrument(app).expose(app)
 
     # Root serves the Telegram Mini App directly.
     # НЕ используем редирект: Telegram передаёт initData только когда

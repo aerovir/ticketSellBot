@@ -28,6 +28,28 @@ services:
       - grafana-data:/var/lib/grafana
       - ./deploy/grafana/datasources.yml:/etc/grafana/provisioning/datasources/loki.yml
 
+  # ─── Prometheus — сбор метрик ──────────────────────────
+  prometheus:
+    image: prom/prometheus
+    container_name: ticketbot-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+
+  # ─── PostgreSQL Exporter — метрики БД ──────────────────
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter
+    container_name: ticketbot-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@db:5432/ticketbot?sslmode=disable"
+
 volumes:
   loki-data:
   grafana-data:
+  prometheus-data:
