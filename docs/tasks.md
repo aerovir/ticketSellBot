@@ -174,4 +174,5 @@
 | 144 | Refactor: убрать статусы подписок из /api/me/channels — только id, telegram_channel_id, title. Подписка только у пользователя | ✅ done | 2026-08-07 | `30a2275` |
 | 145 | Feat: публикация с выбором канала на странице мероприятия. POST /admin/events/{id}/publish принимает channel_id. Публикация многократная в разные каналы | ✅ done | 2026-08-07 | `fc5f43b` |
 | 146 | Fix: `_can_manage_event` сначала owner_user_id, потом channel_id — владелец не теряет доступ при наличии канала | ✅ done | 2026-08-07 | `b0ba541` |
-| 147 | Arch: единая сессия на запрос — `Depends(get_session)` вместо `async with async_session_factory()` в routes/dependencies/announce. Пулу: pool_recycle=1800 + pool_pre_ping=True | 📋 planned | 2026-08-08 | — |
+| 147 | Perf: pool конфигурация — pool_recycle=1800, pool_pre_ping=True, pool_size=5, max_overflow=5. Предотвращает мёртвые соединения после OOM-kill | ✅ done | 2026-08-08 | `48e18ef` |
+| 148 | Arch: единая сессия на запрос — `Depends(get_session)` (отложено: требует переработки тестовой инфраструктуры) | 📋 planned | 2026-08-08 | — |
