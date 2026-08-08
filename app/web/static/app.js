@@ -142,7 +142,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (eventId) {
         await showEventDetail(eventId);
     } else {
-        await showEvents();
+        await showHome();
     }
 });
 
@@ -215,27 +215,6 @@ function renderTabBar() {
         if (bar) bar.style.display = "none";
         return;
     }
-    const tabs = [
-        { id: "events", label: "Мероприятия", icon: "🎫", fn: "showEvents" },
-        { id: "tickets", label: "Билеты", icon: "🎟", fn: "showMyTickets" },
-        { id: "profile", label: "Профиль", icon: "👤", fn: "showProfile" },
-        // Панель доступна всем: открытое создание мероприятий для обычных пользователей,
-        // организаторы дополнительно видят проверку билетов и статистику.
-        { id: "admin", label: "Панель", icon: "🎛", fn: "showAdminDashboard" },
-    ];
-    if (state.role !== "user") {
-        tabs.push({ id: "checkin", label: "Проверка", icon: "🔍", fn: "showCheckin" });
-    }
-    if (state.role === "super_admin") {
-        tabs.push({ id: "channels", label: "Каналы", icon: "📢", fn: "showAdminChannels" });
-        tabs.push({ id: "stats", label: "Статистика", icon: "📊", fn: "showAdminStats" });
-    }
-    bar.innerHTML = tabs.map(t =>
-        `<button class="tab" data-tab="${t.id}" onclick="window['${t.fn}']()">
-            <span class="tab-icon">${t.icon}</span>
-            <span>${t.label}</span>
-        </button>`
-    ).join("");
     bar.style.display = "flex";
 }
 
@@ -243,6 +222,108 @@ function setActiveTab(tabId) {
     document.querySelectorAll("#tabBar .tab").forEach(b => {
         b.classList.toggle("active", b.dataset.tab === tabId);
     });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PAGE: Home Dashboard
+// ═══════════════════════════════════════════════════════════════
+
+async function showHome() {
+    if (!state.me) { try { await loadMe(); } catch (e) { showError("Не удалось загрузить профиль"); return; } }
+    setActiveTab("home");
+    updateHeader("TicketBot");
+    showPage("home");
+    showLoading();
+
+    try {
+        const [events, tickets] = await Promise.all([
+            api("/api/events").catch(() => []),
+            api("/api/tickets").catch(() => []),
+        ]);
+        state.events = events;
+        state.tickets = tickets;
+    } catch (e) { /* не критично */ }
+
+    hideLoading();
+    renderHomeDashboard();
+}
+
+function renderHomeDashboard() {
+    const container = document.getElementById("homeContent");
+    const me = state.me || {};
+    const isOrganizer = state.role !== "user";
+    const isSuper = state.role === "super_admin";
+
+    const events = state.events || [];
+    const tickets = state.tickets || [];
+    const channels = me.channels || [];
+
+    let cards = [
+        { icon: "🎫", value: events.length, label: "Мероприятий", onclick: "showEvents()" },
+        { icon: "🎟", value: tickets.length, label: "Билетов", onclick: "showMyTickets()" },
+    ];
+
+    if (isOrganizer) {
+        cards.push({ icon: "📢", value: channels.length, label: "Каналов", onclick: "showMyChannels()" });
+        cards.push({ icon: "🔍", value: "Вход", label: "Проверка билета", onclick: "showCheckin()" });
+    }
+
+    if (isSuper) {
+        cards.push({ icon: "👥", value: "—", label: "Пользователи", onclick: "showAdminUserList()" });
+        cards.push({ icon: "📊", value: "—", label: "Статистика", onclick: "showAdminStats()" });
+    }
+
+    let html = `<h2 style="padding:16px 16px 0">Привет, ${escapeHtml(me.name || 'Гость')}!</h2>`;
+    html += `<p style="padding:0 16px 12px;color:var(--tg-hint)">${roleLabel(state.role)}</p>`;
+    html += `<div class="dashboard-grid">`;
+    for (const c of cards) {
+        html += `
+            <div class="dashboard-card" onclick="${c.onclick}">
+                <div class="dashboard-card-icon">${c.icon}</div>
+                <div class="dashboard-card-value">${c.value}</div>
+                <div class="dashboard-card-label">${c.label}</div>
+            </div>`;
+    }
+    html += `</div>`;
+
+    // Список мероприятий на главной
+    if (events.length > 0) {
+        html += `<div class="section-header">📋 Ближайшие мероприятия</div>`;
+        for (const e of events.slice(0, 3)) {
+            html += `
+                <div class="event-card" style="margin:0 16px 8px" onclick="showEventDetail('${e.id}')">
+                    <h3>${escapeHtml(e.title)}</h3>
+                    <div class="hint">📅 ${formatDate(e.date)} · ${e.price > 0 ? formatPrice(e.price) : 'Бесплатно'} · ${e.available_tickets}/${e.total_tickets}</div>
+                </div>`;
+        }
+    }
+
+    container.innerHTML = html;
+}
+
+function roleLabel(role) {
+    const labels = { user: "Покупатель", organizer: "Организатор", super_admin: "Супер-админ" };
+    return labels[role] || role;
+}
+
+function updateHeader(title) {
+    document.getElementById("headerTitle").textContent = title;
+}
+
+async function showAdminUserList() {
+    setActiveTab("home");
+    updateHeader("Пользователи");
+    try {
+        const users = await api("/api/admin/users");
+        let html = `<h2 style="padding:16px">👥 Пользователи (${users.length})</h2>`;
+        for (const u of users) {
+            html += `<div class="event-card" style="margin:0 16px 8px">
+                <div><b>${escapeHtml(u.name || u.telegram_user_id)}</b></div>
+                <div class="hint">ID: ${escapeHtml(u.telegram_user_id)} · ${u.subscription_tier}</div>
+            </div>`;
+        }
+        document.getElementById("homeContent").innerHTML = html;
+    } catch (e) { showToast(e.message, true); }
 }
 
 async function showProfile() {
@@ -341,9 +422,10 @@ function showPage(pageId) {
 }
 
 function updateToolbar(title, showBack = false, showTickets = true) {
-    document.getElementById("toolbarTitle").textContent = title;
-    document.getElementById("backBtn").style.display = showBack ? "inline-block" : "none";
-    document.getElementById("myTicketsBtn").style.display = showTickets ? "inline-block" : "none";
+    updateHeader(title);
+    // Legacy toolbar elements — скрыты в новом дизайне
+    const tb = document.getElementById("toolbarTitle");
+    if (tb) tb.textContent = title;
 }
 
 // Back stack for simple navigation

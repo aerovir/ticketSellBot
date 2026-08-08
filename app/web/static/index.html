@@ -10,11 +10,9 @@
 <body>
     <div id="app">
 
-        <!-- Toolbar -->
-        <div class="toolbar" id="toolbar">
-            <button class="toolbar-btn" id="backBtn" onclick="goBack()">← Назад</button>
-            <span class="toolbar-title" id="toolbarTitle">TicketBot</span>
-            <button class="toolbar-btn" id="myTicketsBtn" onclick="showMyTickets()">🎫</button>
+        <!-- Header -->
+        <div class="header" id="header">
+            <span class="header-title" id="headerTitle">TicketBot</span>
         </div>
 
         <!-- Loading overlay -->
@@ -26,25 +24,24 @@
         <!-- Error toast -->
         <div class="toast" id="toast"></div>
 
+        <!-- ═══ Page: Home Dashboard ═══ -->
+        <div class="page active" id="page-home">
+            <div class="page-content" id="homeContent"></div>
+        </div>
+
         <!-- ═══ Page: Events List ═══ -->
-        <div class="page active" id="page-events">
-            <div class="page-content" id="eventsContent">
-                <!-- Rendered by JS -->
-            </div>
+        <div class="page" id="page-events">
+            <div class="page-content" id="eventsContent"></div>
         </div>
 
         <!-- ═══ Page: Event Detail ═══ -->
         <div class="page" id="page-event">
-            <div class="page-content" id="eventContent">
-                <!-- Rendered by JS -->
-            </div>
+            <div class="page-content" id="eventContent"></div>
         </div>
 
         <!-- ═══ Page: Confirm ═══ -->
         <div class="page" id="page-confirm">
-            <div class="page-content" id="confirmContent">
-                <!-- Rendered by JS -->
-            </div>
+            <div class="page-content" id="confirmContent"></div>
         </div>
 
         <!-- ═══ Page: Success ═══ -->
@@ -56,15 +53,13 @@
                 <code class="ticket-id" id="successTicketId" onclick="copyTicketId()">—</code>
                 <p class="hint" id="successHint">Нажмите на номер, чтобы скопировать</p>
                 <button class="btn btn-primary" onclick="showMyTickets()">🎫 Мои билеты</button>
-                <button class="btn btn-secondary" onclick="showEvents()">← К списку</button>
+                <button class="btn btn-secondary" onclick="showHome()">← На главную</button>
             </div>
         </div>
 
         <!-- ═══ Page: My Tickets ═══ -->
         <div class="page" id="page-tickets">
-            <div class="page-content" id="ticketsContent">
-                <!-- Rendered by JS -->
-            </div>
+            <div class="page-content" id="ticketsContent"></div>
         </div>
 
         <!-- ═══ Page: Error ═══ -->
@@ -74,7 +69,7 @@
                 <h2>Что-то пошло не так</h2>
                 <p id="errorMessage">Произошла ошибка. Попробуйте снова.</p>
                 <button class="btn btn-primary" onclick="retryLastAction()">🔄 Повторить</button>
-                <button class="btn btn-secondary" onclick="showEvents()">← К списку</button>
+                <button class="btn btn-secondary" onclick="showHome()">← На главную</button>
             </div>
         </div>
 
@@ -113,7 +108,7 @@
             <div class="page-content" id="adminChannelsContent"></div>
         </div>
 
-        <!-- ═══ Page: My Channels (organizer self-service) ═══ -->
+        <!-- ═══ Page: My Channels ═══ -->
         <div class="page" id="page-my-channels">
             <div class="page-content" id="myChannelsContent"></div>
         </div>
@@ -145,8 +140,25 @@
 
     </div>
 
-    <!-- ═══ Bottom tab bar (role-based) ═══ -->
-    <div class="tab-bar" id="tabBar" style="display:none"></div>
+    <!-- ═══ Bottom Tab Bar ═══ -->
+    <div class="tab-bar" id="tabBar" style="display:none">
+        <button class="tab" data-tab="home" onclick="showHome()">
+            <span class="tab-icon">🏠</span>
+            <span class="tab-label">Главная</span>
+        </button>
+        <button class="tab" data-tab="events" onclick="showEvents()">
+            <span class="tab-icon">🎫</span>
+            <span class="tab-label">Мероприятия</span>
+        </button>
+        <button class="tab" data-tab="tickets" onclick="showMyTickets()">
+            <span class="tab-icon">🎟</span>
+            <span class="tab-label">Билеты</span>
+        </button>
+        <button class="tab" data-tab="me" onclick="showProfile()">
+            <span class="tab-icon">👤</span>
+            <span class="tab-label">Я</span>
+        </button>
+    </div>
 
     <script src="/static/app.js"></script>
 </body>
