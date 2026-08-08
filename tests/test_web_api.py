@@ -312,10 +312,11 @@ class TestAPIEndpoints:
         assert resp.json()[0]["event_title"] == "Test Event"
 
     def test_cancel_ticket_success(self, client):
-        """POST /api/tickets/{id}/cancel — успешная отмена."""
+        """POST /api/tickets/{id}/cancel — успешная отмена + DM."""
         with (
             patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock) as mock_user,
             patch("app.web.routes.TicketService.cancel_ticket", new_callable=AsyncMock) as mock_cancel,
+            patch("app.web.routes._send_ticket_dm", new_callable=AsyncMock, return_value=False),
         ):
             mock_ticket = Mock()
             mock_ticket.id = "660e8400-e29b-41d4-a716-446655440001"

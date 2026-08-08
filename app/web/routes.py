@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.core.database import async_session_factory
-from app.core.models import PlatformType
+from app.core.models import PlatformType, Event
 from app.core.qr import generate_qr_png
 from app.core.schemas import (
     BroadcastIn,
@@ -224,6 +224,20 @@ async def cancel_ticket(ticket_id: str, auth_data: dict = Depends(validate_init_
         try:
             ticket = await ticket_svc.cancel_ticket(tid, user.id)
             await session.commit()
+
+            # Отправить уведомление о возврате в личные сообщения
+            try:
+                event = await session.get(Event, ticket.event_id)
+                event_title = event.title if event else "—"
+            except Exception:
+                event_title = "—"
+            await _send_ticket_dm(
+                platform_user_id,
+                f"↩️ <b>Билет возвращён</b>\n"
+                f"🎫 {event_title}\n"
+                f"🔑 Код: <code>{ticket.validation_code or '—'}</code>",
+            )
+
             return {
                 "ticket_id": str(ticket.id),
                 "status": ticket.status.value,
