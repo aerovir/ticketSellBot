@@ -1,7 +1,7 @@
 services:
   # ─── База данных ──────────────────────────────────────────
   db:
-    image: postgres:16-alpine
+    image: postgres:16
     container_name: ticketbot-db
     restart: unless-stopped
     environment:

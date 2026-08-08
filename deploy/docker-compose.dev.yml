@@ -10,7 +10,7 @@
 
 services:
   db-dev:
-    image: postgres:16-alpine
+    image: postgres:16
     container_name: ticketbot-dev-db
     restart: unless-stopped
     environment:
