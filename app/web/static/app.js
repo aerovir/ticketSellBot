@@ -259,7 +259,7 @@ function renderHomeDashboard() {
     const channels = me.channels || [];
 
     let cards = [
-        { icon: "🎫", value: events.length, label: "Мероприятий", onclick: "showEvents()" },
+        { icon: "🎫", value: events.length, label: "Мероприятий", onclick: "showAdminEvents()" },
         { icon: "🎟", value: tickets.length, label: "Билетов", onclick: "showMyTickets()" },
     ];
 
