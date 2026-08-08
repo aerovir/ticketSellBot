@@ -501,13 +501,14 @@ function renderEvents(events) {
             <div class="empty-state">
                 <div class="empty-icon">🎫</div>
                 <h3>Нет предстоящих мероприятий</h3>
-                <p>Следите за анонсами в нашем канале</p>
+                <button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>
             </div>
         `;
         return;
     }
 
-    let html = '<div class="events-list">';
+    let html = '<button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>';
+    html += '<div class="events-list" style="margin-top:12px">';
     for (const e of events) {
         const dateStr = formatDate(e.date);
         const soldOut = e.available_tickets <= 0;
