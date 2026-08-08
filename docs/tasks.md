@@ -178,4 +178,5 @@
 | 148 | Arch: get_current_user → Depends(get_session) + test patch. Pool config: pool_recycle=1800 + pool_pre_ping=True (48e18ef). Routes пока на async with (конвертация 40 эндпоинтов — отдельная задача) | ✅ done (частично) | 2026-08-08 | `3c85935` |
 | 150 | Arch: конвертация routes.py на Depends(get_session) | ❌ cancelled | 2026-08-08 | — |
 | 151 | Docs: инструкция пользователя (user-manual.md) — для человека без IT-навыков | ✅ done | 2026-08-08 | `3987279` |
+| 152 | Feat: DM-доставка билета при покупке через Mini App — билет + код в личку Telegram | ✅ done | 2026-08-08 | `82538e9` |
 | 149 | Feat: Prometheus + postgres_exporter + FastAPI instrumentator — /metrics, метрики БД, Grafana datasource | ✅ done | 2026-08-08 | `44c68c4` |
