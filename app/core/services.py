@@ -1266,6 +1266,7 @@ class TicketService:
             "payment_id": str(payment.id),
             "payment_status": payment.status.value,
             "purchase_date": ticket.purchase_date.isoformat(),
+            "validation_code": ticket.validation_code,
         }
 
     async def cancel_ticket(self, ticket_id: uuid.UUID, user_id: uuid.UUID) -> Ticket:

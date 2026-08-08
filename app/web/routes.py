@@ -51,6 +51,23 @@ logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
 
 
+async def _send_ticket_dm(telegram_user_id: str, text: str) -> bool:
+    """Отправить сообщение о билете в личные сообщения пользователю."""
+    bot = _get_bot()
+    if bot is None:
+        return False
+    try:
+        await bot.send_message(
+            chat_id=int(telegram_user_id),
+            text=text,
+            parse_mode="HTML",
+        )
+        return True
+    except Exception as e:
+        logger.warning("Не удалось отправить DM пользователю %s: %s", telegram_user_id, e)
+        return False
+
+
 # ═══════════════════════════════════════════════════════════════
 # Events
 # ═══════════════════════════════════════════════════════════════
@@ -142,6 +159,16 @@ async def buy_ticket(event_id: str, auth_data: dict = Depends(validate_init_data
         try:
             result = await ticket_svc.buy_ticket_webapp(user.id, uid)
             await session.commit()
+
+            # Отправить билет в личные сообщения Telegram
+            code_text = f"\n🔑 Код: <code>{result['validation_code']}</code>" if result.get("validation_code") else ""
+            await _send_ticket_dm(
+                platform_user_id,
+                f"✅ Билет куплен!\n"
+                f"🎫 {result['event_title']}\n"
+                f"📅 {result['event_date']}{code_text}",
+            )
+
             return result
         except ValueError as e:
             await session.rollback()

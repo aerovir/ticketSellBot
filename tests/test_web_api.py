@@ -248,11 +248,13 @@ class TestAPIEndpoints:
             "payment_id": "770e8400-e29b-41d4-a716-446655440002",
             "payment_status": "pending",
             "purchase_date": "2026-07-10T12:00:00+00:00",
+            "validation_code": "TEST-CODE",
         }
 
         with (
             patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock) as mock_user,
             patch("app.web.routes.TicketService.buy_ticket_webapp", new_callable=AsyncMock) as mock_buy,
+            patch("app.web.routes._send_ticket_dm", new_callable=AsyncMock, return_value=False),
         ):
             mock_user.return_value = Mock(id="550e8400-e29b-41d4-a716-446655440000")
             mock_buy.return_value = mock_result
