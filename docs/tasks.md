@@ -179,4 +179,5 @@
 | 150 | Arch: конвертация routes.py на Depends(get_session) | ❌ cancelled | 2026-08-08 | — |
 | 151 | Docs: инструкция пользователя (user-manual.md) — для человека без IT-навыков | ✅ done | 2026-08-08 | `3987279` |
 | 152 | Feat: DM-доставка билета при покупке через Mini App — билет + код в личку Telegram | ✅ done | 2026-08-08 | `82538e9` |
+| 153 | Feat: soft-delete пользователей — User.deleted_at, DELETE /admin/users/{id}, GET /admin/users | ✅ done | 2026-08-08 | `8bc88e5` |
 | 149 | Feat: Prometheus + postgres_exporter + FastAPI instrumentator — /metrics, метрики БД, Grafana datasource | ✅ done | 2026-08-08 | `44c68c4` |
