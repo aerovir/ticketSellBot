@@ -22,10 +22,9 @@ from uuid import UUID
 from fastapi import Depends, Header, HTTPException, status
 
 from app.config import settings
-from app.core.database import get_session
+from app.core.database import async_session_factory
 from app.core.models import PlatformType
 from app.core.services import ChannelService, UserService
-from sqlalchemy.ext.asyncio import AsyncSession
 
 # Maximum age of initData in seconds (24 hours)
 _MAX_INIT_DATA_AGE = 86400
@@ -194,32 +193,38 @@ class CurrentUser:
         return self.is_super_admin or channel_id in self.managed_channel_ids
 
 
-async def get_current_user(
-    auth_data: dict = Depends(validate_init_data),
-    session: AsyncSession = Depends(get_session),
-) -> CurrentUser:
+async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> CurrentUser:
     """Resolve the initData user into a CurrentUser with role.
 
-    Использует единую сессию на запрос (Depends(get_session)).
+    NOTE (deliberate simplification vs the bot): admin status is DB-only —
+    channel_admins membership + active subscription. The bot additionally
+    verifies via Telegram get_chat_member and auto-removes stale admins;
+    the web cannot (no synchronous bot access). channel_admins stays fresh
+    because the bot syncs it on subscribe / on_chat_member_update / change_admin.
     """
     user_data = auth_data.get("user", {})
     platform_user_id = str(user_data.get("id", "0"))
     name = user_data.get("first_name", "")
 
-    user_svc = UserService(session)
-    user = await user_svc.get_or_create(
-        platform=PlatformType.telegram,
-        platform_user_id=platform_user_id,
-        name=name,
-    )
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_or_create(
+            platform=PlatformType.telegram,
+            platform_user_id=platform_user_id,
+            name=name,
+        )
 
-    channel_svc = ChannelService(session)
-    raw_ids = await channel_svc.get_channel_ids_by_admin(platform_user_id)
-    managed = [
-        cid for cid in raw_ids
-        if await channel_svc.is_subscription_valid(cid)
-    ]
-    is_organizer = await user_svc.is_subscription_valid(user.id)
+        channel_svc = ChannelService(session)
+        raw_ids = await channel_svc.get_channel_ids_by_admin(platform_user_id)
+        managed = [
+            cid for cid in raw_ids
+            if await channel_svc.is_subscription_valid(cid)
+        ]
+        # Организатор без канала: активная подписка пользователя
+        is_organizer = await user_svc.is_subscription_valid(user.id)
+        # Persist the row if get_or_create inserted a new user (read-only requests
+        # still carry this dependency); commit is a no-op when nothing changed.
+        await session.commit()
 
     return CurrentUser(
         user_id=user.id,

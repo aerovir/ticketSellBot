@@ -29,11 +29,6 @@ from app.core.models import PlatformType, SubscriptionTier
 from app.core.services import UserService, EventService, TicketService, ChannelService
 
 
-async def _noop():
-    """Перехватчик session.close() для тестовой сессии."""
-    return None
-
-
 # ─── Настройка тестовой БД ─────────────────────────────────────
 
 TEST_DB_URL = os.getenv(
@@ -135,12 +130,9 @@ async def db_client(db_session: AsyncSession):
     async def _test_get_session():
         yield db_session
 
-    # get_session() вызывает close() в finally — перехватываем через no-op
-    db_session.close = _noop
-
     with (
         patch("app.web.routes.async_session_factory", factory),
-        patch("app.core.database.async_session_factory", factory),
+        patch("app.web.dependencies.async_session_factory", factory),
         patch("app.web.server.init_db", new_callable=AsyncMock),
         patch("app.web.server.close_db", new_callable=AsyncMock),
     ):
