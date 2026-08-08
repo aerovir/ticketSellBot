@@ -88,6 +88,7 @@ class User(Base):
     subscription_tier: Mapped[SubscriptionTier] = mapped_column(
         SAEnum(SubscriptionTier), default=SubscriptionTier.basic, nullable=False
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     tickets = relationship("Ticket", back_populates="user", lazy="raise")
     owned_events = relationship("Event", back_populates="owner", lazy="raise")

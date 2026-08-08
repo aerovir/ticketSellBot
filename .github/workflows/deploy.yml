@@ -218,6 +218,7 @@ jobs:
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier subscriptiontier NOT NULL DEFAULT 'basic';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
             ALTER TABLE events ADD COLUMN IF NOT EXISTS owner_user_id UUID REFERENCES users(id);
             ALTER TABLE events ALTER COLUMN channel_id DROP NOT NULL;
 

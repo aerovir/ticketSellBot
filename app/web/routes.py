@@ -1194,6 +1194,45 @@ async def admin_user_info(
     }
 
 
+@router.get("/admin/users")
+async def admin_list_users(current: CurrentUser = Depends(require_super_admin)):
+    """Список всех пользователей (не удалённых)."""
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        users = await user_svc.list_all()
+
+    return [
+        {
+            "id": str(u.id),
+            "telegram_user_id": u.platform_user_id,
+            "name": u.name,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "is_subscription_active": u.is_subscription_active,
+            "subscription_tier": u.subscription_tier.value,
+        }
+        for u in users
+    ]
+
+
+@router.delete("/admin/users/{telegram_user_id}")
+async def admin_delete_user(
+    telegram_user_id: str,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Мягкое удаление пользователя (super-admin only)."""
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_by_platform_user_id(PlatformType.telegram, telegram_user_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+        if user.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Пользователь уже удалён")
+        await user_svc.soft_delete(user.id)
+        await session.commit()
+
+    return {"id": str(user.id), "deleted": True}
+
+
 @router.post("/admin/broadcast")
 async def admin_broadcast(
     body: BroadcastIn,

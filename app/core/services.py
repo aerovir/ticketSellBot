@@ -148,6 +148,21 @@ class UserService:
         """Является ли пользователь организатором (есть активная подписка)."""
         return await self.is_subscription_valid(user_id)
 
+    async def soft_delete(self, user_id: uuid.UUID) -> User | None:
+        """Мягкое удаление пользователя — выставляет deleted_at."""
+        user = await self.session.get(User, user_id)
+        if user is None:
+            return None
+        user.deleted_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return user
+
+    async def list_all(self) -> list[User]:
+        """Список всех пользователей (не удалённых), newest first."""
+        stmt = select(User).where(User.deleted_at.is_(None)).order_by(User.created_at.desc())
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
 
 # ─── Channel Service ─────────────────────────────────────────────────────────
 

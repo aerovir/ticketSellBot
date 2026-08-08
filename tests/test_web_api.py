@@ -832,6 +832,77 @@ class TestSuperAdminGaps:
         assert resp.status_code == 403
 
 
+class TestUserSoftDelete:
+    """Soft-delete пользователей (super-admin only)."""
+
+    def test_admin_list_users(self, client):
+        """GET /api/admin/users — список пользователей."""
+        mock_user = Mock()
+        mock_user.id = USER_ID
+        mock_user.platform_user_id = "12345"
+        mock_user.name = "Test User"
+        mock_user.created_at = None
+        mock_user.is_subscription_active = False
+        mock_user.subscription_tier = Mock(value="basic")
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.list_all",
+                  new_callable=AsyncMock, return_value=[mock_user]),
+        ):
+            resp = client.get("/api/admin/users", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+        assert resp.json()[0]["telegram_user_id"] == "12345"
+
+    def test_admin_delete_user(self, client):
+        """DELETE /api/admin/users/{id} — мягкое удаление."""
+        mock_user = Mock()
+        mock_user.id = USER_ID
+        mock_user.deleted_at = None
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.get_by_platform_user_id",
+                  new_callable=AsyncMock, return_value=mock_user),
+            patch("app.web.routes.UserService.soft_delete",
+                  new_callable=AsyncMock, return_value=mock_user),
+        ):
+            resp = client.delete("/api/admin/users/12345", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+
+    def test_admin_delete_user_not_found(self, client):
+        """DELETE /api/admin/users/{id} — пользователь не найден."""
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.get_by_platform_user_id",
+                  new_callable=AsyncMock, return_value=None),
+        ):
+            resp = client.delete("/api/admin/users/99999", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 404
+
+    def test_admin_delete_user_already_deleted(self, client):
+        """DELETE /api/admin/users/{id} — уже удалён → 409."""
+        mock_user = Mock()
+        mock_user.id = USER_ID
+        mock_user.deleted_at = "2026-01-01T00:00:00Z"
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.get_by_platform_user_id",
+                  new_callable=AsyncMock, return_value=mock_user),
+        ):
+            resp = client.delete("/api/admin/users/12345", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 409
+
+    def test_admin_delete_user_forbidden(self, client):
+        """DELETE /api/admin/users/{id} — не super-admin → 403."""
+        with admin_auth(is_super=False, channel_ids=[]):
+            resp = client.delete("/api/admin/users/12345", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+
 class TestInviteApi:
     """Тесты эндпоинтов пригласительных (TDD: до реализации)."""
 
