@@ -180,5 +180,9 @@
 | 151 | Docs: инструкция пользователя (user-manual.md) — для человека без IT-навыков | ✅ done | 2026-08-08 | `3987279` |
 | 152 | Feat: DM-доставка билета при покупке через Mini App — билет + код в личку Telegram | ✅ done | 2026-08-08 | `82538e9` |
 | 153 | Feat: soft-delete пользователей — User.deleted_at, DELETE /admin/users/{id}, GET /admin/users | ✅ done | 2026-08-08 | `8bc88e5` |
-| 154 | Fix: postgres:16-alpine → postgres:16 (Debian/glibc) — убирает зомби-бэкенды от musl bug | ✅ done | 2026-08-08 | `a825f66` |
 | 149 | Feat: Prometheus + postgres_exporter + FastAPI instrumentator — /metrics, метрики БД, Grafana datasource | ✅ done | 2026-08-08 | `44c68c4` |
+| 154 | Fix: postgres:16-alpine → postgres:16 (Debian/glibc) — убирает зомби-бэкенды от musl bug | ✅ done | 2026-08-08 | `a825f66` |
+| 155 | Feat: редизайн интерфейса — вариант Б (4 вкладки + дашборд, мобильный-first CSS) | ✅ done | 2026-08-08 | `bcfc60f` |
+| 156 | Fix: no-cache headers для index.html и static (десктоп Telegram кешировал) + tab bar на всю ширину | ✅ done | 2026-08-08 | `e9221b5` |
+| 157 | Infra: swap 2 GB на VDS — предотвращает OOM-kill PostgreSQL | ✅ done | 2026-08-08 | — |
+| 158 | Feat: DM-уведомление о возврате билета | ✅ done | 2026-08-08 | `9fa1d8c` |

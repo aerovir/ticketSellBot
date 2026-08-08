@@ -113,3 +113,13 @@ RSS: 2.35 GB (29.6% RAM)
 - OOM-kill'ов нет — процесс сам зацикливается
 - `docker restart ticketbot-db` — восстановлено
 - ✅ **Добавлен swap 2 GB** — предотвратит OOM-kill и даст буфер памяти
+
+---
+
+## Фикс: postgres:16-alpine → postgres:16 (Debian/glibc)
+
+**Причина зомби:** `connection.terminate()` в asyncpg на Alpine (musl libc) работает нестабильно. При `pool_recycle=1800` каждые 30 мин старые соединения закрываются, но backend-процессы PostgreSQL не завершаются → накапливаются зомби → CPU взлетает через 1.5 часа.
+
+**Решение:** замена `postgres:16-alpine` на `postgres:16` (Debian/glibc). На glibc `terminate()` работает надёжно.
+
+**Результат:** после деплоя (14:02) PostgreSQL стабилен — 25 MB RAM, load average 0.02.
