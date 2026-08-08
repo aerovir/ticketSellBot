@@ -9,7 +9,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -64,8 +64,18 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Mount static files (Telegram Mini App frontend)
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    # Mount static files (Telegram Mini App frontend) — no cache для обновлений
+    import starlette.types
+    class NoCacheStaticFiles(StaticFiles):
+        async def __call__(self, scope, receive, send):
+            async def send_wrapper(message):
+                if message["type"] == "http.response.start":
+                    headers = dict(message.get("headers", []))
+                    headers[b"cache-control"] = b"no-cache, no-store, must-revalidate"
+                    message["headers"] = list(headers.items())
+                await send(message)
+            await super().__call__(scope, receive, send_wrapper)
+    app.mount("/static", NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # VK Mini App entry point
     vk_app_html = STATIC_DIR / "vk-app.html"
@@ -90,7 +100,10 @@ def create_app() -> FastAPI:
     # страница открывается напрямую (без 30x), иначе контекст WebApp теряется.
     @app.get("/")
     async def root():
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(
+            STATIC_DIR / "index.html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/health")
     async def health():
