@@ -177,4 +177,5 @@
 | 147 | Perf: pool конфигурация — pool_recycle=1800, pool_pre_ping=True, pool_size=5, max_overflow=5. Предотвращает мёртвые соединения после OOM-kill | ✅ done | 2026-08-08 | `48e18ef` |
 | 148 | Arch: get_current_user → Depends(get_session) + test patch. Pool config: pool_recycle=1800 + pool_pre_ping=True (48e18ef). Routes пока на async with (конвертация 40 эндпоинтов — отдельная задача) | ✅ done (частично) | 2026-08-08 | `3c85935` |
 | 150 | Arch: конвертация 40 эндпоинтов routes.py на Depends(get_session) — требует надёжного скрипта миграции | 📋 planned | 2026-08-08 | — |
+| 151 | Docs: инструкция пользователя (user-manual.md) — для человека без IT-навыков | ✅ done | 2026-08-08 | `3987279` |
 | 149 | Feat: Prometheus + postgres_exporter + FastAPI instrumentator — /metrics, метрики БД, Grafana datasource | ✅ done | 2026-08-08 | `44c68c4` |
