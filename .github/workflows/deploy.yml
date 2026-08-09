@@ -75,6 +75,13 @@ jobs:
           ENVEOF
           echo "✅ .env.telegram создан"
 
+      - name: 📋 Создать .env из секретов
+        run: |
+          cat > .env << 'ENVEOF'
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          ENVEOF
+          echo "✅ .env создан"
+
       - name: 📋 Создать .env.vk из секретов
         env:
           VK_TOKEN: ${{ secrets.VK_TOKEN }}
