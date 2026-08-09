@@ -169,25 +169,30 @@ event_managers(event_id FK, user_id FK)  -- PK (event_id, user_id)
 
 | # | Вопрос | Статус |
 |---|--------|--------|
-| 1 | VK-постинг в чужие группы: точный scope `VKWebAppGetCommunityToken`, права `wall.post`/`messages.send`, хранение токена | 🔍 проверить при внедрении |
-| 2 | Фронтенд VK: переиспользовать `app.js` (общий файл) или отдельный VK-entry | 📌 решить |
-| 3 | `get_or_create` резолвинг identity — правка shared core (backward-compatible) | 📌 согласовать |
-| 4 | UX добавления соработника (по ID с другой площадки) и права менеджера | 📌 решить |
+| 1 | VK-постинг в чужие группы: точный scope `VKWebAppGetCommunityToken`, права `wall.post`/`messages.send`, хранение токена | ✅ частично: `wall.post` реализован (зашифрованный токен); **сообщения/DM (`messages.send`) — TODO** |
+| 2 | Фронтенд VK: переиспользовать `app.js` (общий файл) или отдельный VK-entry | ✅ решено: переиспользован `app.js` (VK-детект) |
+| 3 | `get_or_create` резолвинг identity — правка shared core (backward-compatible) | ✅ сделан backward-compatible (backfill legacy) |
+| 4 | UX добавления соработника (по ID с другой площадки) и права менеджера | ✅ права определены: менеджер — продажи; управление — owner. **UX-кнопка добавления — TODO (в UI)** |
 | 5 | DM-уведомления покупателю в VK (требует `VKWebAppAllowMessagesFromGroup`) | 📌 отложить |
 | 6 | VK Pay для платных | 📌 отложить (stub, как TG) |
 | 7 | Старый VK-бот (vkbottle, команды `/buy` и т.д.) — устарел в режиме «только web» | 📌 решить: убрать/оставить |
+| 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения token (сейчас бэкенд принимает token в POST) | 📌 подключить в Mini App при добавлении группы |
 
 ---
 
 ## 9. Порядок реализации (этапы)
 
-1. **Идентичность:** миграция `user_identities` + резолвинг + линковка по коду (organizer-only).
-2. **VK-аутентификация:** `vk_auth.py` (валидация sign) + резолв канона.
-3. **Соработники:** `event_managers` + расширение `_can_manage_event`.
-4. **VK-группы:** модель `vk_groups` + self-service + `VKWebAppGetCommunityToken`.
-5. **Публикации:** `event_publications` + VK-постинг (`wall.post` / `messages.send`).
-6. **Фронтенд:** VK Mini App (решение №2).
-7. **Тесты:** TDD на каждом этапе (контур тестирования, `tests/harness.py`).
+Все этапы реализованы (код, TDD, ветки от `dev`):
+
+1. ✅ **Идентичность** — `feature/vk-identity` (#160): `user_identities`, линковка по коду.
+2. ✅ **VK-аутентификация** — `feature/vk-auth` (#161): `vk_auth.py` (sign), резолв канона.
+3. ✅ **Соработники** — `feature/vk-managers` (#162): `event_managers`, права.
+4. ✅ **VK-группы** — `feature/vk-groups` (#163): `vk_groups`, self-service, шифрование token.
+5. ✅ **Публикации** — `feature/vk-publications` (#164): `event_publications`, `wall.post`.
+6. ✅ **Фронтенд** — `feature/vk-frontend` (#165): переиспользование `app.js`, vk-app.html.
+7. ✅ **Тесты** — `feature/vk-testing` (#166): сквозной контур VK.
+
+Итого **361 тест**, все фичи на ветках (не влиты в `dev`). Деплой на прод — отдельная задача (пользователь: «деплой пока не нужен»).
 
 Полный список задач — в `docs/tasks.md` (раздел «VK Mini App»).
 
