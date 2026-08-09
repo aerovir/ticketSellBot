@@ -18,6 +18,7 @@ dependencies = [
     "qrcode[pil]>=7.4",
     "python-dateutil>=2.9",
     "prometheus_fastapi_instrumentator>=7.0",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

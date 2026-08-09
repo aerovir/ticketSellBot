@@ -166,6 +166,35 @@ class LinkCode(Base):
         return f"<LinkCode {self.code} → user {self.user_id} ({self.target_platform.value})>"
 
 
+class VKGroup(Base):
+    """VK-группа — цель публикации анонсов (аналог TG-канала).
+
+    Организатор добавляет группу сам (по необходимости), community token
+    хранится зашифрованным (app/core/crypto.py). Подписка-изоляция группе
+    не нужна — организатор платит подписку на себя.
+    """
+
+    __tablename__ = "vk_groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    group_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    community_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    owner = relationship("User", lazy="raise")
+
+    def __repr__(self):
+        return f"<VKGroup {self.group_id}>"
+
+
 class Event(Base):
     __tablename__ = "events"
 

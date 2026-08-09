@@ -32,6 +32,7 @@ from app.core.schemas import (
     SubscribeIn,
     SubscribeMeIn,
     UpdateSubscriptionIn,
+    VKGroupRegisterIn,
 )
 from app.core.services import (
     ChannelAdminService,
@@ -40,6 +41,7 @@ from app.core.services import (
     StatsService,
     TicketService,
     UserService,
+    VKGroupService,
 )
 from app.web.dependencies import (
     CurrentUser,
@@ -513,6 +515,78 @@ async def register_my_channel(
             status_code=status.HTTP_409_CONFLICT,
             detail="Канал уже зарегистрирован. Добавьте бота в канал — он привяжет вас автоматически.",
         )
+
+
+# ─── Мои VK-группы (самообслуживание целей публикации) ─────────
+
+
+@router.get("/me/vk-groups")
+async def list_my_vk_groups(current: CurrentUser = Depends(get_current_user)):
+    """Список VK-групп организатора (цели публикации)."""
+    async with async_session_factory() as session:
+        group_svc = VKGroupService(session)
+        groups = await group_svc.list_vk_groups(current.user_id)
+
+    return [
+        {
+            "id": str(g.id),
+            "group_id": g.group_id,
+            "title": g.title,
+            "has_token": bool(g.community_token),
+        }
+        for g in groups
+    ]
+
+
+@router.post("/me/vk-groups", status_code=status.HTTP_201_CREATED)
+async def register_my_vk_group(
+    body: VKGroupRegisterIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Зарегистрировать VK-группу как цель публикации (community token шифруется)."""
+    group_id = body.group_id.strip()
+    if not group_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Укажите ID VK-группы",
+        )
+
+    async with async_session_factory() as session:
+        group_svc = VKGroupService(session)
+        try:
+            group = await group_svc.register_vk_group(
+                owner_user_id=current.user_id,
+                group_id=group_id,
+                title=body.title,
+                community_token=body.community_token,
+            )
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "id": str(group.id),
+        "group_id": group.group_id,
+        "title": group.title,
+        "has_token": bool(group.community_token),
+    }
+
+
+@router.delete("/me/vk-groups/{group_id}")
+async def remove_my_vk_group(
+    group_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Удалить VK-группу организатора."""
+    async with async_session_factory() as session:
+        group_svc = VKGroupService(session)
+        removed = await group_svc.remove_vk_group(current.user_id, group_id)
+        await session.commit()
+
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Группа не найдена")
+    return {"group_id": group_id, "removed": True}
 
 
 # ═══════════════════════════════════════════════════════════════

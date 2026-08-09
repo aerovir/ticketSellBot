@@ -9,7 +9,7 @@ from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
-    User, UserIdentity, LinkCode, Event, EventManager, Ticket, Payment, Channel, ChannelAdmin,
+    User, UserIdentity, LinkCode, Event, EventManager, Ticket, Payment, Channel, ChannelAdmin, VKGroup,
     TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
 )
 from dateutil.relativedelta import relativedelta
@@ -924,6 +924,79 @@ class ChannelAdminService:
             "status": "success",
             "duration_ms": _ms(start),
         })
+
+
+# ─── VKGroup Service ─────────────────────────────────────────────────────────
+
+class VKGroupService:
+    """VK-группы как цели публикации (self-service организатора)."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_group_id(self, group_id: str) -> VKGroup | None:
+        stmt = select(VKGroup).where(VKGroup.group_id == group_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def register_vk_group(
+        self,
+        owner_user_id: uuid.UUID,
+        group_id: str,
+        title: str | None = None,
+        community_token: str | None = None,
+    ) -> VKGroup:
+        """Зарегистрировать VK-группу для организатора (community token шифруется).
+
+        ValueError: group_id уже зарегистрирован другим организатором (анти-захват).
+        """
+        existing = await self.get_by_group_id(group_id)
+        if existing is not None:
+            if existing.owner_user_id == owner_user_id:
+                # Идемпотентно: группа уже у этого организатора — обновить token/title
+                if community_token:
+                    from app.core.crypto import encrypt_token
+                    existing.community_token = encrypt_token(community_token)
+                if title:
+                    existing.title = title
+                await self.session.flush()
+                return existing
+            raise ValueError("Группа уже зарегистрирована другим организатором")
+
+        from app.core.crypto import encrypt_token
+        group = VKGroup(
+            owner_user_id=owner_user_id,
+            group_id=group_id,
+            title=title,
+            community_token=encrypt_token(community_token) if community_token else None,
+        )
+        self.session.add(group)
+        await self.session.flush()
+        logger.info("", extra={
+            "event_type": "vk_group.registered",
+            "group_id": group_id,
+            "owner_user_id": str(owner_user_id),
+            "status": "success",
+        })
+        return group
+
+    async def list_vk_groups(self, owner_user_id: uuid.UUID) -> list[VKGroup]:
+        result = await self.session.execute(
+            select(VKGroup).where(VKGroup.owner_user_id == owner_user_id)
+        )
+        return list(result.scalars().all())
+
+    async def remove_vk_group(self, owner_user_id: uuid.UUID, group_id: str) -> bool:
+        stmt = select(VKGroup).where(
+            and_(VKGroup.owner_user_id == owner_user_id, VKGroup.group_id == group_id)
+        )
+        result = await self.session.execute(stmt)
+        group = result.scalar_one_or_none()
+        if group is None:
+            return False
+        await self.session.delete(group)
+        await self.session.flush()
+        return True
 
 
 # ─── Event Service ───────────────────────────────────────────────────────────

@@ -192,6 +192,13 @@ class AddManagerIn(BaseModel):
     platform_user_id: str
 
 
+class VKGroupRegisterIn(BaseModel):
+    """Зарегистрировать VK-группу как цель публикации (self-service)."""
+    group_id: str  # VK community id (число или -id)
+    title: Optional[str] = None
+    community_token: Optional[str] = None  # от VKWebAppGetCommunityToken, шифруется
+
+
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):
