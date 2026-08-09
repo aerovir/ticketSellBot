@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.core.models import SubscriptionTier, PeriodUnit
+from app.core.models import SubscriptionTier, PeriodUnit, PlatformType
 
 
 # ─── User ────────────────────────────────────────────────────────────────────
@@ -173,6 +173,12 @@ class ChannelRegisterIn(BaseModel):
     """Связать Telegram-канал с пользователем (без активации подписки)."""
     telegram_channel_id: str   # @username или числовой ID
     title: Optional[str] = None
+
+
+class LinkCodeIn(BaseModel):
+    """Создать одноразовый код привязки площадки (organizer-only)."""
+    target_platform: PlatformType
+    ttl_minutes: int = Field(default=10, ge=1, le=60)
 
 
 # ─── Payment ─────────────────────────────────────────────────────────────────

@@ -92,9 +92,78 @@ class User(Base):
 
     tickets = relationship("Ticket", back_populates="user", lazy="raise")
     owned_events = relationship("Event", back_populates="owner", lazy="raise")
+    identities = relationship("UserIdentity", back_populates="user", lazy="raise", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.platform}:{self.platform_user_id}>"
+
+
+class UserIdentity(Base):
+    """Каноническая идентичность организатора.
+
+    Каждый пользователь может иметь несколько способов входа (identity):
+    telegram / vk. Все они ведут к одному каноническому пользователю (users.id),
+    что позволяет вести мероприятия и подписку с любой площадки.
+
+    UNIQUE(platform, platform_user_id) — одна площадка+ID может быть привязана
+    только к одному каноническому пользователю.
+    """
+
+    __tablename__ = "user_identities"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    platform: Mapped[PlatformType] = mapped_column(
+        SAEnum(PlatformType), nullable=False
+    )
+    platform_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    user = relationship("User", back_populates="identities", lazy="raise")
+
+    __table_args__ = (
+        UniqueConstraint("platform", "platform_user_id", name="uq_user_identity_platform_puid"),
+    )
+
+    def __repr__(self):
+        return f"<UserIdentity {self.platform}:{self.platform_user_id} → user {self.user_id}>"
+
+
+class LinkCode(Base):
+    """Одноразовый короткоживущий код привязки площадок (organizer-only).
+
+    Генерируется на TG-стороне («Привязать VK»), вводится на VK-стороне.
+    После успешной привязки — consumed (одноразовый).
+    """
+
+    __tablename__ = "link_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    code: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    target_platform: Mapped[PlatformType] = mapped_column(
+        SAEnum(PlatformType), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    user = relationship("User", lazy="raise")
+
+    def __repr__(self):
+        return f"<LinkCode {self.code} → user {self.user_id} ({self.target_platform.value})>"
 
 
 class Event(Base):

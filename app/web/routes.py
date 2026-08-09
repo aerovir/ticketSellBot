@@ -25,6 +25,7 @@ from app.core.schemas import (
     EventCreate,
     EventUpdateIn,
     InviteIssueIn,
+    LinkCodeIn,
     MeUpdateIn,
     SubscribeIn,
     SubscribeMeIn,
@@ -350,6 +351,49 @@ async def subscribe_me(
         "subscription_tier": user.subscription_tier.value,
         "subscription_until": user.subscription_until.isoformat() if user.subscription_until else None,
     }
+
+
+@router.post("/me/link-code")
+async def create_me_link_code(
+    body: LinkCodeIn,
+    current: CurrentUser = Depends(require_admin),
+):
+    """Создать одноразовый код привязки площадки (organizer-only).
+
+    Код показывается на TG-стороне («Привязать VK») и вводится на целевой
+    площадке (VK Mini App), где привязывает identity к каноническому организатору.
+    Одноразовый, короткоживущий (по умолчанию 10 минут).
+    """
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        code = await user_svc.create_link_code(
+            canonical_user_id=current.user_id,
+            target_platform=body.target_platform,
+            ttl_minutes=body.ttl_minutes,
+        )
+        await session.commit()
+
+    return {
+        "code": code,
+        "target_platform": body.target_platform.value,
+        "ttl_minutes": body.ttl_minutes,
+    }
+
+
+@router.get("/me/identities")
+async def list_me_identities(current: CurrentUser = Depends(get_current_user)):
+    """Список привязанных к кабинету площадок (TG/VK/...)."""
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        identities = await user_svc.list_identities(current.user_id)
+
+    return [
+        {
+            "platform": i.platform.value,
+            "platform_user_id": i.platform_user_id,
+        }
+        for i in identities
+    ]
 
 
 # ─── Мои каналы (самообслуживание) ────────────────────────────

@@ -8,7 +8,10 @@ from typing import Optional
 from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit
+from app.core.models import (
+    User, UserIdentity, LinkCode, Event, Ticket, Payment, Channel, ChannelAdmin,
+    TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
+)
 from dateutil.relativedelta import relativedelta
 from app.core.schemas import EventOut, EventShortOut, TicketOut, UserOut
 
@@ -27,50 +30,212 @@ class UserService:
         self.session = session
 
     async def get_or_create(self, platform: PlatformType, platform_user_id: str, name: Optional[str] = None) -> User:
-        """Find existing user by platform+id, or create a new one."""
+        """Find existing user by platform+id, or create a new one.
+
+        Резолвинг через user_identities: если (platform, platform_user_id) привязана
+        к каноническому пользователю (линковка организатора TG↔VK), возвращаем канон.
+        Для "legacy" пользователей (созданных до фичи user_identities) — backfill identity.
+        """
         start = time.perf_counter()
+
+        # 1. Канонический резолвинг через identity
+        identity = await self._find_identity(platform, platform_user_id)
+        if identity is not None:
+            user = await self.session.get(User, identity.user_id)
+            if user is not None:
+                logger.info("", extra={
+                    "event_type": "user.found",
+                    "platform": platform.value,
+                    "user_id": platform_user_id,
+                    "canonical_user_id": str(user.id),
+                    "status": "success",
+                    "duration_ms": _ms(start),
+                })
+                return user
+
+        # 2. Legacy-пользователь (без identity) — backfill
         stmt = select(User).where(
             and_(User.platform == platform, User.platform_user_id == platform_user_id)
         )
         result = await self.session.execute(stmt)
         user = result.scalar_one_or_none()
+        if user is not None:
+            await self._ensure_identity(user.id, platform, platform_user_id)
+            return user
 
-        if user is None:
-            user = User(
-                platform=platform,
-                platform_user_id=platform_user_id,
-                name=name,
-            )
-            self.session.add(user)
-            await self.session.flush()
-            logger.info("", extra={
-                "event_type": "user.created",
-                "platform": platform.value,
-                "user_id": platform_user_id,
-                "status": "success",
-                "duration_ms": _ms(start),
-            })
-        else:
-            logger.info("", extra={
-                "event_type": "user.found",
-                "platform": platform.value,
-                "user_id": platform_user_id,
-                "status": "success",
-                "duration_ms": _ms(start),
-            })
-
+        # 3. Новый пользователь: user + identity
+        user = User(
+            platform=platform,
+            platform_user_id=platform_user_id,
+            name=name,
+        )
+        self.session.add(user)
+        await self.session.flush()
+        await self._ensure_identity(user.id, platform, platform_user_id)
+        logger.info("", extra={
+            "event_type": "user.created",
+            "platform": platform.value,
+            "user_id": platform_user_id,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return user
 
     async def get_by_platform_user_id(self, platform: PlatformType, platform_user_id: str) -> User | None:
         """Find a user by platform+id WITHOUT creating (unlike get_or_create).
 
         Used for admin lookups — do not create a side-effect user on view.
+        Резолвит через identity: привязанная площадка ведёт на канонического пользователя.
         """
+        identity = await self._find_identity(platform, platform_user_id)
+        if identity is not None:
+            return await self.session.get(User, identity.user_id)
         stmt = select(User).where(
             and_(User.platform == platform, User.platform_user_id == platform_user_id)
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    # ─── Каноническая идентичность (user_identities) ─────────────
+
+    async def _find_identity(self, platform: PlatformType, platform_user_id: str) -> UserIdentity | None:
+        stmt = select(UserIdentity).where(
+            and_(
+                UserIdentity.platform == platform,
+                UserIdentity.platform_user_id == platform_user_id,
+            )
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _ensure_identity(
+        self, user_id: uuid.UUID, platform: PlatformType, platform_user_id: str
+    ) -> UserIdentity:
+        """Создать identity для пользователя, если её нет (идемпотентно)."""
+        existing = await self._find_identity(platform, platform_user_id)
+        if existing is not None:
+            return existing
+        identity = UserIdentity(
+            user_id=user_id,
+            platform=platform,
+            platform_user_id=platform_user_id,
+        )
+        self.session.add(identity)
+        await self.session.flush()
+        return identity
+
+    async def link_identity(
+        self,
+        canonical_user_id: uuid.UUID,
+        platform: PlatformType,
+        platform_user_id: str,
+    ) -> None:
+        """Привязать площадку (platform, platform_user_id) к каноническому пользователю.
+
+        Идемпотентно: повторная привязка той же identity к тому же канону — не ошибка.
+        ValueError: identity уже привязана к другому пользователю.
+        """
+        existing = await self._find_identity(platform, platform_user_id)
+        if existing is not None:
+            if existing.user_id == canonical_user_id:
+                return
+            raise ValueError(
+                "Эта площадка уже привязана к другому пользователю"
+            )
+        identity = UserIdentity(
+            user_id=canonical_user_id,
+            platform=platform,
+            platform_user_id=platform_user_id,
+        )
+        self.session.add(identity)
+        await self.session.flush()
+        logger.info("", extra={
+            "event_type": "user.identity_linked",
+            "canonical_user_id": str(canonical_user_id),
+            "platform": platform.value,
+            "platform_user_id": platform_user_id,
+            "status": "success",
+            "duration_ms": _ms(time.perf_counter()),
+        })
+
+    async def list_identities(self, user_id: uuid.UUID) -> list[UserIdentity]:
+        """Все способы входа пользователя (TG/VK/...)."""
+        result = await self.session.execute(
+            select(UserIdentity).where(UserIdentity.user_id == user_id)
+        )
+        return list(result.scalars().all())
+
+    # ─── Коды линковки (organizer-only) ──────────────────────────
+
+    async def create_link_code(
+        self,
+        canonical_user_id: uuid.UUID,
+        target_platform: PlatformType,
+        ttl_minutes: int = 10,
+    ) -> str:
+        """Создать одноразовый короткоживущий код для привязки площадки.
+
+        Код вводится на целевой площадке (VK), привязывает её identity к канону.
+        """
+        code = secrets.token_hex(4).upper()  # 8 символов
+        link = LinkCode(
+            code=code,
+            user_id=canonical_user_id,
+            target_platform=target_platform,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
+        )
+        self.session.add(link)
+        await self.session.flush()
+        return code
+
+    async def consume_link_code(
+        self,
+        code: str,
+        platform: PlatformType,
+        platform_user_id: str,
+    ) -> bool:
+        """Использовать код линковки: привязать (platform, platform_user_id) к канону кода.
+
+        ValueError: код не найден / истёк / уже использован / не для этой площадки,
+        либо identity уже занята другим пользователем.
+        """
+        code = code.strip().upper()
+        result = await self.session.execute(
+            select(LinkCode).where(LinkCode.code == code)
+        )
+        link = result.scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+
+        if link is None:
+            raise ValueError("Код не найден")
+        if link.consumed_at is not None:
+            raise ValueError("Код уже использован")
+        if link.expires_at < now:
+            raise ValueError("Код истёк")
+        if link.target_platform != platform:
+            raise ValueError("Код предназначен для другой площадки")
+
+        existing = await self._find_identity(platform, platform_user_id)
+        if existing is not None:
+            raise ValueError("Эта площадка уже привязана к пользователю")
+
+        identity = UserIdentity(
+            user_id=link.user_id,
+            platform=platform,
+            platform_user_id=platform_user_id,
+        )
+        self.session.add(identity)
+        link.consumed_at = now
+        await self.session.flush()
+        logger.info("", extra={
+            "event_type": "user.identity_linked_by_code",
+            "canonical_user_id": str(link.user_id),
+            "platform": platform.value,
+            "platform_user_id": platform_user_id,
+            "status": "success",
+            "duration_ms": _ms(time.perf_counter()),
+        })
+        return True
 
     async def update_name(self, user_id: uuid.UUID, name: str | None) -> User | None:
         """Update a user's display name. Returns updated user or None."""
