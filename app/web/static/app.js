@@ -11,6 +11,7 @@
 // ─── State ──────────────────────────────────────────────────────
 const state = {
     initData: "",
+    platform: "telegram", // "telegram" | "vk"
     events: [],
     currentEvent: null,
     tickets: [],
@@ -103,9 +104,35 @@ function tgAlert(message) {
 
 // ─── Init ───────────────────────────────────────────────────────
 
+// VK Mini App: получить launch params через VK Bridge и подготовить
+// X-VK-Init-Data (base64 query string: vk_user_id=...&sign=...).
+async function initVKAuth() {
+    const bridge = window.vkBridge;
+    try {
+        bridge.send("VKWebAppInit");
+        const res = await bridge.send("VKWebAppGetLaunchParams");
+        const lp = (res && res.launch_params) || {};
+        if (lp.sign && lp.vk_user_id) {
+            const query = Object.entries(lp)
+                .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+                .join("&");
+            state.initData = btoa(query);
+            state.platform = "vk";
+        } else {
+            console.warn("VK launch params отсутствуют (sign/vk_user_id)");
+        }
+    } catch (e) {
+        console.warn("VK init failed", e);
+    }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
-    // Init Telegram WebApp
-    if (window.Telegram && window.Telegram.WebApp) {
+    // VK Mini App (открывается на /vk-app)
+    const isVK = window.vkBridge && window.location.pathname.startsWith("/vk-app");
+    if (isVK) {
+        await initVKAuth();
+    } else if (window.Telegram && window.Telegram.WebApp) {
+        // Init Telegram WebApp
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand(); // Expand to full height
@@ -360,7 +387,14 @@ function renderProfile() {
                         <div class="hint">${ch.is_subscription_active ? '🟢 Активна' : '🔴 Неактивна'}${ch.subscription_until ? ' до ' + formatDate(ch.subscription_until) : ''}</div>
                     </div>`).join('')}
             </div>`}
-        <button class="btn btn-secondary" style="margin-top:16px" onclick="showMyTickets()">🎫 Мои билеты</button>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
+            <button class="btn btn-secondary" onclick="showMyChannels()">📢 Мои каналы</button>
+            <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>
+            ${state.platform === 'vk'
+                ? `<button class="btn btn-secondary" onclick="linkVKByCode()">🔗 Привязать Telegram (ввести код)</button>`
+                : `<button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Привязать VK (получить код)</button>`}
+        </div>
     `;
 }
 
@@ -385,8 +419,10 @@ async function editName() {
 // ─── API helper ─────────────────────────────────────────────────
 
 async function api(path, options = {}) {
+    // VK Mini App — launch params в X-VK-Init-Data; Telegram — X-Init-Data.
+    const authHeader = state.platform === "vk" ? "X-VK-Init-Data" : "X-Init-Data";
     const headers = {
-        "X-Init-Data": state.initData,
+        [authHeader]: state.initData,
         ...options.headers,
     };
 
@@ -1457,7 +1493,9 @@ function renderMyChannels(channels) {
         }
         html += `</div>`;
     }
-    container.innerHTML = html;
+    container.innerHTML = html + `
+        <button class="btn btn-secondary" style="margin-top:16px" onclick="showMyVKGroups()">📢 VK-группы</button>
+    `;
 }
 
 async function addMyChannel() {
@@ -1474,6 +1512,119 @@ async function addMyChannel() {
         // Освежить список каналов и профиль
         await loadMe();
         await showMyChannels();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ─── VK-группы (self-service целей публикации) ────────────────
+
+async function showMyVKGroups() {
+    setActiveTab("admin");
+    state.lastAction = "showMyVKGroups";
+    updateToolbar("VK-группы", true, false);
+    showPage("my-vk-groups");
+    showLoading();
+    try {
+        const groups = await api("/api/me/vk-groups");
+        renderMyVKGroups(groups);
+    } catch (err) {
+        hideLoading();
+        showError(err.message || "Ошибка загрузки VK-групп");
+    }
+}
+
+function renderMyVKGroups(groups) {
+    hideLoading();
+    const container = document.getElementById("myVKGroupsContent");
+    let html = `
+        <h2 style="margin-bottom:16px">Мои VK-группы</h2>
+        <div class="form-inline" style="margin-bottom:16px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+            <div class="form-field" style="flex:1;min-width:150px">
+                <label class="form-label">ID VK-группы</label>
+                <input class="form-input" id="vkg_id" placeholder="12345678">
+            </div>
+            <div class="form-field" style="flex:1;min-width:120px">
+                <label class="form-label">Название (необязательно)</label>
+                <input class="form-input" id="vkg_title" placeholder="Моя группа">
+            </div>
+            <button class="btn btn-primary" onclick="addMyVKGroup()" style="margin-bottom:0">➕ Добавить</button>
+        </div>
+    `;
+    setTimeout(() => {
+        const idInput = document.getElementById("vkg_id");
+        if (idInput) idInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addMyVKGroup(); });
+    }, 0);
+
+    if (!groups || groups.length === 0) {
+        html += `<div class="empty-state"><div class="empty-icon">📢</div><h3>Нет VK-групп</h3>
+            <p>Добавьте группу по ID — сюда будут публиковаться анонсы мероприятий</p></div>`;
+    } else {
+        html += `<div class="admin-list" style="margin-top:12px">`;
+        for (const g of groups) {
+            html += `
+                <div class="admin-list-item">
+                    <div style="flex:1">
+                        <div><b>${escapeHtml(g.title || g.group_id)}</b>
+                            ${g.has_token ? '<span class="badge badge-published">токен</span>' : '<span class="badge badge-draft">нет токена</span>'}
+                        </div>
+                        <div class="hint">ID: ${escapeHtml(g.group_id)}</div>
+                    </div>
+                    <button class="btn btn-sm btn-danger" onclick="removeMyVKGroup('${escapeHtml(g.group_id)}')">Удалить</button>
+                </div>`;
+        }
+        html += `</div>`;
+    }
+    container.innerHTML = html;
+}
+
+async function addMyVKGroup() {
+    const groupId = document.getElementById("vkg_id").value.trim();
+    if (!groupId) { showToast("Введите ID VK-группы", true); return; }
+    const title = document.getElementById("vkg_title").value.trim() || null;
+    try {
+        await api("/api/me/vk-groups", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ group_id: groupId, title }),
+        });
+        showToast("✅ VK-группа добавлена");
+        await showMyVKGroups();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function removeMyVKGroup(groupId) {
+    if (!(await tgConfirm(`Удалить VK-группу ${groupId}?`))) return;
+    try {
+        await api(`/api/me/vk-groups/${encodeURIComponent(groupId)}`, { method: "DELETE" });
+        showToast("✅ VK-группа удалена");
+        await showMyVKGroups();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ─── Линковка площадок (organizer-only) ───────────────────────
+
+async function createVKLinkCode() {
+    try {
+        const res = await api("/api/me/link-code", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ target_platform: "vk" }),
+        });
+        tgAlert(`🔗 Код привязки VK:\n\n<b>${res.code}</b>\n\nДействует ${res.ttl_minutes} мин.\nВведите его в VK Mini App → «Привязать Telegram».`);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function linkVKByCode() {
+    const code = prompt("Код привязки из Telegram:");
+    if (!code) return;
+    try {
+        const res = await api("/api/me/link", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: code.trim() }),
+        });
+        showToast("✅ VK привязан к Telegram");
+        await loadMe();
+        await showProfile();
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
