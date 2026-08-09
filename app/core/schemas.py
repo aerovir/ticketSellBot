@@ -199,6 +199,12 @@ class VKGroupRegisterIn(BaseModel):
     community_token: Optional[str] = None  # от VKWebAppGetCommunityToken, шифруется
 
 
+class PublishIn(BaseModel):
+    """Публикация мероприятия: цель — TG-канал (channel_id) или VK-группа (vk_group_id)."""
+    channel_id: Optional[UUID] = None
+    vk_group_id: Optional[str] = None
+
+
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):

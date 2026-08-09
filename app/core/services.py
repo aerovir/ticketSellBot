@@ -9,7 +9,8 @@ from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
-    User, UserIdentity, LinkCode, Event, EventManager, Ticket, Payment, Channel, ChannelAdmin, VKGroup,
+    User, UserIdentity, LinkCode, Event, EventManager, EventPublication, Ticket, Payment,
+    Channel, ChannelAdmin, VKGroup,
     TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
 )
 from dateutil.relativedelta import relativedelta
@@ -1298,6 +1299,74 @@ class EventService:
             select(EventManager.event_id).where(EventManager.user_id == user_id)
         )
         return list(result.scalars().all())
+
+    # ─── Публикации (event_publications, placements) ─────────────
+
+    async def add_publication(
+        self,
+        event_id: uuid.UUID,
+        platform: PlatformType,
+        target_type: str,
+        target_id: str,
+        created_by: uuid.UUID | None = None,
+        status: str = "posted",
+        last_error: str | None = None,
+    ) -> EventPublication:
+        """Зафиксировать публикацию события в цель (идемпотентно по уникальному ключу)."""
+        existing = await self.get_publication(event_id, platform, target_type, target_id)
+        if existing is not None:
+            existing.status = status
+            existing.last_error = last_error
+            await self.session.flush()
+            return existing
+
+        pub = EventPublication(
+            event_id=event_id,
+            platform=platform,
+            target_type=target_type,
+            target_id=target_id,
+            created_by=created_by,
+            status=status,
+            last_error=last_error,
+        )
+        self.session.add(pub)
+        await self.session.flush()
+        return pub
+
+    async def get_publication(
+        self,
+        event_id: uuid.UUID,
+        platform: PlatformType,
+        target_type: str,
+        target_id: str,
+    ) -> EventPublication | None:
+        result = await self.session.execute(
+            select(EventPublication).where(
+                and_(
+                    EventPublication.event_id == event_id,
+                    EventPublication.platform == platform,
+                    EventPublication.target_type == target_type,
+                    EventPublication.target_id == target_id,
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_publications(self, event_id: uuid.UUID) -> list[EventPublication]:
+        result = await self.session.execute(
+            select(EventPublication)
+            .where(EventPublication.event_id == event_id)
+            .order_by(EventPublication.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def remove_publication(self, publication_id: uuid.UUID) -> bool:
+        pub = await self.session.get(EventPublication, publication_id)
+        if pub is None:
+            return False
+        await self.session.delete(pub)
+        await self.session.flush()
+        return True
 
     async def get_event_stats(self, event_id: uuid.UUID) -> dict:
         """Get sales stats for an event."""

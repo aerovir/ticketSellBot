@@ -195,6 +195,46 @@ class VKGroup(Base):
         return f"<VKGroup {self.group_id}>"
 
 
+class EventPublication(Base):
+    """Публикация события в конкретную цель (placements).
+
+    Одно событие может быть опубликовано в N мест: TG-канал, VK-группа (стена),
+    сообщения группы, личные сообщения. target_type:
+        telegram_channel | vk_group_wall | vk_group_message | vk_user_dm
+    """
+
+    __tablename__ = "event_publications"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    platform: Mapped[PlatformType] = mapped_column(
+        SAEnum(PlatformType), nullable=False
+    )
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="posted", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    event = relationship("Event", lazy="raise")
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "platform", "target_type", "target_id", name="uq_event_publication"),
+    )
+
+    def __repr__(self):
+        return f"<EventPublication {self.event_id} → {self.platform.value}:{self.target_type}:{self.target_id}>"
+
+
 class Event(Base):
     __tablename__ = "events"
 

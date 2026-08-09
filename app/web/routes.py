@@ -29,6 +29,7 @@ from app.core.schemas import (
     LinkCodeIn,
     LinkConsumeIn,
     MeUpdateIn,
+    PublishIn,
     SubscribeIn,
     SubscribeMeIn,
     UpdateSubscriptionIn,
@@ -50,7 +51,9 @@ from app.web.dependencies import (
     require_super_admin,
     validate_init_data,
 )
+from app.platforms.telegram.formatting import format_event_text
 from app.web.announce import _get_bot, post_event_announcement, send_announcement_dm, send_broadcast
+from app.web.vk_api import post_to_group_wall
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
@@ -927,28 +930,71 @@ async def admin_remove_manager(
 @router.post("/admin/events/{event_id}/publish")
 async def admin_publish_event(
     event_id: str,
+    body: PublishIn | None = None,
     current: CurrentUser = Depends(get_current_user),
-    channel_id: str | None = Body(None, embed=True),
 ):
-    """Опубликовать мероприятие + отправить анонс в выбранный канал.
+    """Опубликовать мероприятие + отправить анонс в цель.
 
-    Если channel_id передан — мероприятие привязывается к этому каналу
-    и анонс отправляется туда. Если не передан — используется текущий канал
-    мероприятия. Ошибка анонса не откатывает флаг публикации.
-
-    Публикацию можно делать многократно (разные каналы, репосты).
+    Цель: TG-канал (channel_id) или VK-группа (vk_group_id). Мульти-публикация:
+    одно событие может быть опубликовано в N мест (записи event_publications).
+    Ошибка анонса не откатывает флаг публикации.
     """
     try:
         uid = UUID(event_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
 
+    if body is None:
+        body = PublishIn()
+    if body.channel_id and body.vk_group_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Укажите одну цель публикации: канал или VK-группу",
+        )
+
+    # ─── VK-группа (стена) ───────────────────────────────────────
+    if body.vk_group_id:
+        async with async_session_factory() as session:
+            event_svc = EventService(session)
+            group_svc = VKGroupService(session)
+            event = await event_svc.get_by_id(uid)
+            if event is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+            if not _can_manage_event(current, event):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+
+            group = await group_svc.get_by_group_id(body.vk_group_id.strip())
+            if group is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-группа не найдена")
+            if group.owner_user_id != current.user_id and not current.is_super_admin:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этой группе")
+
+            await event_svc.update(uid, is_published=True)
+            text = format_event_text(event, mode="full")
+            ok = await post_to_group_wall(group, text)
+            await event_svc.add_publication(
+                event_id=uid,
+                platform=PlatformType.vk,
+                target_type="vk_group_wall",
+                target_id=group.group_id,
+                created_by=current.user_id,
+                status="posted" if ok else "error",
+                last_error=None if ok else "VK wall.post failed",
+            )
+            await session.commit()
+
+        return {
+            "id": str(uid),
+            "is_published": True,
+            "announced": ok,
+            "platform": "vk",
+            "group_id": group.group_id,
+        }
+
+    # ─── TG-канал / DM (как было) ────────────────────────────────
     target_channel_id: UUID | None = None
-    if channel_id:
-        try:
-            target_channel_id = UUID(channel_id)
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID канала")
+    if body.channel_id:
+        target_channel_id = body.channel_id
 
     async with async_session_factory() as session:
         event_svc = EventService(session)
@@ -959,12 +1005,12 @@ async def admin_publish_event(
         if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
 
-        # Если указан канал — проверить доступ и привязать мероприятие
+        channel = None
         if target_channel_id:
             if not current.can_manage(target_channel_id) and not current.is_super_admin:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому каналу")
-            # Привязать мероприятие к выбранному каналу
             await event_svc.update(uid, channel_id=target_channel_id, is_published=True)
+            channel = await channel_svc.get_by_id(target_channel_id)
         else:
             await event_svc.update(uid, is_published=True)
         await session.commit()
@@ -973,12 +1019,92 @@ async def admin_publish_event(
     dm_sent = False
     if not announced:
         dm_sent = await send_announcement_dm(uid, current.telegram_user_id)
+
+    # Запись публикации (TG-канал, если анонс ушёл в канал)
+    if announced and channel is not None:
+        async with async_session_factory() as session:
+            event_svc = EventService(session)
+            await event_svc.add_publication(
+                event_id=uid,
+                platform=PlatformType.telegram,
+                target_type="telegram_channel",
+                target_id=channel.telegram_channel_id,
+                created_by=current.user_id,
+                status="posted",
+            )
+            await session.commit()
+
     return {
         "id": str(uid),
         "is_published": True,
         "announced": announced,
         "dm_sent": dm_sent,
     }
+
+
+@router.get("/admin/events/{event_id}/publications")
+async def admin_list_publications(
+    event_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Список публикаций мероприятия (куда опубликовано: TG-каналы / VK-группы)."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        pubs = await event_svc.list_publications(uid)
+
+    return {
+        "event_id": str(uid),
+        "publications": [
+            {
+                "id": str(p.id),
+                "platform": p.platform.value,
+                "target_type": p.target_type,
+                "target_id": p.target_id,
+                "status": p.status,
+                "last_error": p.last_error,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in pubs
+        ],
+    }
+
+
+@router.delete("/admin/events/{event_id}/publications/{publication_id}")
+async def admin_remove_publication(
+    event_id: str,
+    publication_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Удалить запись публикации (не отменяет отправленный анонс)."""
+    try:
+        uid = UUID(event_id)
+        pid = UUID(publication_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        removed = await event_svc.remove_publication(pid)
+        await session.commit()
+
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Публикация не найдена")
+    return {"publication_id": str(pid), "removed": True}
 
 
 @router.post("/admin/events/{event_id}/repost")
