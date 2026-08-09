@@ -200,9 +200,44 @@ class Event(Base):
     tickets = relationship("Ticket", back_populates="event", lazy="raise")
     channel = relationship("Channel", back_populates="events", lazy="raise")
     owner = relationship("User", back_populates="owned_events", lazy="raise")
+    managers = relationship("EventManager", back_populates="event", lazy="raise", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Event {self.title}>"
+
+
+class EventManager(Base):
+    """Соработник мероприятия (несколько продавцов на одном событии).
+
+    M2M event_managers(event_id, user_id). Менеджер ведёт продажи: публикация,
+    check-in, статистика, билеты, пригласительные. Управление событием
+    (редактирование/удаление/менеджеры) — только у владельца (owner).
+    """
+
+    __tablename__ = "event_managers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    event = relationship("Event", back_populates="managers", lazy="raise")
+    user = relationship("User", lazy="raise")
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_id", name="uq_event_manager"),
+    )
+
+    def __repr__(self):
+        return f"<EventManager {self.event_id}:{self.user_id}>"
 
 
 class Ticket(Base):

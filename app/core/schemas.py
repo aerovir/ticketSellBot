@@ -186,6 +186,12 @@ class LinkConsumeIn(BaseModel):
     code: str
 
 
+class AddManagerIn(BaseModel):
+    """Добавить соработника мероприятия по платформенному ID."""
+    platform: PlatformType
+    platform_user_id: str
+
+
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):

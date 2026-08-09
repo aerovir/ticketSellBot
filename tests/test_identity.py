@@ -225,9 +225,10 @@ class TestLinkCodeEndpoint:
         assert data["target_platform"] == "vk"
 
     async def test_non_organizer_cannot_create_link_code(self, db_client, db_session):
-        # Обычный пользователь без подписки — роль user → 403
+        # X-Skip-Auth резолвит 12345. Гарантируем отсутствие прав: без подписки.
         user_svc = UserService(db_session)
-        await user_svc.get_or_create(PlatformType.telegram, "99999", name="Покупатель")
+        user = await user_svc.get_or_create(PlatformType.telegram, "12345", name="Покупатель")
+        await user_svc.deactivate_subscription(user.id)
         await db_session.commit()
 
         resp = await db_client.post(

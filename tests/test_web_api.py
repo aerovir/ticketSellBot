@@ -381,6 +381,11 @@ def admin_auth(is_super=False, channel_ids=None, sub_valid=True, organizer=False
             new_callable=AsyncMock,
             return_value=sub_valid,
         ))
+        stack.enter_context(patch(
+            "app.web.dependencies.EventService.get_manager_event_ids",
+            new_callable=AsyncMock,
+            return_value=[],
+        ))
         yield
 
 

@@ -24,7 +24,7 @@ from fastapi import Depends, Header, HTTPException, status
 from app.config import settings
 from app.core.database import async_session_factory
 from app.core.models import PlatformType
-from app.core.services import ChannelService, UserService
+from app.core.services import ChannelService, EventService, UserService
 
 # Maximum age of initData in seconds (24 hours)
 _MAX_INIT_DATA_AGE = 86400
@@ -187,6 +187,8 @@ class CurrentUser:
     managed_channel_ids: list[UUID] = field(default_factory=list)
     #: Организатор без канала — есть активная подписка пользователя.
     is_organizer: bool = False
+    #: ID мероприятий, где пользователь — соработник (event_managers).
+    manager_event_ids: list[UUID] = field(default_factory=list)
 
     @property
     def is_admin(self) -> bool:
@@ -202,6 +204,10 @@ class CurrentUser:
 
     def can_manage(self, channel_id: UUID) -> bool:
         return self.is_super_admin or channel_id in self.managed_channel_ids
+
+    def can_manage_event(self, event_id: UUID) -> bool:
+        """Является ли пользователь соработником (manager) мероприятия."""
+        return event_id in self.manager_event_ids
 
 
 async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> CurrentUser:
@@ -237,6 +243,9 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
         ]
         # Организатор без канала: активная подписка пользователя
         is_organizer = await user_svc.is_subscription_valid(user.id)
+        # Соработник: ID мероприятий, где пользователь — менеджер
+        event_svc = EventService(session)
+        manager_event_ids = await event_svc.get_manager_event_ids(user.id)
         # Persist the row if get_or_create inserted a new user (read-only requests
         # still carry this dependency); commit is a no-op when nothing changed.
         await session.commit()
@@ -248,6 +257,7 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
         is_super_admin=_is_super_admin(platform_user_id),
         managed_channel_ids=managed,
         is_organizer=is_organizer,
+        manager_event_ids=manager_event_ids,
     )
 
 

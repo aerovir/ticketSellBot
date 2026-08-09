@@ -16,6 +16,7 @@ from app.core.database import async_session_factory
 from app.core.models import PlatformType, Event
 from app.core.qr import generate_qr_png
 from app.core.schemas import (
+    AddManagerIn,
     BroadcastIn,
     ChangeAdminIn,
     ChangeTierIn,
@@ -680,7 +681,7 @@ async def admin_update_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
+        if not _can_admin_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         if not data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
@@ -710,7 +711,7 @@ async def admin_toggle_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
+        if not _can_admin_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         event = await event_svc.set_active(uid, not event.is_active)
         await session.commit()
@@ -734,12 +735,119 @@ async def admin_delete_event(
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
+        if not _can_admin_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         await event_svc.soft_delete(uid)
         await session.commit()
 
     return {"id": str(uid), "deleted": True}
+
+
+# ─── Админ: соработники мероприятия (несколько продавцов) ───────
+
+
+@router.get("/admin/events/{event_id}/managers")
+async def admin_list_managers(
+    event_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Список соработников мероприятия."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        managers = await event_svc.list_managers(uid)
+
+    return {
+        "event_id": str(uid),
+        "managers": [
+            {
+                "id": str(m.id),
+                "name": m.name,
+                "platform": m.platform.value,
+                "platform_user_id": m.platform_user_id,
+            }
+            for m in managers
+        ],
+    }
+
+
+@router.post("/admin/events/{event_id}/managers", status_code=status.HTTP_201_CREATED)
+async def admin_add_manager(
+    event_id: str,
+    body: AddManagerIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Добавить соработника по платформенному ID (TG ID / VK ID).
+
+    Резолвится в канонического организатора через user_identities.
+    Право: владелец события или супер-админ (не соработник).
+    """
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_admin_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Управлять соработниками может только владелец")
+
+        # Резолв канонического пользователя по platform + platform_user_id
+        user_svc = UserService(session)
+        user = await user_svc.get_by_platform_user_id(body.platform, body.platform_user_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден на этой площадке")
+        try:
+            await event_svc.add_manager(uid, user.id)
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "event_id": str(uid),
+        "manager": {"id": str(user.id), "name": user.name},
+    }
+
+
+@router.delete("/admin/events/{event_id}/managers/{user_id}")
+async def admin_remove_manager(
+    event_id: str,
+    user_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Убрать соработника мероприятия."""
+    try:
+        uid = UUID(event_id)
+        manager_uid = UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_admin_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Управлять соработниками может только владелец")
+        removed = await event_svc.remove_manager(uid, manager_uid)
+        await session.commit()
+
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Соработник не найден")
+    return {"event_id": str(uid), "removed": True}
 
 
 @router.post("/admin/events/{event_id}/publish")
@@ -802,7 +910,7 @@ async def admin_publish_event(
 @router.post("/admin/events/{event_id}/repost")
 async def admin_repost_event(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Переотправить анонс в канал."""
     try:
@@ -825,7 +933,7 @@ async def admin_repost_event(
 @router.get("/admin/events/{event_id}/stats")
 async def admin_event_stats(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Статистика продаж мероприятия (всем админам, без тарифного гейта)."""
     try:
@@ -848,7 +956,7 @@ async def admin_event_stats(
 @router.get("/admin/events/{event_id}/tickets")
 async def admin_event_tickets(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Список билетов на мероприятие (админ)."""
     try:
@@ -872,7 +980,7 @@ async def admin_event_tickets(
 @router.get("/admin/events/{event_id}/tickets.csv")
 async def admin_event_tickets_csv(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Экспорт билетов на мероприятие в CSV."""
     try:
@@ -914,19 +1022,29 @@ async def admin_event_tickets_csv(
 @router.get("/admin/tickets/validate")
 async def admin_validate_ticket(
     code: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
-    """Проверить билет по коду (без отметки входа)."""
+    """Проверить билет по коду (без отметки входа).
+
+    Доступ: проверяющий должен управлять мероприятием билета
+    (owner/manager/channel-admin), иначе 403.
+    """
     async with async_session_factory() as session:
         ticket_svc = TicketService(session)
         result = await ticket_svc.validate_ticket(code.strip().upper())
+
+        if result.get("found") and result.get("event_id"):
+            event_svc = EventService(session)
+            event = await event_svc.get_by_id(UUID(result["event_id"]))
+            if event is not None and not _can_manage_event(current, event):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому билету")
     return result
 
 
 @router.post("/admin/tickets/checkin")
 async def admin_checkin_ticket(
     body: CheckInIn,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Отметить вход по коду билета."""
     code = body.code.strip().upper()
@@ -961,7 +1079,7 @@ async def admin_checkin_ticket(
 @router.post("/admin/tickets/{ticket_id}/cancel")
 async def admin_cancel_ticket(
     ticket_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Отменить билет (админ). Канальный доступ по мероприятию билета."""
     try:
@@ -1374,14 +1492,29 @@ async def admin_health(current: CurrentUser = Depends(require_super_admin)):
 
 
 def _can_manage_event(current: CurrentUser, event) -> bool:
-    """Доступ к мероприятию: супер-админ, организатор-владелец (без канала)
-    или организатор канала."""
+    """Доступ к продажам мероприятия: супер-админ, владелец (owner),
+    соработник (manager) или организатор канала."""
     if current.is_super_admin:
         return True
-    # Сначала владелец (owner-событие) — даже если event привязан к каналу
+    # Владелец (owner-событие) — даже если event привязан к каналу
     if event.owner_user_id == current.user_id:
         return True
-    # Затем канал — организатор управляет мероприятиями своего канала
+    # Соработник (несколько продавцов на одном мероприятии)
+    if current.can_manage_event(event.id):
+        return True
+    # Канал — организатор управляет мероприятиями своего канала
+    if event.channel_id is not None:
+        return current.can_manage(event.channel_id)
+    return False
+
+
+def _can_admin_event(current: CurrentUser, event) -> bool:
+    """Доступ к управлению мероприятием (редактирование/удаление/менеджеры):
+    супер-админ, владелец (owner) или организатор канала. Менеджер — только продажи."""
+    if current.is_super_admin:
+        return True
+    if event.owner_user_id == current.user_id:
+        return True
     if event.channel_id is not None:
         return current.can_manage(event.channel_id)
     return False
@@ -1390,11 +1523,13 @@ def _can_manage_event(current: CurrentUser, event) -> bool:
 def _can_issue_invites(current: CurrentUser, event) -> bool:
     """Правило: пригласительные выдаёт организатор (не суперадмин).
 
-    Канальный организатор — управляет каналом; организатор без канала —
-    владелец (owner) мероприятия. Pro-подписка проверяется в эндпоинте.
+    Соработник (manager), канальный организатор или владелец (owner).
+    Pro-подписка проверяется в эндпоинте.
     """
     if current.is_super_admin:
         return False
+    if current.can_manage_event(event.id):
+        return True
     if event.channel_id is not None:
         return event.channel_id in current.managed_channel_ids
     return event.owner_user_id == current.user_id
@@ -1404,7 +1539,7 @@ def _can_issue_invites(current: CurrentUser, event) -> bool:
 async def admin_issue_invite(
     event_id: str,
     body: InviteIssueIn,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Выдать пригласительное (только админ канала, pro-подписка)."""
     try:
@@ -1450,7 +1585,7 @@ async def admin_issue_invite(
 async def admin_cancel_invite(
     event_id: str,
     ticket_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Отменить пригласительное (вернуть места)."""
     try:
@@ -1481,7 +1616,7 @@ async def admin_cancel_invite(
 @router.get("/admin/events/{event_id}/invites")
 async def admin_list_invites(
     event_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Список пригласительных по мероприятию."""
     try:
@@ -1505,7 +1640,7 @@ async def admin_list_invites(
 @router.get("/admin/tickets/{ticket_id}/qr")
 async def admin_ticket_qr(
     ticket_id: str,
-    current: CurrentUser = Depends(require_admin),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """PNG-картинка QR-кода билета/пригласительного."""
     try:

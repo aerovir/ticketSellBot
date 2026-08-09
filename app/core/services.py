@@ -9,7 +9,7 @@ from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
-    User, UserIdentity, LinkCode, Event, Ticket, Payment, Channel, ChannelAdmin,
+    User, UserIdentity, LinkCode, Event, EventManager, Ticket, Payment, Channel, ChannelAdmin,
     TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
 )
 from dateutil.relativedelta import relativedelta
@@ -1157,6 +1157,74 @@ class EventService:
             "duration_ms": _ms(start),
         })
         return event
+
+    # ─── Соработники (event_managers) ────────────────────────────
+
+    async def add_manager(self, event_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Добавить соработника мероприятия (идемпотентно)."""
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            raise ValueError("Мероприятие не найдено")
+        user = await self.session.get(User, user_id)
+        if user is None:
+            raise ValueError("Пользователь не найден")
+
+        existing = await self.is_manager(event_id, user_id)
+        if existing:
+            return False
+        self.session.add(EventManager(event_id=event_id, user_id=user_id))
+        await self.session.flush()
+        logger.info("", extra={
+            "event_type": "event.manager_added",
+            "event_id": str(event_id),
+            "user_id": str(user_id),
+            "status": "success",
+        })
+        return True
+
+    async def remove_manager(self, event_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Убрать соработника мероприятия."""
+        result = await self.session.execute(
+            select(EventManager).where(
+                and_(EventManager.event_id == event_id, EventManager.user_id == user_id)
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return False
+        await self.session.delete(row)
+        await self.session.flush()
+        logger.info("", extra={
+            "event_type": "event.manager_removed",
+            "event_id": str(event_id),
+            "user_id": str(user_id),
+            "status": "success",
+        })
+        return True
+
+    async def is_manager(self, event_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        result = await self.session.execute(
+            select(EventManager.id).where(
+                and_(EventManager.event_id == event_id, EventManager.user_id == user_id)
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def list_managers(self, event_id: uuid.UUID) -> list[User]:
+        """Соработники мероприятия (канонические пользователи)."""
+        result = await self.session.execute(
+            select(User)
+            .join(EventManager, EventManager.user_id == User.id)
+            .where(EventManager.event_id == event_id)
+        )
+        return list(result.scalars().all())
+
+    async def get_manager_event_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        """ID мероприятий, где пользователь — соработник."""
+        result = await self.session.execute(
+            select(EventManager.event_id).where(EventManager.user_id == user_id)
+        )
+        return list(result.scalars().all())
 
     async def get_event_stats(self, event_id: uuid.UUID) -> dict:
         """Get sales stats for an event."""
