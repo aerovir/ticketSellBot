@@ -195,7 +195,7 @@
 | # | Задача | Статус | Дата | Коммит |
 |---|--------|--------|------|--------|
 | 160 | VK: каноническая идентичность организатора — `user_identities` + линковка по одноразовому коду | ✅ done (код) | 2026-08-08 | `feature/vk-identity` |
-| 161 | VK: аутентификация Mini App — launch params + `sign` (HMAC-SHA256), резолв канона | 📌 pending | 2026-08-08 | — |
+| 161 | VK: аутентификация Mini App — launch params + `sign` (HMAC-SHA256), резолв канона | ✅ done (код) | 2026-08-08 | `feature/vk-auth` |
 | 162 | VK: соработники мероприятия — `event_managers` M2M, расширение `_can_manage_event` | 📌 pending | 2026-08-08 | — |
 | 163 | VK: модель `vk_groups` + self-service групп + `VKWebAppGetCommunityToken` (зашифр. токен) | 📌 pending | 2026-08-08 | — |
 | 164 | VK: публикации `event_publications` + постинг `wall.post` / `messages.send` | 📌 pending | 2026-08-08 | — |

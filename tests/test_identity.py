@@ -178,6 +178,26 @@ async def test_list_identities_returns_all(user_svc, tg_user):
     assert PlatformType.vk in platforms
 
 
+# ─── Ре-биндинг существующей identity (VK-вход → канон) ──────────
+
+
+async def test_consume_link_code_rebinds_own_identity(user_svc, tg_user):
+    """VK-пользователь уже имеет свою identity (вошёл ранее), вводит код → перепривязка."""
+    # Организатор создаёт код
+    code = await user_svc.create_link_code(tg_user.id, PlatformType.vk, ttl_minutes=10)
+    # VK-пользователь уже вошёл — у него своя запись + identity
+    vk_entry = await user_svc.get_or_create(PlatformType.vk, "vk_existing", name="ВК юзер")
+    assert vk_entry.id != tg_user.id
+
+    # Вводит код со своей стороны (current_user_id = его запись)
+    await user_svc.consume_link_code(
+        code, PlatformType.vk, "vk_existing", current_user_id=vk_entry.id,
+    )
+    # Теперь вход по VK ведёт на канон организатора
+    resolved = await user_svc.get_or_create(PlatformType.vk, "vk_existing")
+    assert resolved.id == tg_user.id
+
+
 # ─── Web API: генерация кода и список identities ─────────────────
 
 
@@ -228,3 +248,57 @@ class TestLinkCodeEndpoint:
         platforms = {i["platform"] for i in resp.json()}
         assert "telegram" in platforms
         assert "vk" in platforms
+
+
+class TestLinkConsumeEndpoint:
+    """POST /api/me/link — ввод кода с VK-стороны (launch params + sign)."""
+
+    async def test_vk_user_links_to_organizer(self, db_client, db_session):
+        from app.web.vk_auth import compute_sign
+        import base64
+        from urllib.parse import urlencode
+        from unittest.mock import patch
+
+        # Организатор (TG) создаёт код
+        user_svc = UserService(db_session)
+        org = await user_svc.get_or_create(PlatformType.telegram, "org_tg", name="Организатор")
+        await user_svc.activate_subscription(org.id, days=30, tier=SubscriptionTier.pro)
+        code = await user_svc.create_link_code(org.id, PlatformType.vk, ttl_minutes=10)
+        await db_session.commit()
+
+        # VK-пользователь формирует launch params с подписью
+        ts = int(__import__("time").time())
+        params = {"vk_app_id": "54698875", "vk_user_id": "999001", "vk_ts": str(ts)}
+        params["sign"] = compute_sign(params, "test_vk_secret")
+        header = base64.b64encode(urlencode(sorted(params.items())).encode()).decode()
+
+        with (
+            patch("app.web.vk_auth.settings.vk_app_id", 54698875),
+            patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret"),
+        ):
+            resp = await db_client.post(
+                "/api/me/link",
+                headers={"X-VK-Init-Data": header},
+                json={"code": code},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["linked"] is True
+
+        # Вход по VK теперь ведёт на канон организатора
+        resolved = await user_svc.get_or_create(PlatformType.vk, "999001")
+        assert resolved.id == org.id
+
+    async def test_link_requires_vk_auth(self, db_client, db_session):
+        # TG-пользователь (X-Skip-Auth) не может вызвать /api/me/link
+        user_svc = UserService(db_session)
+        org = await user_svc.get_or_create(PlatformType.telegram, "org_tg2", name="Организатор")
+        await user_svc.activate_subscription(org.id, days=30, tier=SubscriptionTier.pro)
+        code = await user_svc.create_link_code(org.id, PlatformType.vk, ttl_minutes=10)
+        await db_session.commit()
+
+        resp = await db_client.post(
+            "/api/me/link",
+            headers={"X-Skip-Auth": "1"},
+            json={"code": code},
+        )
+        assert resp.status_code == 400

@@ -193,11 +193,19 @@ class UserService:
         code: str,
         platform: PlatformType,
         platform_user_id: str,
+        current_user_id: uuid.UUID | None = None,
     ) -> bool:
         """Использовать код линковки: привязать (platform, platform_user_id) к канону кода.
 
+        Правила:
+        - identity свободна → создаём привязку к канону кода (link.user_id).
+        - identity уже у канона кода → идемпотентно (код помечается использованным).
+        - identity занята текущим пользователем (например, VK-вход создал ему свою
+          identity) → ре-биндинг: переназначаем identity на канон кода.
+        - identity занята третьим лицом (не current_user_id) → отказ.
+
         ValueError: код не найден / истёк / уже использован / не для этой площадки,
-        либо identity уже занята другим пользователем.
+        либо identity занята чужим пользователем.
         """
         code = code.strip().upper()
         result = await self.session.execute(
@@ -217,7 +225,26 @@ class UserService:
 
         existing = await self._find_identity(platform, platform_user_id)
         if existing is not None:
-            raise ValueError("Эта площадка уже привязана к пользователю")
+            if existing.user_id == link.user_id:
+                # Уже привязана к канону кода — идемпотентно
+                link.consumed_at = now
+                await self.session.flush()
+                return True
+            if current_user_id is not None and existing.user_id == current_user_id:
+                # identity принадлежит текущему пользователю → ре-биндинг на канон кода
+                existing.user_id = link.user_id
+                link.consumed_at = now
+                await self.session.flush()
+                logger.info("", extra={
+                    "event_type": "user.identity_rebound_by_code",
+                    "canonical_user_id": str(link.user_id),
+                    "platform": platform.value,
+                    "platform_user_id": platform_user_id,
+                    "status": "success",
+                    "duration_ms": _ms(time.perf_counter()),
+                })
+                return True
+            raise ValueError("Эта площадка уже привязана к другому пользователю")
 
         identity = UserIdentity(
             user_id=link.user_id,

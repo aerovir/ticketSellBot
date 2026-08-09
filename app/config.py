@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # VK
     vk_token: Optional[str] = None
     vk_group_id: Optional[str] = None
+    vk_app_id: Optional[int] = None      # App ID VK Mini App (для проверки sign)
+    vk_secret_key: Optional[str] = None  # Секретный ключ VK приложения (для подписи launch params)
 
     # MAX
     max_token: Optional[str] = None

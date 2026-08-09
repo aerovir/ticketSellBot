@@ -26,6 +26,7 @@ from app.core.schemas import (
     EventUpdateIn,
     InviteIssueIn,
     LinkCodeIn,
+    LinkConsumeIn,
     MeUpdateIn,
     SubscribeIn,
     SubscribeMeIn,
@@ -394,6 +395,41 @@ async def list_me_identities(current: CurrentUser = Depends(get_current_user)):
         }
         for i in identities
     ]
+
+
+@router.post("/me/link", status_code=status.HTTP_201_CREATED)
+async def link_me(
+    body: LinkConsumeIn,
+    auth_data: dict = Depends(validate_init_data),
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Ввести код привязки на целевой площадке (VK-сторона).
+
+    Текущий VK-пользователь (аутентифицирован launch params + sign) привязывает
+    свою VK-identity к каноническому организатору, которому принадлежит код.
+    """
+    if auth_data.get("platform") != "vk":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Привязка площадки доступна только из VK Mini App",
+        )
+    vk_user_id = str(auth_data["user"]["id"])
+
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        try:
+            await user_svc.consume_link_code(
+                code=body.code,
+                platform=PlatformType.vk,
+                platform_user_id=vk_user_id,
+                current_user_id=current.user_id,
+            )
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {"linked": True, "platform": "vk"}
 
 
 # ─── Мои каналы (самообслуживание) ────────────────────────────

@@ -68,12 +68,15 @@ def _compute_signature(data_check_string: str, bot_token: str) -> str:
 
 def validate_init_data(
     x_init_data: str | None = Header(None),
+    x_vk_init_data: str | None = Header(None),
     x_skip_auth: str | None = Header(None),
 ) -> dict:
-    """Validate Telegram Mini App initData.
+    """Validate platform auth: Telegram initData или VK launch params.
 
-    Returns parsed initData dict (with 'user' key) on success.
-    Raises 401 on invalid/missing/expired initData.
+    TG: X-Init-Data (HMAC по bot token). VK: X-VK-Init-Data (launch params + sign).
+
+    Returns parsed auth dict (with 'user' key and 'platform') on success.
+    Raises 401 on invalid/missing/expired auth.
 
     If X-Skip-Auth header is set to any truthy value (for local dev/testing),
     returns a placeholder user dict. NEVER enable in production.
@@ -83,14 +86,22 @@ def validate_init_data(
     # Treat it the same as "header not present".
     if not isinstance(x_skip_auth, (str, type(None))):
         x_skip_auth = None
+    if not isinstance(x_vk_init_data, (str, type(None))):
+        x_vk_init_data = None
 
     # Skip auth for local development / testing
     if x_skip_auth:
         return {
             "user": {"id": 12345, "first_name": "Dev", "last_name": "User"},
+            "platform": "telegram",
             "auth_date": int(time.time()),
             "hash": "skip",
         }
+
+    # VK Mini App: launch params (base64) в X-VK-Init-Data
+    if x_vk_init_data:
+        from app.web.vk_auth import validate_vk_init_data
+        return validate_vk_init_data(x_vk_init_data)
 
     if not x_init_data:
         raise HTTPException(
@@ -138,7 +149,7 @@ def validate_init_data(
             )
 
     # Parse user field into a dict
-    result = {}
+    result = {"platform": "telegram"}
     for key, values in params.items():
         val = values[0]
         if key == "user":
@@ -206,10 +217,14 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
     platform_user_id = str(user_data.get("id", "0"))
     name = user_data.get("first_name", "")
 
+    # Платформа из auth_data: telegram (по умолчанию) или vk (launch params)
+    platform_name = auth_data.get("platform", "telegram")
+    platform = PlatformType(platform_name)
+
     async with async_session_factory() as session:
         user_svc = UserService(session)
         user = await user_svc.get_or_create(
-            platform=PlatformType.telegram,
+            platform=platform,
             platform_user_id=platform_user_id,
             name=name,
         )

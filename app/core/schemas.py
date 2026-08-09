@@ -181,6 +181,11 @@ class LinkCodeIn(BaseModel):
     ttl_minutes: int = Field(default=10, ge=1, le=60)
 
 
+class LinkConsumeIn(BaseModel):
+    """Ввести код привязки на целевой площадке (VK-сторона)."""
+    code: str
+
+
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):
