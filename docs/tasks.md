@@ -201,4 +201,5 @@
 | 164 | VK: публикации `event_publications` + постинг `wall.post` / `messages.send` | ✅ done (код) | 2026-08-08 | `feature/vk-publications` |
 | 165 | VK: фронтенд Mini App (переиспользовать `app.js` или отдельный entry — decision №2) | ✅ done (код) | 2026-08-08 | `feature/vk-frontend` |
 | 166 | VK: TDD-контур для VK-фич (аналог harness для Telegram) | ✅ done (код) | 2026-08-08 | `feature/vk-testing` |
-| 167 | Fix: VK Mini App показывал «Откройте кабинет в Telegram» — vk-bridge 3.x возвращает launch params объектом напрямую, а код читал `res.launch_params` | ✅ done | 2026-08-10 | — (см. errors #063) |
+| 167 | Fix: VK Mini App показывал «Откройте кабинет в Telegram» — vk-bridge 3.x возвращает launch params объектом напрямую, а код читал `res.launch_params` | ✅ done | 2026-08-10 | `8fdac65` (PR #2, errors #063) |
+| 168 | Fix: web-контейнер без `VK_APP_ID`/`VK_SECRET_KEY` — VK Mini App отвечал 500. Вшить VK env в `.env.telegram` через `deploy.yml` | ✅ done | 2026-08-11 | `d859fe9` (PR #3, errors #064) |
