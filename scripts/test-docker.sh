@@ -21,7 +21,8 @@ set -e
 cd "$(dirname "$0")/.."
 
 IMAGE="${TICKETBOT_TEST_IMAGE:-ticketbot-dev}"
-DB_URL="postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ticketbot_test"
+# Пароль БД берём из DB_PASSWORD_VK (как на деплое), фолбэк postgres для локальной разработки
+DB_URL="postgresql+asyncpg://postgres:${DB_PASSWORD_VK:-postgres}@127.0.0.1:5432/ticketbot_test"
 
 docker run --rm --network host --entrypoint sh \
   -v "$PWD:/app" -w /app \

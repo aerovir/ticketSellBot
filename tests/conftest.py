@@ -31,9 +31,10 @@ from app.core.services import UserService, EventService, TicketService, ChannelS
 
 # ─── Настройка тестовой БД ─────────────────────────────────────
 
+# Пароль берём из DB_PASSWORD_VK (как на деплое VK), фолбэк postgres для локальной разработки
 TEST_DB_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/ticketbot_test",
+    f"postgresql+asyncpg://postgres:{os.getenv('DB_PASSWORD_VK', 'postgres')}@localhost:5432/ticketbot_test",
 )
 
 

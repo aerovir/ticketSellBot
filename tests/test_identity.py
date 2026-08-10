@@ -269,12 +269,12 @@ class TestLinkConsumeEndpoint:
 
         # VK-пользователь формирует launch params с подписью
         ts = int(__import__("time").time())
-        params = {"vk_app_id": "54698875", "vk_user_id": "999001", "vk_ts": str(ts)}
+        params = {"vk_app_id": "123456", "vk_user_id": "999001", "vk_ts": str(ts)}
         params["sign"] = compute_sign(params, "test_vk_secret")
         header = base64.b64encode(urlencode(sorted(params.items())).encode()).decode()
 
         with (
-            patch("app.web.vk_auth.settings.vk_app_id", 54698875),
+            patch("app.web.vk_auth.settings.vk_app_id", 123456),
             patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret"),
         ):
             resp = await db_client.post(

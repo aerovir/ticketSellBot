@@ -17,7 +17,7 @@ from fastapi import HTTPException
 
 from app.web.vk_auth import validate_vk_init_data, compute_sign
 
-APP_ID = 54698875
+APP_ID = 123456  # фиктивный app_id (реальный — в GitHub secrets VK_APP_ID)
 SECRET = "test_vk_secret_key"
 
 
