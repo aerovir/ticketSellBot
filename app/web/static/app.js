@@ -106,12 +106,44 @@ function tgAlert(message) {
 
 // VK Mini App: получить launch params через VK Bridge и подготовить
 // X-VK-Init-Data (base64 query string: vk_user_id=...&sign=...).
+// Нормализовать VK launch params в объект { vk_user_id, vk_ts, sign, ... }.
+// vk-bridge 3.x возвращает объект НАПРЯМУЮ (без обёртки launch_params);
+// старые версии — строку query в launch_params. Запасной вариант — URL (/vk-app?vk_*).
+function normalizeVKLaunchParams(res) {
+    if (!res) return {};
+    if (res.launch_params) {
+        // Старый формат: launch_params = "vk_user_id=...&sign=..."
+        if (typeof res.launch_params === "object") return res.launch_params;
+        try {
+            const params = new URLSearchParams(res.launch_params);
+            const out = {};
+            params.forEach((v, k) => { out[k] = v; });
+            return out;
+        } catch (e) {
+            console.warn("VK launch_params parse failed", e);
+            return {};
+        }
+    }
+    // vk-bridge 3.x: sign/vk_user_id на верхнем уровне объекта.
+    return res;
+}
+
 async function initVKAuth() {
     const bridge = window.vkBridge;
     try {
         bridge.send("VKWebAppInit");
-        const res = await bridge.send("VKWebAppGetLaunchParams");
-        const lp = (res && res.launch_params) || {};
+        let res = await bridge.send("VKWebAppGetLaunchParams");
+        if (!res || (!res.sign && !res.vk_user_id)) {
+            // В веб-версии (desktop/web) bridge может не отдать launch params —
+            // берём их из URL (/vk-app?vk_user_id=...&vk_ts=...&sign=...).
+            const qs = new URLSearchParams(window.location.search);
+            if (qs.get("sign") && qs.get("vk_user_id")) {
+                const fromUrl = {};
+                qs.forEach((v, k) => { fromUrl[k] = v; });
+                res = fromUrl;
+            }
+        }
+        const lp = normalizeVKLaunchParams(res);
         if (lp.sign && lp.vk_user_id) {
             const query = Object.entries(lp)
                 .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
