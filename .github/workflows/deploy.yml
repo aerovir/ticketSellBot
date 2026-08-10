@@ -71,6 +71,8 @@ jobs:
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           ADMIN_TELEGRAM_IDS=${{ secrets.ADMIN_TELEGRAM_IDS }}
           WEBAPP_URL=${{ secrets.WEBAPP_URL || 'https://pochtibot.online' }}
+          VK_APP_ID=${{ secrets.VK_APP_ID }}
+          VK_SECRET_KEY=${{ secrets.VK_SECRET_KEY }}
           DEBUG=false
           ENVEOF
           echo "✅ .env.telegram создан"
