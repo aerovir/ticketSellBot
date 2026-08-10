@@ -1036,3 +1036,21 @@
 - **Коммит:** `1a3e14a`
 - **Тесты:** 290
 - **Связанные ошибки:** 059 (расхождение frontend/backend — та же категория)
+
+---
+
+## 063 — VK Mini App показывает «Откройте кабинет в Telegram» на /vk-app
+
+- **Дата:** 2026-08-10
+- **Статус:** ✅ Исправлено
+- **Описание:** VK Mini App (https://pochtibot.online/vk-app) открывается, но вместо кабинета показывает заглушку «Откройте кабинет в Telegram» — как будто initData не сформирован.
+- **Анализ:**
+  - **Подтверждено (vk-bridge 3.0.2, unpkg `@vkontakte/vk-bridge/dist/browser.min.js` + `dist/types/data.d.ts`):** `bridge.send("VKWebAppGetLaunchParams")` возвращает объект НАПРЯМУЮ — `{ vk_app_id, vk_user_id, vk_ts, sign, ... }` (тип `GetLaunchParamsResponse`, `sign` на верхнем уровне). Обёртки `launch_params` нет.
+  - **Подтверждено (`app.js:114`):** `const lp = (res && res.launch_params) || {};` — `res.launch_params` всегда `undefined` → `lp.sign` не проверяется → `state.initData` остаётся пустым → `showNoInitData()` (`app.js:152`) рисует заглушку.
+  - **Подтверждено (VDS):** на `/vk-app` отдаётся правильный `vk-app.html` (vk-bridge подключён), deployed `app.js` идентичен локальному (md5 совпадает).
+- **Исправление:** `app/web/static/app.js` — `initVKAuth()` теперь нормализует launch params через `normalizeVKLaunchParams()`:
+  - объект vk-bridge 3.x напрямую (sign на верхнем уровне) — главный фикс;
+  - legacy-обёртка `{ launch_params: "vk_user_id=...&sign=..." }`;
+  - fallback на `window.location.search` (`/vk-app?vk_user_id=...&vk_ts=...&sign=...`).
+- **Коммит:** — (не закоммичен)
+- **Тесты:** 7 (test_frontend.py) + полный прогон
