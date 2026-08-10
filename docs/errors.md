@@ -1052,5 +1052,22 @@
   - объект vk-bridge 3.x напрямую (sign на верхнем уровне) — главный фикс;
   - legacy-обёртка `{ launch_params: "vk_user_id=...&sign=..." }`;
   - fallback на `window.location.search` (`/vk-app?vk_user_id=...&vk_ts=...&sign=...`).
-- **Коммит:** — (не закоммичен)
-- **Тесты:** 7 (test_frontend.py) + полный прогон
+- **Коммит:** `8fdac65` (PR #2)
+- **Тесты:** 7 (test_frontend.py) + полный прогон (362 passed)
+
+---
+
+## 064 — web-контейнер без VK_APP_ID/VK_SECRET_KEY — VK Mini App отвечал 500
+
+- **Дата:** 2026-08-11
+- **Статус:** ✅ Исправлено
+- **Описание:** После фикса #063 фронт стал собирать `initData`, но API возвращал `500 "VK App ID / secret key not configured"` при любом входе в VK Mini App.
+- **Анализ:**
+  - **Подтверждено (VDS):** `docker exec ticketbot-web python3 -c "from app.config import settings; ..."` → `vk_app_id = None`, `vk_secret_key = None`.
+  - **Подтверждено (`docker-compose.yml:86`):** сервис `web` читает `env_file: .env.telegram`, где VK-переменных не было.
+  - **Подтверждено (`deploy.yml`):** при деплое `.env.telegram` пересоздаётся из секретов без `VK_APP_ID`/`VK_SECRET_KEY`.
+  - **Подтверждено (`vk_auth.py:84-90`):** без `settings.vk_app_id`/`vk_secret_key` → `HTTPException 500`.
+- **Исправление:** `deploy.yml` — писать `VK_APP_ID`/`VK_SECRET_KEY` из GitHub Secrets в `.env.telegram`; шаблон `.env.telegram` дополнен (в т.ч. `WEBAPP_URL`).
+- **Коммит:** `d859fe9` (PR #3)
+- **Тесты:** 362 passed (логика не менялась)
+- **Связанные ошибки:** 063 (продолжение цепочки VK Mini App)
