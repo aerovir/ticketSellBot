@@ -122,12 +122,27 @@ class TestInitDataValidation:
         assert exc.value.status_code == 401
 
     def test_validate_skip_auth(self):
-        """Заголовок X-Skip-Auth должен пропускать валидацию."""
+        """Заголовок X-Skip-Auth должен пропускать валидацию (dev: allow_skip_auth=True)."""
         from app.web.dependencies import validate_init_data
 
-        result = validate_init_data(x_init_data=None, x_skip_auth="1")
+        with patch("app.web.dependencies.settings.allow_skip_auth", True):
+            result = validate_init_data(x_init_data=None, x_skip_auth="1")
         assert result["user"]["id"] == 12345
-        assert result["hash"] == "skip"
+
+    def test_skip_auth_rejected_in_production(self):
+        """В production (allow_skip_auth=False) X-Skip-Auth игнорируется → 401.
+
+        Защита от бэкдора: заголовок, который клиент шлёт сам, НЕ должен
+        обходить аутентификацию на проде. Разрешение — только через
+        settings.allow_skip_auth (dev/test), по умолчанию False.
+        """
+        from app.web.dependencies import validate_init_data
+        from fastapi import HTTPException
+
+        with patch("app.web.dependencies.settings.allow_skip_auth", False):
+            with pytest.raises(HTTPException) as exc:
+                validate_init_data(x_init_data=None, x_skip_auth="1")
+        assert exc.value.status_code == 401
 
 
 # ═══════════════════════════════════════════════════════════════

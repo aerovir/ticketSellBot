@@ -89,8 +89,10 @@ def validate_init_data(
     if not isinstance(x_vk_init_data, (str, type(None))):
         x_vk_init_data = None
 
-    # Skip auth for local development / testing
-    if x_skip_auth:
+    # Skip auth for local development / testing — только если явно разрешено.
+    # В production (allow_skip_auth=False по умолчанию) заголовок игнорируется,
+    # чтобы клиент не мог обойти аутентификацию сам (X-Skip-Auth — не секрет).
+    if x_skip_auth and settings.allow_skip_auth:
         return {
             "user": {"id": 12345, "first_name": "Dev", "last_name": "User"},
             "platform": "telegram",
