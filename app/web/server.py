@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.core.database import init_db, close_db
+from app.web.rate_limit import RateLimitMiddleware
 from app.web.routes import router
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -63,6 +64,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Per-IP rate limiting (защита от brute-force/скрейпинга). Whitelist: /health,/metrics,/static.
+    app.add_middleware(RateLimitMiddleware)
 
     # Mount static files (Telegram Mini App frontend) — no cache для обновлений
     import starlette.types
