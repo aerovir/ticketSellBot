@@ -1090,3 +1090,34 @@
 - **Коммит:** — (см. PR)
 - **Тесты:** 3 skip-auth теста + полный прогон
 - **Связанные ошибки:** — (обнаружена при аудите VK; TG-ветка тоже закрыта, т.к. гейт общий)
+
+---
+
+## 066 — Черновик мероприятия можно было купить по ID (is_published не проверялся)
+
+- **Дата:** 2026-08-11
+- **Статус:** ✅ Исправлено
+- **Описание:** `buy_ticket` и `buy_ticket_webapp` не проверяли `is_published` → черновик (is_published=False) можно было купить напрямую по ID через `/api/events/{id}/buy`. Публичная лента `list_upcoming` фильтрует is_published, но прямая покупка — нет.
+- **Анализ:**
+  - **Подтверждено (`services.py buy_ticket`/`buy_ticket_webapp`):** проверки только is_active / date / available_tickets; is_published не проверяется.
+  - **Подтверждено (`models.py:259`):** `is_published` default=False (создание = черновик); publish ставит True.
+  - **Переоценка `paid_events`:** гейт есть в `event.create` (подписка организатору), при покупке не нужен (покупатель не обязан быть Pro) — и бот-версия `buy_ticket` так работает. Это НЕ баг.
+- **Исправление:** в `buy_ticket` и `buy_ticket_webapp` добавлена проверка `if not event.is_published: raise ValueError("Мероприятие не опубликовано")`. Обновлены тесты: публикация события перед покупкой (e2e, sold_out и др.).
+- **Коммит:** — (см. PR)
+- **Тесты:** +2 TDD (draft_rejected), полный прогон
+
+---
+
+## 067 — VK-покупатель привязывался к telegram-identity (хардкод платформы)
+
+- **Дата:** 2026-08-11
+- **Статус:** ✅ Исправлено
+- **Описание:** Покупка, список билетов и отмена в web хардкодили `PlatformType.telegram` → VK-пользователь, купивший в Mini App, привязывался к telegram-identity (потенциальные пересечения ID, билет «не виден» в VK-кабинете, DM-уведомление уходит в Telegram).
+- **Анализ:**
+  - **Подтверждено (`routes.py:160/200/226`):** `get_or_create(platform=PlatformType.telegram, ...)` в `buy_ticket`, `list_tickets`, `cancel_ticket`.
+  - **Подтверждено (`vk_auth.py`):** VK-аутентификация возвращает `platform='vk'` в auth_data — но route её игнорировал.
+  - **Подтверждено (`_send_ticket_dm`):** уведомление шлётся только в Telegram (`bot.send_message`); для VK-покупателя — пусто (функциональный gap, не безопасность).
+- **Исправление:** `buy_ticket`, `list_tickets`, `cancel_ticket` — `platform=PlatformType(auth_data.get("platform", "telegram"))`. VK-покупатель теперь работает со своей платформой.
+- **Коммит:** — (см. PR)
+- **Тесты:** +3 TDD (vk_platform), полный прогон
+- **Связанные ошибки:** 066 (обе — аудит VK-ветки web)

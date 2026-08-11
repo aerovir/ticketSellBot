@@ -63,6 +63,26 @@ def make_valid_init_data(bot_token: str, user_id: int = 12345, **extra) -> str:
     return urlencode(sorted(params.items()))
 
 
+def _vk_auth_header(user_id=5305539, app_id=123456, secret="test_vk_secret_key"):
+    """Валидный X-VK-Init-Data (launch params + подпись) для тестов."""
+    import base64
+    import time
+    from urllib.parse import urlencode
+
+    from app.web.vk_auth import compute_sign
+
+    params = {
+        "vk_app_id": str(app_id),
+        "vk_user_id": str(user_id),
+        "vk_ts": str(int(time.time())),
+        "vk_ref": "catalog",
+    }
+    sign = compute_sign(params, secret)
+    params["sign"] = sign
+    query = urlencode(sorted(params.items()))
+    return base64.b64encode(query.encode()).decode()
+
+
 # ═══════════════════════════════════════════════════════════════
 # initData Validation Tests
 # ═══════════════════════════════════════════════════════════════
@@ -296,6 +316,77 @@ class TestAPIEndpoints:
             )
         assert resp.status_code == 409
         assert "Билеты закончились" in resp.json()["detail"]
+
+    def test_buy_ticket_vk_platform(self, client):
+        """VK-покупатель → get_or_create с PlatformType.vk (не telegram)."""
+        from app.core.models import PlatformType
+
+        vk_header = _vk_auth_header(user_id=5305539)
+        with (
+            patch("app.web.vk_auth.settings.vk_app_id", 123456),
+            patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret_key"),
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock) as mock_user,
+            patch("app.web.routes.TicketService.buy_ticket_webapp", new_callable=AsyncMock) as mock_buy,
+            patch("app.web.routes._send_ticket_dm", new_callable=AsyncMock, return_value=False),
+        ):
+            mock_user.return_value = Mock(id="550e8400-e29b-41d4-a716-446655440000")
+            mock_buy.return_value = {
+                "ticket_id": "x", "event_title": "E", "event_date": "d", "validation_code": None,
+            }
+            resp = client.post(
+                "/api/events/550e8400-e29b-41d4-a716-446655440000/buy",
+                headers={"X-VK-Init-Data": vk_header},
+            )
+        assert resp.status_code == 201
+        args, kwargs = mock_user.await_args
+        assert kwargs["platform"] == PlatformType.vk
+        assert kwargs["platform_user_id"] == "5305539"
+
+    def test_list_tickets_vk_platform(self, client):
+        """VK-пользователь видит свои билеты (platform=vk)."""
+        from app.core.models import PlatformType
+
+        vk_header = _vk_auth_header(user_id=5305539)
+        with (
+            patch("app.web.vk_auth.settings.vk_app_id", 123456),
+            patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret_key"),
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock) as mock_user,
+            patch("app.web.routes.TicketService.get_user_tickets", new_callable=AsyncMock) as mock_tickets,
+        ):
+            mock_user.return_value = Mock(id="550e8400-e29b-41d4-a716-446655440000")
+            mock_tickets.return_value = []
+            resp = client.get("/api/tickets", headers={"X-VK-Init-Data": vk_header})
+        assert resp.status_code == 200
+        args, kwargs = mock_user.await_args
+        assert kwargs["platform"] == PlatformType.vk
+        assert kwargs["platform_user_id"] == "5305539"
+
+    def test_cancel_ticket_vk_platform(self, client):
+        """VK-пользователь отменяет билет (platform=vk)."""
+        from app.core.models import PlatformType
+
+        vk_header = _vk_auth_header(user_id=5305539)
+        with (
+            patch("app.web.vk_auth.settings.vk_app_id", 123456),
+            patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret_key"),
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock) as mock_user,
+            patch("app.web.routes.TicketService.cancel_ticket", new_callable=AsyncMock) as mock_cancel,
+            patch("app.web.routes._send_ticket_dm", new_callable=AsyncMock, return_value=False),
+        ):
+            mock_user.return_value = Mock(id="550e8400-e29b-41d4-a716-446655440000")
+            mock_cancel.return_value = Mock(
+                status=Mock(value="active"),
+                event_id="550e8400-e29b-41d4-a716-446655440000",
+                validation_code="CODE-1234",
+            )
+            resp = client.post(
+                "/api/tickets/550e8400-e29b-41d4-a716-446655440000/cancel",
+                headers={"X-VK-Init-Data": vk_header},
+            )
+        assert resp.status_code == 200
+        args, kwargs = mock_user.await_args
+        assert kwargs["platform"] == PlatformType.vk
+        assert kwargs["platform_user_id"] == "5305539"
 
     def test_my_tickets(self, client):
         """GET /api/tickets — список билетов пользователя."""

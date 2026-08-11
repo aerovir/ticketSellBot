@@ -436,6 +436,7 @@ class TestTicketService:
             total_tickets=0, location="Msk",
             channel_id=sample_channel.id,
         )
+        event.is_published = True
         await db_session.commit()
 
         with pytest.raises(ValueError, match="Билеты закончились"):
@@ -467,6 +468,30 @@ class TestTicketService:
         with pytest.raises(ValueError, match="У вас уже есть активный билет"):
             await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
 
+    async def test_buy_ticket_draft_rejected(self, db_session, ticket_svc, sample_user, event_svc, sample_channel):
+        """Черновик (is_published=False) нельзя купить даже по ID."""
+        future = datetime.now(timezone.utc) + timedelta(days=10)
+        event = await event_svc.create(
+            title="Draft", description=None, date=future, price=0,
+            total_tickets=10, location="Msk", channel_id=sample_channel.id,
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValueError, match="не опубликовано"):
+            await ticket_svc.buy_ticket(sample_user.id, event.id)
+
+    async def test_buy_ticket_webapp_draft_rejected(self, db_session, ticket_svc, sample_user, event_svc, sample_channel):
+        """Черновик (is_published=False) нельзя купить через Mini App."""
+        future = datetime.now(timezone.utc) + timedelta(days=10)
+        event = await event_svc.create(
+            title="Draft WA", description=None, date=future, price=0,
+            total_tickets=10, location="Msk", channel_id=sample_channel.id,
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValueError, match="не опубликовано"):
+            await ticket_svc.buy_ticket_webapp(sample_user.id, event.id)
+
     async def test_buy_ticket_webapp_success(self, db_session, ticket_svc, sample_user, sample_event):
         """Покупка билета через Mini App (Payment.status = pending)."""
         result = await ticket_svc.buy_ticket_webapp(sample_user.id, sample_event.id)
@@ -488,6 +513,7 @@ class TestTicketService:
             total_tickets=0, location="Msk",
             channel_id=sample_channel.id,
         )
+        event.is_published = True
         await db_session.commit()
 
         with pytest.raises(ValueError, match="Билеты закончились"):
@@ -593,6 +619,7 @@ class TestTicketService:
             total_tickets=50, location="Msk",
             channel_id=sample_channel.id,
         )
+        event.is_published = True
         await db_session.commit()
 
         ticket = await ticket_svc.buy_ticket(sample_user.id, event.id)
@@ -631,6 +658,7 @@ class TestTicketService:
             total_tickets=10, location="Msk",
             channel_id=sample_channel.id,
         )
+        event.is_published = True
         await db_session.commit()
 
         event_paid = await event_svc.create(
@@ -638,6 +666,7 @@ class TestTicketService:
             total_tickets=10, location="Msk",
             channel_id=sample_channel.id,
         )
+        event_paid.is_published = True
         await db_session.commit()
 
         free_ticket = await ticket_svc.buy_ticket(sample_user.id, event.id)
@@ -743,6 +772,7 @@ class TestTicketValidation:
             total_tickets=10, location="Msk",
             channel_id=basic_channel.id,
         )
+        event.is_published = True
         await db_session.commit()
 
         # Покупка работает для бесплатного
@@ -1096,6 +1126,7 @@ class TestStatsWithInvites:
             location=None, price=1000.0, total_tickets=20,
             channel_id=sample_channel.id, invites_quota=5,
         )
+        event.is_published = True
         await db_session.commit()
 
         # Купленный билет

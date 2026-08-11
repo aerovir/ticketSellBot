@@ -203,4 +203,6 @@
 | 166 | VK: TDD-контур для VK-фич (аналог harness для Telegram) | ✅ done (код) | 2026-08-08 | `feature/vk-testing` |
 | 167 | Fix: VK Mini App показывал «Откройте кабинет в Telegram» — vk-bridge 3.x возвращает launch params объектом напрямую, а код читал `res.launch_params` | ✅ done | 2026-08-10 | `8fdac65` (PR #2, errors #063) |
 | 168 | Fix: web-контейнер без `VK_APP_ID`/`VK_SECRET_KEY` — VK Mini App отвечал 500. Вшить VK env в `.env.telegram` через `deploy.yml` | ✅ done | 2026-08-11 | `d859fe9` (PR #3, errors #064) |
-| 169 | Fix: `X-Skip-Auth` обходил аутентификацию на проде — флаг `allow_skip_auth` (False по умолчанию), гейт в `dependencies.py`, включён только в тестах | ✅ done | 2026-08-11 | — (PR #?, errors #065) |
+| 169 | Fix: `X-Skip-Auth` обходил аутентификацию на проде — флаг `allow_skip_auth` (False по умолчанию), гейт в `dependencies.py`, включён только в тестах | ✅ done | 2026-08-11 | — (PR #5, errors #065) |
+| 170 | Fix: черновик мероприятия можно было купить по ID — проверка `is_published` в `buy_ticket`/`buy_ticket_webapp` | ✅ done | 2026-08-11 | — (PR #6, errors #066) |
+| 171 | Fix: VK-покупатель привязывался к telegram-identity — платформа из `auth_data` в `buy_ticket`/`list_tickets`/`cancel_ticket` | ✅ done | 2026-08-11 | — (PR #6, errors #067) |
