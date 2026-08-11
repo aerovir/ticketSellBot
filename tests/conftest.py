@@ -14,6 +14,11 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import AsyncGenerator
 
+# Тестовая среда явно разрешает X-Skip-Auth (обход аутентификации под id=12345).
+# Флаг читается app.config при импорте, поэтому ставим ДО любых import app.*.
+# В production (деплой) флаг не задан → settings.allow_skip_auth=False → бэкдор закрыт.
+os.environ.setdefault("ALLOW_SKIP_AUTH", "true")
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import text

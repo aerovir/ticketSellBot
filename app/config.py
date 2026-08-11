@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     admin_telegram_ids: str = ""  # через запятую: "123456,789012"
 
     # Web / Mini App
+    # Разрешить X-Skip-Auth (обход аутентификации) — ТОЛЬКО для dev/тестов.
+    # По умолчанию False: на проде заголовок X-Skip-Auth игнорируется (401).
+    allow_skip_auth: bool = False
     web_host: str = "0.0.0.0"
     web_port: int = 8080
     webapp_url: str = ""  # Публичный HTTPS URL Mini App (для WebAppInfo в кнопках)
