@@ -3,10 +3,16 @@ __pycache__/
 *.py[cod]
 *.so
 venv/
-.env
 *.egg-info/
 dist/
 build/
+
+# Env-файлы с секретами — не коммитить. В git — только шаблоны *.example
+# (реальные .env.* создаёт deploy.yml из GitHub Secrets на VPS).
+.env
+.env.*
+!.env.example
+!.env.*.example
 
 # IDE
 .idea/

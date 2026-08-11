@@ -206,3 +206,7 @@
 | 169 | Fix: `X-Skip-Auth` обходил аутентификацию на проде — флаг `allow_skip_auth` (False по умолчанию), гейт в `dependencies.py`, включён только в тестах | ✅ done | 2026-08-11 | — (PR #5, errors #065) |
 | 170 | Fix: черновик мероприятия можно было купить по ID — проверка `is_published` в `buy_ticket`/`buy_ticket_webapp` | ✅ done | 2026-08-11 | — (PR #6, errors #066) |
 | 171 | Fix: VK-покупатель привязывался к telegram-identity — платформа из `auth_data` в `buy_ticket`/`list_tickets`/`cancel_ticket` | ✅ done | 2026-08-11 | — (PR #6, errors #067) |
+| 172 | Fix: env-файлы с секретами в git — `git rm --cached`, шаблоны `*.example`, `.gitignore` `.env.*` | ✅ done | 2026-08-11 | — (PR #7, errors #068) |
+| 173 | Fix: нет rate limiting — per-IP middleware (120/мин), whitelist /health /metrics /static | ✅ done | 2026-08-11 | — (PR #7, errors #069) |
+| 174 | Fix: community token VK-группы без проверки — `verify_group_token` (groups.getById) | ✅ done | 2026-08-11 | — (PR #7, errors #070) |
+| 175 | Fix: VK API 5.131 → 5.199 | ✅ done | 2026-08-11 | — (PR #7, errors #071) |

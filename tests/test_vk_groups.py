@@ -7,7 +7,7 @@ VK-группы как цели публикации (#163): self-service орг
 """
 
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -110,7 +110,10 @@ class TestVKGroupsWeb:
         user = await user_svc.get_or_create(PlatformType.telegram, "12345", name="Dev")
         await db_session.commit()
 
-        with patch("app.config.settings.vk_token_encryption_key", TEST_KEY):
+        with (
+            patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
+            patch("app.web.routes.verify_group_token", new_callable=AsyncMock, return_value=True),
+        ):
             resp = await db_client.post(
                 "/api/me/vk-groups",
                 headers={"X-Skip-Auth": "1"},
@@ -133,7 +136,10 @@ class TestVKGroupsWeb:
         user = await user_svc.get_or_create(PlatformType.telegram, "12345", name="Dev")
         await db_session.commit()
 
-        with patch("app.config.settings.vk_token_encryption_key", TEST_KEY):
+        with (
+            patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
+            patch("app.web.routes.verify_group_token", new_callable=AsyncMock, return_value=True),
+        ):
             await db_client.post(
                 "/api/me/vk-groups",
                 headers={"X-Skip-Auth": "1"},
@@ -166,3 +172,35 @@ class TestVKGroupsWeb:
             json={"group_id": "   "},
         )
         assert resp.status_code == 400
+
+    async def test_register_token_rejected_if_not_verified(self, db_client, db_session):
+        """Токен, не подтверждённый VK API (чужой/битый), → 400."""
+        user_svc = UserService(db_session)
+        await user_svc.get_or_create(PlatformType.telegram, "12345", name="Dev")
+        await db_session.commit()
+
+        with patch(
+            "app.web.routes.verify_group_token", new_callable=AsyncMock, return_value=False
+        ):
+            resp = await db_client.post(
+                "/api/me/vk-groups",
+                headers={"X-Skip-Auth": "1"},
+                json={"group_id": "424242", "community_token": "bad-token"},
+            )
+        assert resp.status_code == 400
+
+    async def test_register_token_accepted_when_verified(self, db_client, db_session, crypto_key):
+        """Токен, подтверждённый VK API (принадлежит группе), → 201."""
+        user_svc = UserService(db_session)
+        await user_svc.get_or_create(PlatformType.telegram, "12345", name="Dev")
+        await db_session.commit()
+
+        with patch(
+            "app.web.routes.verify_group_token", new_callable=AsyncMock, return_value=True
+        ):
+            resp = await db_client.post(
+                "/api/me/vk-groups",
+                headers={"X-Skip-Auth": "1"},
+                json={"group_id": "424243", "community_token": "good-token"},
+            )
+        assert resp.status_code == 201

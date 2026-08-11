@@ -166,6 +166,26 @@ class TestInitDataValidation:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Rate limiting
+# ═══════════════════════════════════════════════════════════════
+
+class TestRateLimit:
+    """Per-IP rate limiting (защита от brute-force/скрейпинга)."""
+
+    def test_rate_limit_returns_429(self, client):
+        """Превышение лимита запросов → 429; /health не лимитируется."""
+        with patch("app.config.settings.rate_limit_per_minute", 3):
+            # /health в whitelist — не лимитируется даже при превышении
+            assert client.get("/health").status_code == 200
+            # до лимита — 401 (нет auth), в пределах 3
+            for _ in range(3):
+                assert client.get("/api/me").status_code == 401
+            # 4-й запрос — 429
+            resp = client.get("/api/me")
+            assert resp.status_code == 429
+
+
+# ═══════════════════════════════════════════════════════════════
 # API Endpoint Tests
 # ═══════════════════════════════════════════════════════════════
 

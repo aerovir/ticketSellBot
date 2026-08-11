@@ -53,7 +53,7 @@ from app.web.dependencies import (
 )
 from app.platforms.telegram.formatting import format_event_text
 from app.web.announce import _get_bot, post_event_announcement, send_announcement_dm, send_broadcast
-from app.web.vk_api import post_to_group_wall
+from app.web.vk_api import post_to_group_wall, verify_group_token
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
@@ -553,6 +553,16 @@ async def register_my_vk_group(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Укажите ID VK-группы",
         )
+
+    # Верификация: если передан community token — он должен принадлежать этой группе.
+    # Иначе организатор может привязать токен чужой группы и постить на её стену.
+    if body.community_token:
+        verified = await verify_group_token(group_id, body.community_token)
+        if not verified:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Не удалось подтвердить токен для этой группы",
+            )
 
     async with async_session_factory() as session:
         group_svc = VKGroupService(session)

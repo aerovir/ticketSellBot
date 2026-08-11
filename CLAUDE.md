@@ -38,8 +38,8 @@
 ## Быстрый старт
 
 ```bash
-# 1. Копировать env для нужной платформы
-cp .env.telegram .env
+# 1. Копировать шаблон env для нужной платформы и заполнить секреты
+cp .env.telegram.example .env.telegram
 # заполнить TELEGRAM_TOKEN от @BotFather
 
 # 2. Запуск через Docker (Telegram + БД)
@@ -54,11 +54,14 @@ docker compose run --rm seed
 
 ### Раздельные env-файлы
 
-| Файл | Для какой платформы |
-|------|--------------------|
-| `.env.telegram` | Telegram (токен, канал, админы) |
-| `.env.vk` | VK (токен, ID группы) |
-| `.env.max` | MAX (токен) |
+Реальные `.env.*` **не коммитятся** (секреты). В git — только шаблоны `*.example`;
+на VPS их создаёт `deploy.yml` из GitHub Secrets.
+
+| Шаблон | Для какой платформы |
+|--------|--------------------|
+| `.env.telegram.example` | Telegram (токен, канал, админы) + VK Mini App (VK_APP_ID, VK_SECRET_KEY) |
+| `.env.vk.example` | VK (токен, ID группы) |
+| `.env.max.example` | MAX (токен) |
 
 Каждый файл содержит отдельный `DATABASE_URL` с уникальным пользователем БД:
 `tg_user`, `vk_user`, `max_user`.
@@ -237,9 +240,9 @@ Super-admin **не привязан к каналу** — может управ�
 ├── pyproject.toml      # Зависимости
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env.telegram       # Credentials для Telegram
-├── .env.vk             # Credentials для VK
-└── .env.max            # Credentials для MAX
+├── .env.telegram.example  # Шаблон (реальный .env.telegram — вне git)
+├── .env.vk.example        # Шаблон (реальный .env.vk — вне git)
+└── .env.max.example       # Шаблон (реальный .env.max — вне git)
 ```
 
 ### Принцип разделения
@@ -404,7 +407,7 @@ pip install -e .
 
 # Запустить Telegram бота (использует .env.telegram)
 export PYTHONPATH=/app
-cp .env.telegram .env
+cp .env.telegram.example .env.telegram
 python -m bot.telegram
 
 # Или через env-переменные напрямую:

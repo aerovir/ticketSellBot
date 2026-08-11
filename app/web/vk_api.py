@@ -15,7 +15,7 @@ from app.core.crypto import decrypt_token
 
 logger = logging.getLogger("ticketbot.web.vk_api")
 
-_API_VERSION = "5.131"
+_API_VERSION = "5.199"
 
 
 class VKAPIError(Exception):
@@ -35,6 +35,35 @@ async def vk_api_call(method: str, token: str, **params) -> dict:
             f"VK API {method} error {err.get('error_code')}: {err.get('error_msg')}"
         )
     return payload.get("response", {})
+
+
+async def verify_group_token(group_id: str, token: str) -> bool:
+    """Проверить, что community token действительно относится к указанной группе.
+
+    Вызывает VK API groups.getById с токеном. Возвращает True, если в ответе
+    есть группа с совпадающим id. Ошибки VK (нет доступа, неверный/чужой токен,
+    группа не найдена) → False. Защита от регистрации чужой группы со своим токеном.
+    """
+    if not token:
+        return False
+    try:
+        response = await vk_api_call("groups.getById", token, group_ids=str(group_id))
+    except VKAPIError as e:
+        logger.warning("verify_group_token failed for group %s: %s", group_id, e)
+        return False
+
+    # Формат ответа: современный {"count": N, "items": [...]} или устаревший [...]
+    if isinstance(response, dict):
+        items = response.get("items") or []
+    elif isinstance(response, list):
+        items = response
+    else:
+        items = []
+    for group in items:
+        if isinstance(group, dict) and str(group.get("id")) == str(group_id):
+            return True
+    logger.warning("verify_group_token: группа %s не найдена по токену", group_id)
+    return False
 
 
 async def post_to_group_wall(group, text: str) -> bool:
