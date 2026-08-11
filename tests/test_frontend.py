@@ -66,3 +66,25 @@ def test_appjs_initvk_handles_direct_object():
     assert "Object.entries(lp)" in APP_JS
     # 4. initData кладётся в state (то, что уходит в X-VK-Init-Data):
     assert "state.initData = btoa(query)" in APP_JS
+
+
+def test_appjs_buyer_ticket_qr_and_code():
+    """Покупатель видит код для входа + может показать QR своего билета."""
+    # Код для входа (validation_code) показывается в списке билетов
+    assert "Код для входа" in APP_JS
+    assert "showBuyerTicketQr" in APP_JS
+    assert "downloadBuyerQr" in APP_JS
+    # QR-эндпоинт покупателя (без pro)
+    assert "/api/tickets/${ticketId}/qr" in APP_JS
+    # VK-авторизация через authHeaders (X-VK-Init-Data / X-Init-Data)
+    assert "authHeaders" in APP_JS
+    assert "X-VK-Init-Data" in APP_JS
+
+
+def test_appjs_vk_ticket_dm_flow():
+    """VK: мягкий запрос → VKWebAppAllowMessagesFromGroup → POST send-vk."""
+    assert "offerVkTicketDm" in APP_JS
+    assert "VKWebAppAllowMessagesFromGroup" in APP_JS
+    assert "vk_group_id" in APP_JS
+    assert "/send-vk" in APP_JS
+    assert "Билет отправлен в личные сообщения ВКонтакте" in APP_JS

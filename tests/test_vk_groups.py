@@ -41,6 +41,64 @@ def test_encrypt_requires_key():
             encrypt_token("secret")
 
 
+# ─── DM билета в ЛС VK (messages.send от группы организатора) ────
+
+
+async def test_send_vk_ticket_dm_success(db_session, vk_owner, crypto_key):
+    """Билет отправляется в ЛС VK покупателю от имени группы."""
+    from app.core.services import VKGroupService
+    from app.web.vk_api import send_vk_ticket_dm
+
+    group_svc = VKGroupService(db_session)
+    group = await group_svc.register_vk_group(
+        vk_owner.id, "7777777", title="Группа", community_token="vk-secret",
+    )
+
+    with patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock) as mock_call:
+        ok = await send_vk_ticket_dm(
+            vk_user_id="5305539", text="🎫 Ваш билет: AB3X-K7M9", group=group,
+        )
+    assert ok is True
+    mock_call.assert_awaited_once()
+    args, kwargs = mock_call.await_args
+    assert args[0] == "messages.send"
+    assert kwargs["peer_id"] == 5305539
+    assert "Ваш билет" in kwargs["message"]
+
+
+async def test_send_vk_ticket_dm_no_token(db_session, vk_owner, crypto_key):
+    """Без community token — DM не отправляется (False, не ошибка)."""
+    from app.core.services import VKGroupService
+    from app.web.vk_api import send_vk_ticket_dm
+
+    group_svc = VKGroupService(db_session)
+    group = await group_svc.register_vk_group(vk_owner.id, "8888888", title="Без токена")
+
+    with patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock) as mock_call:
+        ok = await send_vk_ticket_dm("5305539", "text", group=group)
+    assert ok is False
+    mock_call.assert_not_awaited()
+
+
+async def test_send_vk_ticket_dm_api_error(db_session, vk_owner, crypto_key):
+    """Ошибка VK API при messages.send → False (тихо, билет остаётся в кабинете)."""
+    from app.core.services import VKGroupService
+    from app.web.vk_api import send_vk_ticket_dm, VKAPIError
+
+    group_svc = VKGroupService(db_session)
+    group = await group_svc.register_vk_group(
+        vk_owner.id, "9999999", title="Группа", community_token="vk-secret",
+    )
+
+    with patch(
+        "app.web.vk_api.vk_api_call",
+        new_callable=AsyncMock,
+        side_effect=VKAPIError("messages.send error 901: Cannot send messages for user without permission"),
+    ):
+        ok = await send_vk_ticket_dm("5305539", "text", group=group)
+    assert ok is False
+
+
 # ─── Сервисный слой ──────────────────────────────────────────────
 
 

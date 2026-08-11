@@ -1191,6 +1191,87 @@ class TestInviteApi:
         assert resp.status_code == 200
         assert "image/png" in resp.headers["content-type"]
 
+    def test_buyer_ticket_qr(self, client):
+        """Покупатель получает QR СВОЕГО билета (GET /api/tickets/{id}/qr, без pro)."""
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.user_id = _UUID(USER_ID)  # владелец
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.validation_code = "AB3X-K7M9"
+        _owner = Mock(id=_UUID(USER_ID))
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock, return_value=_owner),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, Mock())),
+            patch("app.web.routes.generate_qr_png", new_callable=Mock, return_value=b"\x89PNG..."),
+        ):
+            resp = client.get(f"/api/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert "image/png" in resp.headers["content-type"]
+
+    def test_buyer_ticket_qr_foreign_403(self, client):
+        """Чужой пользователь НЕ получает QR чужого билета (403)."""
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.user_id = "other-user-id"  # чужой владелец
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.validation_code = "AB3X-K7M9"
+        _owner = Mock(id=_UUID(USER_ID))
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock, return_value=_owner),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, Mock())),
+        ):
+            resp = client.get(f"/api/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+    def test_send_vk_ticket(self, client):
+        """POST /api/tickets/{id}/send-vk — билет в ЛС VK от группы (owner + группа + токен)."""
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.user_id = _UUID(USER_ID)  # владелец
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.validation_code = "AB3X-K7M9"
+        mock_event = Mock()
+        mock_event.owner_user_id = _UUID(USER_ID)
+        mock_event.title = "Событие"
+        mock_event.date = Mock()
+        mock_event.date.isoformat.return_value = "2026-12-25"
+        _owner = Mock(id=_UUID(USER_ID))
+        _vk_group = Mock()
+        _vk_group.group_id = "7777777"
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock, return_value=_owner),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
+            patch("app.web.routes.VKGroupService.list_vk_groups", new_callable=AsyncMock, return_value=[_vk_group]),
+            patch("app.web.routes.send_vk_ticket_dm", new_callable=AsyncMock, return_value=True),
+        ):
+            resp = client.post(f"/api/tickets/{EVENT_ID}/send-vk", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["sent"] is True
+        assert resp.json()["group_id"] == "7777777"
+
+    def test_send_vk_ticket_foreign_403(self, client):
+        """Чужой пользователь НЕ может отправить чужой билет в ЛС (403)."""
+        mock_ticket = Mock()
+        mock_ticket.id = EVENT_ID
+        mock_ticket.user_id = "other-user-id"  # чужой владелец
+        mock_ticket.event_id = EVENT_ID
+        mock_ticket.validation_code = "AB3X-K7M9"
+        _owner = Mock(id=_UUID(USER_ID))
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock, return_value=_owner),
+            patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, Mock())),
+        ):
+            resp = client.post(f"/api/tickets/{EVENT_ID}/send-vk", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
 
 @pytest.mark.integration
 class TestCabinetFlow:

@@ -66,6 +66,33 @@ async def verify_group_token(group_id: str, token: str) -> bool:
     return False
 
 
+async def send_vk_ticket_dm(vk_user_id: str, text: str, group) -> bool:
+    """Отправить билет в личные сообщения VK покупателю от имени группы организатора.
+
+    Для messages.send нужен: community token группы (расшифрованный) + право
+    пользователя на сообщения от этой группы (VKWebAppAllowMessagesFromGroup на фронте).
+    Если токена нет или VK возвращает ошибку (например, нет разрешения) — тихо False:
+    билет всегда остаётся доступным в кабинете («Мои билеты»).
+    """
+    token = decrypt_token(group.community_token or "")
+    if not token:
+        logger.warning("Нет community token для VK-группы %s — DM билета не отправлен", group.group_id)
+        return False
+    try:
+        await vk_api_call(
+            "messages.send",
+            token,
+            peer_id=int(vk_user_id),
+            message=text,
+            random_id=0,
+        )
+        logger.info("Билет отправлен в ЛС VK покупателю %s от группы %s", vk_user_id, group.group_id)
+        return True
+    except VKAPIError as e:
+        logger.error("Ошибка messages.send покупателю %s: %s", vk_user_id, e)
+        return False
+
+
 async def post_to_group_wall(group, text: str) -> bool:
     """Опубликовать анонс на стену VK-группы.
 
