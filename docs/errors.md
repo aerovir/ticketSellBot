@@ -1173,3 +1173,36 @@
 - **Исправление:** `app/web/vk_api.py` — `5.131` → `5.199` (современная известная-good версия).
 - **Коммит:** — (см. PR)
 - **Тесты:** — (константа; поведение не меняется)
+
+---
+
+## 072 — Покупатель не получал билет: UUID вместо кода, QR только админу
+
+- **Дата:** 2026-08-12
+- **Статус:** ✅ Исправлено
+- **Описание:** После покупки в VK/TG web покупатель видел UUID билета, а не код для входа; QR был доступен только организатору (pro). На входе принимается `validation_code` (XXXX-XXXX), а покупатель его не видел — билет фактически нельзя было предъявить.
+- **Анализ:**
+  - **Подтверждено (`get_user_tickets`):** API отдаёт `validation_code`, но фронт показывал `t.id` (UUID).
+  - **Подтверждено (`routes.py admin_ticket_qr`):** QR — только `/admin/...` с pro-гейтом.
+- **Исправление:**
+  - `routes.py` — новый `GET /tickets/{id}/qr` (владелец билета, без pro, чужой → 403).
+  - `app.js` — «Мои билеты» показывают код для входа + кнопку «📱 Показать QR» (заголовки VK/TG через `authHeaders`).
+- **Коммит:** — (см. PR)
+- **Тесты:** +2 (buyer_ticket_qr, foreign_403), +1 frontend smoke
+
+---
+
+## 073 — VK-покупатель не получал билет в ЛС VK (только в Telegram)
+
+- **Дата:** 2026-08-12
+- **Статус:** ✅ Исправлено
+- **Описание:** `_send_ticket_dm` слал билет только в Telegram; для VK-покупателя (купил в Mini App) билет в ЛС VK не уходил.
+- **Анализ:**
+  - **Подтверждено (`routes.py _send_ticket_dm`):** `bot.send_message` — только Telegram.
+  - **Подтверждено (VK API):** `messages.send` от имени группы требует community token + разрешение пользователя (`VKWebAppAllowMessagesFromGroup`).
+- **Исправление:**
+  - `vk_api.py` — `send_vk_ticket_dm()` (messages.send от группы, best-effort).
+  - `routes.py` — `buy_ticket` возвращает `vk_group_id`; новый `POST /tickets/{id}/send-vk` (владелец → группа → messages.send).
+  - `app.js` — после покупки мягкий запрос «получить в ЛС?» → `VKWebAppAllowMessagesFromGroup` → `POST send-vk`. Отказ — билет остаётся в кабинете.
+- **Коммит:** — (см. PR)
+- **Тесты:** +3 (send_vk_ticket_dm unit: success/no-token/api-error), +2 web (send-vk, foreign_403), +1 frontend

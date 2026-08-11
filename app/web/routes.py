@@ -53,7 +53,7 @@ from app.web.dependencies import (
 )
 from app.platforms.telegram.formatting import format_event_text
 from app.web.announce import _get_bot, post_event_announcement, send_announcement_dm, send_broadcast
-from app.web.vk_api import post_to_group_wall, verify_group_token
+from app.web.vk_api import post_to_group_wall, verify_group_token, send_vk_ticket_dm
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
@@ -168,14 +168,34 @@ async def buy_ticket(event_id: str, auth_data: dict = Depends(validate_init_data
             result = await ticket_svc.buy_ticket_webapp(user.id, uid)
             await session.commit()
 
-            # Отправить билет в личные сообщения Telegram
             code_text = f"\n🔑 Код: <code>{result['validation_code']}</code>" if result.get("validation_code") else ""
-            await _send_ticket_dm(
-                platform_user_id,
+            ticket_text = (
                 f"✅ Билет куплен!\n"
                 f"🎫 {result['event_title']}\n"
-                f"📅 {result['event_date']}{code_text}",
+                f"📅 {result['event_date']}{code_text}"
             )
+
+            # Telegram-покупатель: DM от бота (как было).
+            if auth_data.get("platform") != "vk":
+                await _send_ticket_dm(platform_user_id, ticket_text)
+
+            # VK-покупатель: НЕ шлём DM сразу (разрешение ещё не дано). Вместо этого
+            # возвращаем vk_group_id — фронт предложит получить билет в ЛС и после
+            # VKWebAppAllowMessagesFromGroup вызовет POST /tickets/{id}/send-vk.
+            vk_group_id = None
+            if auth_data.get("platform") == "vk":
+                try:
+                    event = await session.get(Event, uid)
+                    if event is not None and event.owner_user_id is not None:
+                        group_svc = VKGroupService(session)
+                        groups = await group_svc.list_vk_groups(event.owner_user_id)
+                        vk_group = next((g for g in groups if g.community_token), None)
+                        if vk_group is not None:
+                            vk_group_id = vk_group.group_id
+                except Exception as e:
+                    logger.warning("Не удалось определить VK-группу для билета %s: %s", uid, e)
+            if vk_group_id:
+                result["vk_group_id"] = vk_group_id
 
             return result
         except ValueError as e:
@@ -207,6 +227,47 @@ async def list_tickets(auth_data: dict = Depends(validate_init_data)):
         await session.commit()
 
     return tickets
+
+
+@router.get("/tickets/{ticket_id}/qr")
+async def buyer_ticket_qr(ticket_id: str, auth_data: dict = Depends(validate_init_data)):
+    """PNG-картинка QR-кода СВОЕГО билета для покупателя.
+
+    В отличие от /admin/tickets/{id}/qr (организатор, pro), этот эндпоинт
+    доступен владельцу билета без подписки — билет всегда можно предъявить
+    на входе из кабинета.
+    """
+    try:
+        tid = UUID(ticket_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID билета")
+
+    user_data = auth_data.get("user", {})
+    platform_user_id = str(user_data.get("id", "0"))
+
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_or_create(
+            platform=PlatformType(auth_data.get("platform", "telegram")),
+            platform_user_id=platform_user_id,
+            name=user_data.get("first_name", ""),
+        )
+
+        ticket_svc = TicketService(session)
+        pair = await ticket_svc.get_ticket_event(tid)
+        if pair is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Билет не найден")
+        ticket, _event = pair
+        if ticket.user_id != user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Это не ваш билет")
+
+    code = ticket.validation_code or str(ticket.id)
+    png = generate_qr_png(code)
+    return StreamingResponse(
+        iter([png]),
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="ticket-{ticket.id}-qr.png"'},
+    )
 
 
 @router.post("/tickets/{ticket_id}/cancel")
@@ -254,6 +315,59 @@ async def cancel_ticket(ticket_id: str, auth_data: dict = Depends(validate_init_
         except ValueError as e:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@router.post("/tickets/{ticket_id}/send-vk")
+async def send_vk_ticket(ticket_id: str, auth_data: dict = Depends(validate_init_data)):
+    """Отправить билет владельцу в ЛС VK от имени группы организатора.
+
+    Вызывается фронтендом ПОСЛЕ того, как покупатель разрешил сообщения
+    от группы (VKWebAppAllowMessagesFromGroup). Best-effort: если нет группы
+    с токеном или VK отклонил — sent=False, билет остаётся в кабинете.
+    """
+    try:
+        tid = UUID(ticket_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID билета")
+
+    user_data = auth_data.get("user", {})
+    platform_user_id = str(user_data.get("id", "0"))
+
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_or_create(
+            platform=PlatformType(auth_data.get("platform", "telegram")),
+            platform_user_id=platform_user_id,
+            name=user_data.get("first_name", ""),
+        )
+
+        ticket_svc = TicketService(session)
+        pair = await ticket_svc.get_ticket_event(tid)
+        if pair is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Билет не найден")
+        ticket, event = pair
+        if ticket.user_id != user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Это не ваш билет")
+
+        # Группа организатора события (первая с community token)
+        vk_group_id = None
+        sent = False
+        if event.owner_user_id is not None:
+            group_svc = VKGroupService(session)
+            groups = await group_svc.list_vk_groups(event.owner_user_id)
+            vk_group = next((g for g in groups if g.community_token), None)
+            if vk_group is not None:
+                vk_group_id = vk_group.group_id
+                code = ticket.validation_code or str(ticket.id)
+                text = (
+                    f"✅ Билет куплен!\n"
+                    f"🎫 {event.title}\n"
+                    f"📅 {event.date.isoformat()}\n"
+                    f"🔑 Код: <code>{code}</code>"
+                )
+                sent = await send_vk_ticket_dm(platform_user_id, text, vk_group)
+
+    return {"sent": sent, "group_id": vk_group_id}
 
 
 # ═══════════════════════════════════════════════════════════════

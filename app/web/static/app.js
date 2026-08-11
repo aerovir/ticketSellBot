@@ -709,11 +709,58 @@ async function confirmBuy(eventId) {
             window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
         }
 
+        // VK: мягкий запрос на отправку билета в ЛС (best-effort, не блокирует успех).
+        if (state.platform === "vk") {
+            await offerVkTicketDm(eventId, result);
+        }
+
         showSuccess(result);
     } catch (err) {
         btn.disabled = false;
         btn.textContent = "✅ Подтвердить покупку";
         showError(err.message || "Ошибка при покупке");
+    }
+}
+
+// VK: после покупки предложить отправить билет в ЛС VK от группы организатора.
+// Порядок: мягкий запрос → VKWebAppAllowMessagesFromGroup (диалог VK) →
+// POST /tickets/{id}/send-vk (бэкенд шлёт messages.send). Отказ/неудача — тихо.
+async function offerVkTicketDm(eventId, result) {
+    try {
+        const bridge = window.vkBridge;
+        // Без группы организатора бэкенд не вернул vk_group_id — билет в кабинете.
+        const vkGroupId = result && result.vk_group_id;
+        if (!bridge || !vkGroupId) return;
+
+        const want = await tgConfirm(
+            "Получить билет в личные сообщения ВКонтакте?\n\n" +
+            "Если откажетесь — билет всегда будет доступен в разделе «Мои билеты».",
+            "Да, отправить",
+            "Нет, смотреть в приложении",
+        );
+        if (!want) return;
+
+        // Разрешить сообщения от группы (системный диалог VK).
+        try {
+            await bridge.send("VKWebAppAllowMessagesFromGroup", { group_id: Number(vkGroupId) });
+        } catch (e) {
+            console.warn("VK allow messages not granted", e);
+            return;  // без разрешения messages.send не дойдёт
+        }
+
+        // Отправить билет в ЛС (бэкенд: messages.send от группы).
+        try {
+            const res = await api(`/api/tickets/${result.ticket_id}/send-vk`, { method: "POST" });
+            if (res.sent) {
+                tgAlert("🎫 Билет отправлен в личные сообщения ВКонтакте!");
+            } else {
+                showToast("Билет сохранён в «Моих билетах»", false);
+            }
+        } catch (e) {
+            console.warn("send-vk failed", e);
+        }
+    } catch (e) {
+        console.warn("offerVkTicketDm failed", e);
     }
 }
 
@@ -780,6 +827,8 @@ function renderTickets(tickets) {
         const isActive = t.status === "active";
         const statusEmoji = isActive ? "✅" : "❌";
         const statusText = isActive ? "Активен" : "Возвращён";
+        // Код для входа (validation_code) — то, что организатор проверяет на входе.
+        const entryCode = t.validation_code || t.id;
 
         html += `
             <div class="ticket-card ${isActive ? '' : 'ticket-cancelled'}">
@@ -788,15 +837,63 @@ function renderTickets(tickets) {
                     <span class="ticket-status">${statusEmoji} ${statusText}</span>
                 </div>
                 <div class="ticket-meta">
-                    <span>🆔 <code>${t.id}</code></span>
+                    <span>🎟 <b>Код для входа:</b> <code>${escapeHtml(entryCode)}</code></span>
                     <span>📅 Куплен: ${dateStr}</span>
                 </div>
-                ${isActive ? `<button class="btn btn-danger btn-sm" onclick="cancelTicket('${t.id}')">↩️ Отменить</button>` : ''}
+                ${isActive ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+                    <button class="btn btn-primary btn-sm" onclick="showBuyerTicketQr('${t.id}')">📱 Показать QR</button>
+                    <button class="btn btn-danger btn-sm" onclick="cancelTicket('${t.id}')">↩️ Отменить</button>
+                </div>` : ''}
             </div>
         `;
     }
     html += "</div>";
     container.innerHTML = html;
+}
+
+// Показать QR своего билета (владелец, без подписки). Fallback: показ кода.
+function authHeaders() {
+    // Авторизация: VK — launch params, Telegram — initData (то же, что в api()).
+    const header = state.platform === "vk" ? "X-VK-Init-Data" : "X-Init-Data";
+    return { [header]: state.initData };
+}
+
+async function showBuyerTicketQr(ticketId) {
+    try {
+        const resp = await fetch(`/api/tickets/${ticketId}/qr`, { headers: authHeaders() });
+        if (!resp.ok) { showToast("Ошибка загрузки QR", true); return; }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const overlay = document.createElement("div");
+        overlay.className = "qr-modal";
+        overlay.innerHTML = `
+            <div class="qr-modal-card">
+                <img src="${url}" alt="QR" style="width:220px;height:220px;border-radius:8px">
+                <p class="hint" style="margin:8px 0 0">Покажите этот QR на входе организатору</p>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                    <button class="btn btn-sm btn-primary" onclick="this.closest('.qr-modal').remove(); downloadBuyerQr('${ticketId}')">⬇️ Скачать</button>
+                    <button class="btn btn-sm btn-secondary" onclick="this.closest('.qr-modal').remove()">Закрыть</button>
+                </div>
+            </div>`;
+        overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+    } catch (e) { showToast(e.message || "Ошибка QR", true); }
+}
+
+async function downloadBuyerQr(ticketId) {
+    try {
+        const resp = await fetch(`/api/tickets/${ticketId}/qr`, { headers: authHeaders() });
+        if (!resp.ok) { showToast("Ошибка", true); return; }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `ticket-${ticketId}-qr.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
 async function cancelTicket(ticketId) {

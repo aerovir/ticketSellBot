@@ -210,3 +210,5 @@
 | 173 | Fix: нет rate limiting — per-IP middleware (120/мин), whitelist /health /metrics /static | ✅ done | 2026-08-11 | — (PR #7, errors #069) |
 | 174 | Fix: community token VK-группы без проверки — `verify_group_token` (groups.getById) | ✅ done | 2026-08-11 | — (PR #7, errors #070) |
 | 175 | Fix: VK API 5.131 → 5.199 | ✅ done | 2026-08-11 | — (PR #7, errors #071) |
+| 176 | Feat: билет покупателю — код для входа + QR в «Моих билетах» (GET /tickets/{id}/qr, владелец) | ✅ done | 2026-08-12 | — (PR #8, errors #072) |
+| 177 | Feat: VK-покупатель получает билет в ЛС VK — messages.send от группы, soft-ask + VKWebAppAllowMessagesFromGroup | ✅ done | 2026-08-12 | — (PR #8, errors #073) |
