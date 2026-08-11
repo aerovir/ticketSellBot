@@ -157,7 +157,7 @@ async def buy_ticket(event_id: str, auth_data: dict = Depends(validate_init_data
         # Get/create user
         user_svc = UserService(session)
         user = await user_svc.get_or_create(
-            platform=PlatformType.telegram,
+            platform=PlatformType(auth_data.get("platform", "telegram")),
             platform_user_id=platform_user_id,
             name=name,
         )
@@ -197,7 +197,7 @@ async def list_tickets(auth_data: dict = Depends(validate_init_data)):
     async with async_session_factory() as session:
         user_svc = UserService(session)
         user = await user_svc.get_or_create(
-            platform=PlatformType.telegram,
+            platform=PlatformType(auth_data.get("platform", "telegram")),
             platform_user_id=platform_user_id,
             name=user_data.get("first_name", ""),
         )
@@ -223,7 +223,7 @@ async def cancel_ticket(ticket_id: str, auth_data: dict = Depends(validate_init_
     async with async_session_factory() as session:
         user_svc = UserService(session)
         user = await user_svc.get_or_create(
-            platform=PlatformType.telegram,
+            platform=PlatformType(auth_data.get("platform", "telegram")),
             platform_user_id=platform_user_id,
             name=user_data.get("first_name", ""),
         )

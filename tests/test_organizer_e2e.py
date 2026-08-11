@@ -13,7 +13,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 
-from app.core.models import PlatformType, SubscriptionTier
+from app.core.models import PlatformType, SubscriptionTier, Event
 from app.core.services import (
     UserService,
     ChannelService,
@@ -90,6 +90,11 @@ class TestOrganizerE2E:
         )
         assert resp.status_code == 201, resp.text
         event_id = resp.json()["id"]
+
+        # Опубликовать (черновик → опубликовано) перед продажей
+        ev = await db_session.get(Event, uuid.UUID(event_id))
+        ev.is_published = True
+        await db_session.commit()
 
         # list → виден по owner
         resp = await db_client.get("/api/admin/events", headers=HEADERS)
@@ -188,6 +193,11 @@ class TestOrganizerE2E:
         resp = await db_client.get(f"/api/admin/events/{event_id}", headers=HEADERS)
         assert resp.status_code == 200, resp.text
         assert resp.json()["channel_id"] == str(channel.id)
+
+        # Опубликовать (черновик → опубликовано) перед продажей
+        ev = await db_session.get(Event, uuid.UUID(event_id))
+        ev.is_published = True
+        await db_session.commit()
 
         # buy + stats (канальный путь)
         resp = await db_client.post(f"/api/events/{event_id}/buy", headers=HEADERS)

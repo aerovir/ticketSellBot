@@ -1467,6 +1467,17 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Мероприятие не найдено")
+        if not event.is_published:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Event not published",
+                "duration_ms": _ms(start),
+            })
+            raise ValueError("Мероприятие не опубликовано")
         if not event.is_active:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_failed",
@@ -1581,6 +1592,17 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Мероприятие не найдено")
+        if not event.is_published:
+            logger.warning("", extra={
+                "event_type": "ticket.purchase_webapp_failed",
+                "event_id": str(event_id),
+                "user_id": str(user_id),
+                "event_title": event.title,
+                "status": "error",
+                "error": "Event not published",
+                "duration_ms": _ms(start),
+            })
+            raise ValueError("Мероприятие не опубликовано")
         if not event.is_active:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_webapp_failed",
