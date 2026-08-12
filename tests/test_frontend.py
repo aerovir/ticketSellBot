@@ -102,3 +102,16 @@ def test_appjs_invite_links_flow():
     assert "claimInvite" in APP_JS
     assert "/api/invites/${encodeURIComponent(code)}/claim" in APP_JS
     assert "Активировать" in APP_JS
+
+
+def test_appjs_ticket_presentation_free_vs_paid():
+    """A: бесплатный билет → код, платный → QR (ветвление по is_free)."""
+    assert "t.is_free" in APP_JS
+    assert "const isFree = !!t.is_free" in APP_JS
+    # free-ветка: код для входа
+    assert "Код для входа" in APP_JS
+    # paid-ветка: кнопка QR и подпись «платный билет»
+    assert "Показать QR" in APP_JS
+    assert "Платный билет" in APP_JS
+    # ветвление: тернарник по isFree
+    assert "isFree" in APP_JS

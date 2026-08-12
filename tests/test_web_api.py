@@ -1302,12 +1302,13 @@ class TestCabinetFlow:
         assert resp.status_code == 201, resp.text
         ticket_id = resp.json()["ticket_id"]
 
-        # 3. my tickets — билет с кодом
+        # 3. my tickets — билет с кодом (sample_event платный → is_free=False)
         resp = await db_client.get("/api/tickets", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
         tickets = [t for t in resp.json() if t["id"] == ticket_id]
         assert len(tickets) == 1
         assert tickets[0]["validation_code"] is not None
+        assert tickets[0]["is_free"] is False  # A: платный → QR
 
         # 3b. QR покупателя (F2) — реальный PNG на реальной БД (generate_qr_png)
         resp = await db_client.get(f"/api/tickets/{ticket_id}/qr", headers={"X-Skip-Auth": "1"})

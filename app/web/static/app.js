@@ -871,7 +871,8 @@ function renderTickets(tickets) {
         const isActive = t.status === "active";
         const statusEmoji = isActive ? "✅" : "❌";
         const statusText = isActive ? "Активен" : "Возвращён";
-        // Код для входа (validation_code) — то, что организатор проверяет на входе.
+        // A: бесплатный билет → код, платный → QR (разное предъявление).
+        const isFree = !!t.is_free;
         const entryCode = t.validation_code || t.id;
 
         html += `
@@ -881,11 +882,13 @@ function renderTickets(tickets) {
                     <span class="ticket-status">${statusEmoji} ${statusText}</span>
                 </div>
                 <div class="ticket-meta">
-                    <span>🎟 <b>Код для входа:</b> <code>${escapeHtml(entryCode)}</code></span>
+                    ${isFree
+                        ? `<span>🎟 <b>Код для входа:</b> <code>${escapeHtml(entryCode)}</code></span>`
+                        : `<span>🔒 <b>Платный билет</b> — предъявите QR на входе</span>`}
                     <span>📅 Куплен: ${dateStr}</span>
                 </div>
                 ${isActive ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-                    <button class="btn btn-primary btn-sm" onclick="showBuyerTicketQr('${t.id}')">📱 Показать QR</button>
+                    ${isFree ? '' : `<button class="btn btn-primary btn-sm" onclick="showBuyerTicketQr('${t.id}')">📱 Показать QR</button>`}
                     <button class="btn btn-danger btn-sm" onclick="cancelTicket('${t.id}')">↩️ Отменить</button>
                 </div>` : ''}
             </div>
