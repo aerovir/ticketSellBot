@@ -197,13 +197,57 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Check if opened with specific event_id
     const params = new URLSearchParams(window.location.search);
     const eventId = params.get("event_id");
+    const inviteCode = params.get("invite");
 
-    if (eventId) {
+    if (inviteCode) {
+        // Пригласительное-ссылка: гость активирует место.
+        await showInvitePage(inviteCode);
+    } else if (eventId) {
         await showEventDetail(eventId);
     } else {
         await showHome();
     }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// Пригласительное по ссылке (?invite=<код>)
+// ═══════════════════════════════════════════════════════════════
+
+async function showInvitePage(code) {
+    updateToolbar("Приглашение", false, false);
+    showPage("events");
+    const container = document.getElementById("eventsContent");
+
+    try {
+        // Получить информацию о пригласительном, чтобы показать название/дату.
+        // Для этого коды билетов не имеют публичного GET — используем validate
+        // как админ? Нет. Показываем просто приглашение с кнопкой активации.
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🎟</div>
+                <h3>Вас пригласили на мероприятие</h3>
+                <p>Нажмите «Активировать», чтобы получить билет.
+                Оно появится в разделе «Мои билеты».</p>
+                <button class="btn btn-primary btn-lg" onclick="claimInvite('${escapeHtml(code)}')">✅ Активировать</button>
+            </div>
+        `;
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state"><p>Ошибка загрузки приглашения</p></div>`;
+    }
+}
+
+async function claimInvite(code) {
+    const btn = document.querySelector('#eventsContent .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Активирую..."; }
+    try {
+        const res = await api(`/api/invites/${encodeURIComponent(code)}/claim`, { method: "POST" });
+        showToast(`✅ Билет получен: ${res.event_title}`);
+        await showMyTickets();
+    } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = "✅ Активировать"; }
+        showError(e.message || "Ошибка активации");
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Личный кабинет / роль
@@ -1246,6 +1290,7 @@ function renderAdminEventDetail(event, stats, tickets, invites) {
                         <div class="hint">${formatDate(iv.purchase_date)}${iv.invited_by ? ' · выдал ' + escapeHtml(iv.invited_by) : ''}</div>
                     </div>
                     <button class="btn btn-sm btn-secondary" onclick="showTicketQr('${iv.id}')">QR</button>
+                    ${iv.status === 'active' ? `<button class="btn btn-sm btn-secondary" onclick="copyInviteLink('${escapeHtml(iv.validation_code || '')}')">🔗</button>` : ''}
                     ${iv.status === 'active' ? `<button class="btn btn-sm btn-danger" onclick="adminCancelInvite('${event.id}','${iv.id}')">Отменить</button>` : ''}
                 </div>`).join('')}</div>`}
     `;
@@ -1287,6 +1332,28 @@ function renderAdminEventDetail(event, stats, tickets, invites) {
 
 // ─── Пригласительные: выдать / отменить / QR ──────────────────
 
+// Ссылка на пригласительное (?invite=<код>) — универсально для TG и VK.
+function inviteLink(code) {
+    const base = window.location.origin;
+    const path = state.platform === "vk" ? "/vk-app" : "";
+    return `${base}${path}?invite=${encodeURIComponent(code)}`;
+}
+
+async function copyInviteLink(code) {
+    if (!code) { showToast("Нет кода", true); return; }
+    const link = inviteLink(code);
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(link);
+            showToast("🔗 Ссылка скопирована");
+        } else {
+            tgAlert(`🔗 Ссылка на приглашение:\n\n${link}`);
+        }
+    } catch (e) {
+        tgAlert(`🔗 Ссылка на приглашение:\n\n${link}`);
+    }
+}
+
 async function adminIssueInvitePrompt(eventId) {
     const seats = prompt("Вместимость пригласительного (1/2/3 человека):", "1");
     if (!seats) return;
@@ -1298,7 +1365,14 @@ async function adminIssueInvitePrompt(eventId) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ seats: n }),
         });
-        showToast(`✅ Пригласительное выдано: ${res.validation_code}`);
+        // Показать ссылку + QR для передачи гостю (поделиться / отправить в ЛС).
+        const link = inviteLink(res.validation_code);
+        tgAlert(
+            "✅ Пригласительное выдано!\n\n" +
+            `🔗 Ссылка:\n${link}\n\n` +
+            "Гость откроет её и активирует место сам.\n" +
+            "QR-код этой ссылки — в списке пригласительных (кнопка QR)."
+        );
         await showAdminEventDetail(eventId);
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }

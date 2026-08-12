@@ -236,3 +236,5 @@
 | 185 | Feat: e2e синхронизация VK→TG — покупка/возврат в VK (X-VK-Init-Data) отражаются в статистике TG (`sold`/`refunded`/`available`) — `tests/test_vk_e2e.py::test_vk_buy_refund_sync_to_tg` | ✅ done | 2026-08-12 | — (ветка `feature/e2e-crossplatform-sync`) |
 | 186 | Feat: e2e симметрия TG→VK — билет, купленный в TG (X-Skip-Auth), проверяется VK-организатором (линкованный канон) validate/checkin → 200 — `tests/test_vk_e2e.py::test_tg_buy_vk_checkin_symmetry` | ✅ done | 2026-08-12 | — (там же) |
 | 187 | Feat: e2e пригласительные как ссылки (F18, owner-путь) — не считаются в `sold`, вычитаются из `available`, отмена возвращает места — `tests/test_organizer_e2e.py::test_invites_not_counted_in_sold` | ✅ done | 2026-08-12 | — (там же) |
+| 188 | Feat: пригласительные как ссылки — `claim_invite` (активация гостем по `?invite=<код>`), эндпоинт `POST /api/invites/{code}/claim`, UI выдачи (ссылка + QR), deep-link `?invite=` | ✅ done | 2026-08-12 | — (PR #11, errors #074) |
+| 189 | Fix: `validate_ticket` INNER JOIN не находил пригласительные (user_id=None) → LEFT JOIN | ✅ done | 2026-08-12 | — (PR #11, errors #074) |

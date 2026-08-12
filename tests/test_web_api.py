@@ -1386,6 +1386,76 @@ class TestCabinetFlow:
         assert resp.status_code == 200, resp.text
         assert resp.json()["available"] == available_after_buy + 1, resp.json()
 
+    async def test_invite_claimed_by_guest_via_link(self, db_client, db_session, sample_channel, sample_event):
+        """F-invites: организатор выдаёт пригласительное → гость активирует по ссылке.
+
+        Полный e2e: орг (12345) выдаёт invite → гость (66666) открывает ссылку
+        (?invite=<код>) и активирует → билет в «Моих билетах» гостя →
+        организатор проверяет по коду (LEFT JOIN) → sold не растёт, available уменьшился.
+        """
+        from app.core.models import SubscriptionTier
+        from app.core.services import ChannelAdminService, EventService
+
+        event_id = str(sample_event.id)
+        await ChannelAdminService(db_session).sync_admins(sample_channel.id, ["12345"])
+        await EventService(db_session).update(sample_event.id, invites_quota=5)
+        await db_session.commit()
+        assert sample_channel.subscription_tier == SubscriptionTier.pro
+
+        # 0. Базовое available до выдачи
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+        available_before = resp.json()["available"]
+
+        # 1. Организатор выдаёт пригласительное (seats=2)
+        resp = await db_client.post(
+            f"/api/admin/events/{event_id}/invites",
+            headers={"X-Skip-Auth": "1"},
+            json={"seats": 2},
+        )
+        assert resp.status_code == 201, resp.text
+        invite_code = resp.json()["validation_code"]
+
+        # stats: available уменьшился на 2, sold=0, invites_issued=1
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+        stats = resp.json()
+        assert stats["invites_issued"] == 1
+        assert stats["sold"] == 0
+        assert stats["available"] == available_before - 2, stats
+
+        # 2. Гость (66666, отдельный пользователь) активирует по коду из ссылки
+        resp = await db_client.post(
+            f"/api/invites/{invite_code}/claim",
+            headers={"X-Skip-Auth": "1"},
+        )
+        assert resp.status_code == 200, resp.text
+        claimed = resp.json()
+        assert claimed["ticket_id"] is not None
+        assert claimed["event_title"] == sample_event.title
+
+        # 3. Пригласительное видно в «Моих билетах» гостя (66666)
+        resp = await db_client.get("/api/tickets", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        guest_tickets = [t for t in resp.json() if t["id"] == claimed["ticket_id"]]
+        assert len(guest_tickets) == 1
+        assert guest_tickets[0]["validation_code"] == invite_code
+
+        # 4. Организатор проверяет пригласительное по коду (LEFT JOIN для invite)
+        resp = await db_client.get(
+            f"/api/admin/tickets/validate?code={invite_code}",
+            headers={"X-Skip-Auth": "1"},
+        )
+        assert resp.status_code == 200, resp.text
+        info = resp.json()
+        assert info["found"] is True
+        assert info["status"] == "active"
+
+        # 5. sold НЕ вырос (пригласительное не в sold), available НЕ изменился после активации
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+        stats = resp.json()
+        assert stats["sold"] == 0
+        assert stats["invites_issued"] == 1
+        assert stats["available"] == available_before - 2
+
 
 class TestCoverageGaps:
     """Покрытие эндпоинтов, не имевших тестов."""

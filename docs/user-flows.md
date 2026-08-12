@@ -36,7 +36,7 @@
 | **F15** | Глобальная статистика | Супер-админ | ✅ | ⏸️ | ✅ реализовано | ✅ e2e `test_super_admin_e2e` |
 | **F16** | Рассылка (broadcast) | Супер-админ | ✅ | ⏸️ | ✅ реализовано | ✅ e2e `test_super_admin_e2e` |
 | **F17** | Здоровье / мониторинг | Супер-админ | ✅ | ⏸️ | ✅ реализовано | ✅ e2e `test_super_admin_e2e` |
-| **F18** | Пригласительные (invite-ссылки, pro) | Организатор | ✅ | ✅ | ✅ реализовано (#111) | ✅ e2e `test_organizer_e2e` (owner-путь: `test_invites_not_counted_in_sold`; канал: `test_channel_organizer_invites_and_qr`) |
+| **F18** | Пригласительные (invite-ссылки, pro) | Организатор | ✅ | ✅ | ✅ реализовано | ✅ e2e `test_organizer_e2e` (owner-путь: `test_invites_not_counted_in_sold`; канал: `test_channel_organizer_invites_and_qr`); активация гостем: `TestCabinetFlow::test_invite_claimed_by_guest_via_link` |
 
 **Легенда:** ✅ реализовано · ⏸️ платформа не активна · 📌 запланировано · ⚠️ покрытие неполное
 

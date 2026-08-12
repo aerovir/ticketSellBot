@@ -370,6 +370,45 @@ async def send_vk_ticket(ticket_id: str, auth_data: dict = Depends(validate_init
     return {"sent": sent, "group_id": vk_group_id}
 
 
+@router.post("/invites/{code}/claim")
+async def claim_invite(code: str, auth_data: dict = Depends(validate_init_data)):
+    """Активировать пригласительное гостем по коду из ссылки.
+
+    Гость открывает ссылку ?invite=<код>, видит пригласительное и активирует.
+    Пригласительное привязывается к гостю — появляется в его «Моих билетах».
+    Места уже резервируются при выдаче (available -= seats).
+    """
+    user_data = auth_data.get("user", {})
+    platform_user_id = str(user_data.get("id", "0"))
+    name = user_data.get("first_name", "")
+
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_or_create(
+            platform=PlatformType(auth_data.get("platform", "telegram")),
+            platform_user_id=platform_user_id,
+            name=name,
+        )
+
+        ticket_svc = TicketService(session)
+        try:
+            invite = await ticket_svc.claim_invite(code, user.id)
+            event = await session.get(Event, invite.event_id)
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "ticket_id": str(invite.id),
+        "event_title": event.title if event else "—",
+        "event_date": event.date.isoformat() if event else None,
+        "validation_code": invite.validation_code,
+        "seats": invite.seats,
+        "status": invite.status.value,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # VK Mini App
 # ═══════════════════════════════════════════════════════════════

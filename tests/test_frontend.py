@@ -88,3 +88,17 @@ def test_appjs_vk_ticket_dm_flow():
     assert "vk_group_id" in APP_JS
     assert "/send-vk" in APP_JS
     assert "Билет отправлен в личные сообщения ВКонтакте" in APP_JS
+
+
+def test_appjs_invite_links_flow():
+    """Пригласительные как ссылки: выдача ссылки + активация гостем по ?invite=."""
+    # Выдача: организатор получает ссылку на пригласительное
+    assert "inviteLink" in APP_JS
+    assert "?invite=" in APP_JS
+    # Гость: deep-link ?invite=<код> → страница активации
+    assert "showInvitePage" in APP_JS
+    assert "params.get(\"invite\")" in APP_JS
+    # Активация
+    assert "claimInvite" in APP_JS
+    assert "/api/invites/${encodeURIComponent(code)}/claim" in APP_JS
+    assert "Активировать" in APP_JS
