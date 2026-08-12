@@ -1496,3 +1496,117 @@ class TestRoleOrganizer:
 
         svc = UserService(db_session)
         assert await svc.is_organizer(sample_user.id) is False
+
+
+# ═══════════════════════════════════════════════════════════════
+# B: лимит «1 опубликованное будущее» для бесплатного организатора
+# ═══════════════════════════════════════════════════════════════
+
+class TestFreeOrganizerEventLimit:
+    """Лимит free-организатора: максимум 1 опубликованное будущее мероприятие."""
+
+    async def _make_owner_event(self, db_session, owner_user_id, title="E", days=7, published=False, price=0):
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        event = await svc.create(
+            title=title, description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=days),
+            location=None, price=price, total_tickets=10,
+            channel_id=None, owner_user_id=owner_user_id,
+        )
+        if published:
+            event.is_published = True
+        await db_session.flush()
+        return event
+
+    async def test_free_owner_can_publish_first(self, db_session, sample_user):
+        """Free-юзер публикует первое событие — ок."""
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        event = await self._make_owner_event(db_session, sample_user.id, published=False)
+        # не опубликовано — слот свободен
+        count = await svc.count_published_future(owner_user_id=sample_user.id)
+        assert count == 0
+        # лимит не блокирует (уже опубликованное не считаем за новое)
+        event.is_published = True
+        await db_session.flush()
+        assert await svc.count_published_future(owner_user_id=sample_user.id) == 1
+
+    async def test_free_owner_second_publish_rejected(self, db_session, sample_user):
+        """Free-юзер: второе опубликованное будущее → ValueError."""
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        await self._make_owner_event(db_session, sample_user.id, title="Первое", published=True)
+        second = await self._make_owner_event(db_session, sample_user.id, title="Второе", published=False)
+        await db_session.commit()
+
+        with pytest.raises(ValueError, match="только одно мероприятие"):
+            await svc.ensure_free_slot(second)
+
+    async def test_free_owner_past_event_not_counted(self, db_session, sample_user):
+        """Прошедшее опубликованное не занимает слот — можно публиковать новое."""
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        past = await self._make_owner_event(db_session, sample_user.id, title="Прошлое", days=-1, published=True)
+        await db_session.commit()
+        assert await svc.count_published_future(owner_user_id=sample_user.id) == 0
+
+        new = await self._make_owner_event(db_session, sample_user.id, title="Новое", published=False)
+        await db_session.commit()
+        await svc.ensure_free_slot(new)  # не падает
+
+    async def test_pro_owner_not_limited(self, db_session, sample_user):
+        """Pro-организатор не ограничен лимитом."""
+        from app.core.services import EventService, UserService
+        user_svc = UserService(db_session)
+        await user_svc.activate_subscription(sample_user.id, 30, SubscriptionTier.pro)
+        await db_session.commit()
+
+        svc = EventService(db_session)
+        await self._make_owner_event(db_session, sample_user.id, title="Первое", published=True)
+        second = await self._make_owner_event(db_session, sample_user.id, title="Второе", published=False)
+        await db_session.commit()
+        await svc.ensure_free_slot(second)  # не падает (pro)
+
+    async def test_basic_owner_limited(self, db_session, sample_user):
+        """Basic-организатор тоже ограничен лимитом."""
+        from app.core.services import EventService, UserService
+        user_svc = UserService(db_session)
+        await user_svc.activate_subscription(sample_user.id, 30, SubscriptionTier.basic)
+        await db_session.commit()
+
+        svc = EventService(db_session)
+        await self._make_owner_event(db_session, sample_user.id, title="Первое", published=True)
+        second = await self._make_owner_event(db_session, sample_user.id, title="Второе", published=False)
+        await db_session.commit()
+
+        with pytest.raises(ValueError, match="только одно мероприятие"):
+            await svc.ensure_free_slot(second)
+
+    async def test_free_channel_limited(self, db_session):
+        """Канал без подписки (=free) тоже ограничен лимитом."""
+        from app.core.services import EventService, ChannelService
+        svc = EventService(db_session)
+        ch_svc = ChannelService(db_session)
+        channel = await ch_svc.create(
+            telegram_channel_id="free_chan", admin_telegram_user_id="admin", title="Free Chan",
+        )
+        await db_session.flush()
+
+        async def _mk(title, published):
+            ev = await svc.create(
+                title=title, description=None,
+                date=datetime.now(timezone.utc) + timedelta(days=7),
+                location=None, price=0, total_tickets=10,
+                channel_id=channel.id, owner_user_id=None,
+            )
+            if published:
+                ev.is_published = True
+            await db_session.flush()
+            return ev
+        await _mk("Первое", published=True)
+        second = await _mk("Второе", published=False)
+        await db_session.commit()
+
+        with pytest.raises(ValueError, match="только одно мероприятие"):
+            await svc.ensure_free_slot(second)
