@@ -16,13 +16,14 @@
 import uuid
 import base64
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet
 
-from app.core.models import PlatformType, SubscriptionTier
+from app.core.models import PlatformType, SubscriptionTier, Event
 from app.core.services import UserService, EventService, VKGroupService, TicketService
 
 TEST_KEY = Fernet.generate_key().decode()
@@ -42,6 +43,23 @@ def _vk_auth_header(user_id=5305539, app_id=123456, secret="test_vk_secret_key")
     params["sign"] = sign
     query = urlencode(sorted(params.items()))
     return base64.b64encode(query.encode()).decode()
+
+
+@contextmanager
+def _vk_settings(app_id=123456, secret="test_vk_secret_key"):
+    """Активные VK Mini App настройки для X-VK-Init-Data аутентификации."""
+    with (
+        patch("app.web.vk_auth.settings.vk_app_id", app_id),
+        patch("app.web.vk_auth.settings.vk_secret_key", secret),
+    ):
+        yield
+
+
+async def _publish(db_session, event_id: uuid.UUID):
+    """Опубликовать мероприятие (черновик → продажа)."""
+    ev = await db_session.get(Event, event_id)
+    ev.is_published = True
+    ev.is_active = True
 
 
 async def test_full_vk_organizer_cycle(db_client, db_session):
@@ -145,6 +163,145 @@ async def test_full_vk_organizer_cycle(db_client, db_session):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "checked_in"
+
+
+async def test_vk_buy_refund_sync_to_tg(db_client, db_session):
+    """E2E-синхронизация: VK-покупка → VK-возврат, организатор TG видит оба состояния.
+
+    Киллер-фича в обе стороны: продажа/возврат, совершённые на одной площадке,
+    мгновенно отражаются на другой (общая БД, единые счётчики sold/available).
+    Сценарий:
+    1. Организатор (TG, X-Skip-Auth) создаёт owner-мероприятие.
+    2. VK-покупатель (X-VK-Init-Data, реальная аутентификация) покупает билет.
+    3. Организатор TG видит sold=1, available уменьшился.
+    4. VK-покупатель возвращает билет (POST /api/tickets/{id}/cancel, VK-заголовок).
+    5. Организатор TG видит sold=0, refunded=1, available вернулся.
+    """
+    user_svc = UserService(db_session)
+
+    # Организатор (канон 12345 — совпадает с X-Skip-Auth), pro-подписка
+    org = await user_svc.get_or_create(PlatformType.telegram, "12345", name="Организатор")
+    await user_svc.activate_subscription(org.id, days=30, tier=SubscriptionTier.pro)
+    await db_session.commit()
+
+    # Создать мероприятие через реальный web API (X-Skip-Auth)
+    resp = await db_client.post(
+        "/api/admin/events",
+        headers={"X-Skip-Auth": "1"},
+        json={
+            "title": "Синхронизация VK↔TG",
+            "date": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "price": 100,
+            "total_tickets": 10,
+            "channel_id": None,
+            "owner_user_id": str(org.id),
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    event_id = uuid.UUID(resp.json()["id"])
+    await _publish(db_session, event_id)
+    await db_session.commit()
+
+    # ── VK-покупатель покупает билет (web, реальная VK-аутентификация) ──
+    vk_header = _vk_auth_header(user_id=7777777)
+    with _vk_settings():
+        resp = await db_client.post(
+            f"/api/events/{event_id}/buy",
+            headers={"X-VK-Init-Data": vk_header},
+        )
+    assert resp.status_code == 201, resp.text
+    ticket = resp.json()
+    assert ticket["validation_code"] is not None
+    assert ticket["amount"] == 100
+    ticket_id = ticket["ticket_id"]
+
+    # ── Организатор TG видит проданный билет ──
+    resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+    assert resp.status_code == 200
+    assert resp.json()["sold"] == 1, resp.json()
+    assert resp.json()["available"] == 9, resp.json()
+
+    # ── VK-покупатель возвращает билет (web, VK-заголовок) ──
+    with _vk_settings():
+        resp = await db_client.post(
+            f"/api/tickets/{ticket_id}/cancel",
+            headers={"X-VK-Init-Data": vk_header},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "refunded"
+
+    # ── Организатор TG видит возврат: sold=0, refunded=1, available вернулся ──
+    resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+    assert resp.status_code == 200
+    stats = resp.json()
+    assert stats["sold"] == 0, stats
+    assert stats["refunded"] == 1, stats
+    assert stats["available"] == 10, stats
+
+
+async def test_tg_buy_vk_checkin_symmetry(db_client, db_session):
+    """Симметрия киллер-фичи: билет, купленный в TG, проверяется в VK.
+
+    Обратная связка к test_full_vk_organizer_cycle (купил в VK → проверил в TG):
+    1. Канон-организатор (TG) + линковка VK (код привязки) — одна identity.
+    2. TG-покупатель (X-Skip-Auth) покупает билет через web.
+    3. VK-организатор (X-VK-Init-Data, линкованный) validate/checkin → 200.
+    Это доказывает платформонезависимость кода билета в обе стороны.
+    """
+    user_svc = UserService(db_session)
+    event_svc = EventService(db_session)
+
+    # Канон-организатор (отдельный TG-пользователь, НЕ 12345 — покупатель другой)
+    org = await user_svc.get_or_create(PlatformType.telegram, "canon_tg_org", name="Канон TG")
+    await user_svc.activate_subscription(org.id, days=30, tier=SubscriptionTier.pro)
+    # Линковка VK → канон (вводит код привязки на VK-стороне)
+    code = await user_svc.create_link_code(org.id, PlatformType.vk, ttl_minutes=10)
+    await user_svc.consume_link_code(code, PlatformType.vk, "222222", current_user_id=None)
+    await db_session.commit()
+
+    # Мероприятие владельца (канон TG) через реальный web API от лица X-Skip-Auth НЕЛЬЗЯ
+    # (X-Skip-Auth = 12345 ≠ canon_tg_org) → создаём через сервис, как в каноническом контуре.
+    event = await event_svc.create(
+        title="TG→VK check-in",
+        description="Куплено в TG, проверено в VK",
+        date=datetime.now(timezone.utc) + timedelta(days=7),
+        location="Москва",
+        price=0,
+        total_tickets=20,
+        channel_id=None,
+        owner_user_id=org.id,
+    )
+    event.is_published = True
+    event.is_active = True
+    await db_session.commit()
+
+    # ── TG-покупатель (X-Skip-Auth) покупает билет ──
+    resp = await db_client.post(f"/api/events/{event.id}/buy", headers={"X-Skip-Auth": "1"})
+    assert resp.status_code == 201, resp.text
+    code_buyer = resp.json()["validation_code"]
+    assert code_buyer is not None
+
+    # ── VK-организатор (линкованный канон) проверяет по коду ──
+    vk_org_header = _vk_auth_header(user_id=222222)
+    with _vk_settings():
+        resp = await db_client.get(
+            f"/api/admin/tickets/validate?code={code_buyer}",
+            headers={"X-VK-Init-Data": vk_org_header},
+        )
+    assert resp.status_code == 200, resp.text
+    info = resp.json()
+    assert info["found"] is True, info
+    assert info["status"] == "active", info
+
+    # ── VK-организатор отмечает вход ──
+    with _vk_settings():
+        resp = await db_client.post(
+            "/api/admin/tickets/checkin",
+            headers={"X-VK-Init-Data": vk_org_header},
+            json={"code": code_buyer},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "checked_in", resp.json()
 
 
 async def test_vk_identity_resolves_canon(db_session):
