@@ -168,7 +168,8 @@ async def buy_ticket(event_id: str, auth_data: dict = Depends(validate_init_data
             result = await ticket_svc.buy_ticket_webapp(user.id, uid)
             await session.commit()
 
-            code_text = f"\n🔑 Код: <code>{result['validation_code']}</code>" if result.get("validation_code") else ""
+            # A: код в DM — только для бесплатного билета (платный предъявляется QR).
+            code_text = f"\n🔑 Код: <code>{result['validation_code']}</code>" if (result.get("is_free") and result.get("validation_code")) else ""
             ticket_text = (
                 f"✅ Билет куплен!\n"
                 f"🎫 {result['event_title']}\n"
@@ -358,12 +359,15 @@ async def send_vk_ticket(ticket_id: str, auth_data: dict = Depends(validate_init
             vk_group = next((g for g in groups if g.community_token), None)
             if vk_group is not None:
                 vk_group_id = vk_group.group_id
-                code = ticket.validation_code or str(ticket.id)
+                # A: код в ЛС VK — только для бесплатного (платный предъявляется QR).
+                code_line = ""
+                if ticket.is_free:
+                    code = ticket.validation_code or str(ticket.id)
+                    code_line = f"\n🔑 Код: <code>{code}</code>"
                 text = (
                     f"✅ Билет куплен!\n"
                     f"🎫 {event.title}\n"
-                    f"📅 {event.date.isoformat()}\n"
-                    f"🔑 Код: <code>{code}</code>"
+                    f"📅 {event.date.isoformat()}{code_line}"
                 )
                 sent = await send_vk_ticket_dm(platform_user_id, text, vk_group)
 

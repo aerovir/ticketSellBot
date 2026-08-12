@@ -238,3 +238,4 @@
 | 187 | Feat: e2e пригласительные как ссылки (F18, owner-путь) — не считаются в `sold`, вычитаются из `available`, отмена возвращает места — `tests/test_organizer_e2e.py::test_invites_not_counted_in_sold` | ✅ done | 2026-08-12 | — (там же) |
 | 188 | Feat: пригласительные как ссылки — `claim_invite` (активация гостем по `?invite=<код>`), эндпоинт `POST /api/invites/{code}/claim`, UI выдачи (ссылка + QR), deep-link `?invite=` | ✅ done | 2026-08-12 | — (PR #11, errors #074) |
 | 189 | Fix: `validate_ticket` INNER JOIN не находил пригласительные (user_id=None) → LEFT JOIN | ✅ done | 2026-08-12 | — (PR #11, errors #074) |
+| 190 | Feat: предъявление билета — бесплатный → код, платный → QR (renderTickets по is_free; is_free в buy_ticket_webapp dict; код в DM только для free) | ✅ done | 2026-08-12 | — (PR #12) |

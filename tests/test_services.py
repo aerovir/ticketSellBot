@@ -501,6 +501,8 @@ class TestTicketService:
         assert result["event_title"] == sample_event.title
         assert result["amount"] == float(sample_event.price)
         assert result["payment_status"] == "pending"
+        # A: is_free в dict — фронт отличает код (free) от QR (paid)
+        assert result["is_free"] == sample_event.is_free
 
         # Check that available_tickets decreased
         assert result["ticket_id"] != ""
