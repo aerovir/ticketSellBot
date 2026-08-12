@@ -1457,6 +1457,65 @@ class TestCabinetFlow:
         assert stats["invites_issued"] == 1
         assert stats["available"] == available_before - 2
 
+    async def test_free_organizer_one_event_limit(self, db_client, db_session):
+        """B: free-организатор — 1 опубликованное будущее; 2-е → 409.
+
+        Пользователь без подписки создаёт 2 бесплатных события, публикует первое
+        (200), второе (409). После переноса даты первого в прошлое — можно снова.
+        """
+        from datetime import datetime, timezone, timedelta
+        from app.core.models import Event as EventModel, PlatformType
+        from app.core.services import UserService
+        from sqlalchemy import select
+
+        # Юзер 12345 без подписки = free-организатор
+        user = await UserService(db_session).get_or_create(
+            PlatformType.telegram, "12345", "Free Org",
+        )
+        await db_session.commit()
+
+        def _payload(title, days=7):
+            return {
+                "title": title,
+                "date": (datetime.now(timezone.utc) + timedelta(days=days)).isoformat(),
+                "price": 0,
+                "total_tickets": 10,
+                "owner_user_id": str(user.id),
+            }
+
+        # Создать два черновика
+        r1 = await db_client.post("/api/admin/events", headers={"X-Skip-Auth": "1"}, json=_payload("Первое"))
+        assert r1.status_code == 201, r1.text
+        id1 = r1.json()["id"]
+        r2 = await db_client.post("/api/admin/events", headers={"X-Skip-Auth": "1"}, json=_payload("Второе"))
+        assert r2.status_code == 201, r2.text
+        id2 = r2.json()["id"]
+
+        # Публикация: анонс — внешний side-effect, мокаем (как в organizer_e2e)
+        from unittest.mock import patch as _patch
+        from app.web.routes import post_event_announcement, send_announcement_dm
+        with (
+            _patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=False),
+            _patch("app.web.routes.send_announcement_dm", new_callable=AsyncMock, return_value=False),
+        ):
+            # Публикация первого — ок
+            p1 = await db_client.post(f"/api/admin/events/{id1}/publish", headers={"X-Skip-Auth": "1"}, json={})
+            assert p1.status_code == 200, p1.text
+
+            # Публикация второго — 409 (лимит)
+            p2 = await db_client.post(f"/api/admin/events/{id2}/publish", headers={"X-Skip-Auth": "1"}, json={})
+            assert p2.status_code == 409, p2.text
+            assert "только одно мероприятие" in p2.json()["detail"]
+
+            # Перенести дату первого в прошлое → слот освободился
+            ev = (await db_session.execute(select(EventModel).where(EventModel.id == _UUID(id1)))).scalar_one()
+            ev.date = datetime.now(timezone.utc) - timedelta(days=1)
+            await db_session.commit()
+
+            # Повторная публикация второго — ок
+            p2b = await db_client.post(f"/api/admin/events/{id2}/publish", headers={"X-Skip-Auth": "1"}, json={})
+            assert p2b.status_code == 200, p2b.text
+
 
 class TestCoverageGaps:
     """Покрытие эндпоинтов, не имевших тестов."""

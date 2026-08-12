@@ -239,3 +239,4 @@
 | 188 | Feat: пригласительные как ссылки — `claim_invite` (активация гостем по `?invite=<код>`), эндпоинт `POST /api/invites/{code}/claim`, UI выдачи (ссылка + QR), deep-link `?invite=` | ✅ done | 2026-08-12 | — (PR #11, errors #074) |
 | 189 | Fix: `validate_ticket` INNER JOIN не находил пригласительные (user_id=None) → LEFT JOIN | ✅ done | 2026-08-12 | — (PR #11, errors #074) |
 | 190 | Feat: предъявление билета — бесплатный → код, платный → QR (renderTickets по is_free; is_free в buy_ticket_webapp dict; код в DM только для free) | ✅ done | 2026-08-12 | — (PR #12) |
+| 191 | Feat: лимит «1 опубликованное будущее» для free-организатора (EventService.count_published_future/ensure_free_slot, гейт в admin_publish_event, 409 при превышении) | ✅ done | 2026-08-12 | — (PR #13) |

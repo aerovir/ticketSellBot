@@ -1030,6 +1030,78 @@ class EventService:
         })
         return events
 
+    # ═══════════════════════════════════════════════════════════════
+    # B: лимит «1 опубликованное будущее» для бесплатного организатора
+    # ═══════════════════════════════════════════════════════════════
+
+    async def count_published_future(
+        self,
+        owner_user_id: uuid.UUID | None = None,
+        channel_id: uuid.UUID | None = None,
+    ) -> int:
+        """Сколько опубликованных будущих мероприятий у владельца (owner ИЛИ канал).
+
+        Считаются: is_published=True AND date >= now AND deleted_at IS NULL.
+        Прошедшие и черновики не считаются.
+        """
+        now = datetime.now(timezone.utc)
+        stmt = select(func.count(Event.id)).where(
+            and_(
+                Event.is_published == True,
+                Event.date >= now,
+                Event.deleted_at.is_(None),
+            )
+        )
+        if owner_user_id is not None:
+            stmt = stmt.where(Event.owner_user_id == owner_user_id)
+        if channel_id is not None:
+            stmt = stmt.where(Event.channel_id == channel_id)
+        result = await self.session.execute(stmt)
+        return result.scalar() or 0
+
+    async def _is_free_owner(self, owner_user_id: uuid.UUID) -> bool:
+        """Free-владелец: без активной подписки ИЛИ basic."""
+        user_svc = UserService(self.session)
+        if not await user_svc.is_subscription_valid(owner_user_id):
+            return True
+        tier = await user_svc.get_subscription_tier(owner_user_id)
+        return tier == SubscriptionTier.basic
+
+    async def _is_free_channel(self, channel_id: uuid.UUID) -> bool:
+        """Free-канал: без активной подписки ИЛИ basic."""
+        channel_svc = ChannelService(self.session)
+        if not await channel_svc.is_subscription_valid(channel_id):
+            return True
+        tier = await channel_svc.get_subscription_tier(channel_id)
+        return tier == SubscriptionTier.basic
+
+    async def ensure_free_slot(self, event: Event) -> None:
+        """Проверить лимит «1 опубликованное будущее» для бесплатного организатора.
+
+        Вызывается перед публикацией (is_published False→True). Если событие уже
+        опубликовано (re-publish) — не блокирует. Pro-владельцы не ограничены.
+        Черновики и прошедшие не занимают слот.
+
+        Raises:
+            ValueError: бесплатный организатор уже имеет 1 опубликованное будущее.
+        """
+        if event.is_published:
+            return  # повторная публикация уже опубликованного — не блокируем
+        if event.owner_user_id is not None:
+            if not await self._is_free_owner(event.owner_user_id):
+                return  # pro-организатор не ограничен
+            count = await self.count_published_future(owner_user_id=event.owner_user_id)
+        elif event.channel_id is not None:
+            if not await self._is_free_channel(event.channel_id):
+                return
+            count = await self.count_published_future(channel_id=event.channel_id)
+        else:
+            return  # событие без владельца — не гейтим
+        if count >= 1:
+            raise ValueError(
+                "Бесплатный организатор может опубликовать только одно мероприятие одновременно"
+            )
+
     async def get_by_id(self, event_id: uuid.UUID, channel_id: uuid.UUID | None = None) -> Event | None:
         """Get event by ID, optionally scoped to a channel."""
         start = time.perf_counter()

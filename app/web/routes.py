@@ -1136,6 +1136,12 @@ async def admin_publish_event(
             if group.owner_user_id != current.user_id and not current.is_super_admin:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этой группе")
 
+            # B: лимит free-организатора «1 опубликованное будущее»
+            try:
+                await event_svc.ensure_free_slot(event)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
             await event_svc.update(uid, is_published=True)
             text = format_event_text(event, mode="full")
             ok = await post_to_group_wall(group, text)
@@ -1171,6 +1177,12 @@ async def admin_publish_event(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
         if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+
+        # B: лимит free-организатора «1 опубликованное будущее»
+        try:
+            await event_svc.ensure_free_slot(event)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
         channel = None
         if target_channel_id:
