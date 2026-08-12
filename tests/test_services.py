@@ -1055,6 +1055,67 @@ class TestInviteTickets:
         assert invites[0]["is_invite"] is True
         assert invites[0]["validation_code"] is not None
 
+    async def test_claim_invite_binds_to_user(self, db_session, sample_channel):
+        """Активация пригласительного гостем: user_id привязывается."""
+        from app.core.services import TicketService, UserService
+        from app.core.models import PlatformType
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=5)
+        ticket_svc = TicketService(db_session)
+        invite = await ticket_svc.issue_invite(event.id, seats=2, issued_by="admin_1")
+        await db_session.commit()
+
+        guest = await UserService(db_session).get_or_create(PlatformType.telegram, "guest_1", "Гость")
+        claimed = await ticket_svc.claim_invite(invite.validation_code, guest.id)
+        await db_session.commit()
+
+        assert claimed.id == invite.id
+        assert claimed.user_id == guest.id
+        assert claimed.is_invite is True
+        await db_session.refresh(event)
+        assert event.available_tickets == 8  # 2 места пригласительного уже резервированы
+
+    async def test_claim_invite_already_claimed_by_other(self, db_session, sample_channel):
+        """Повторная активация другим гостем → ValueError."""
+        from app.core.services import TicketService, UserService
+        from app.core.models import PlatformType
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=5)
+        ticket_svc = TicketService(db_session)
+        invite = await ticket_svc.issue_invite(event.id, seats=1, issued_by="admin_1")
+        await db_session.commit()
+
+        guest1 = await UserService(db_session).get_or_create(PlatformType.telegram, "guest_1", "Гость")
+        await ticket_svc.claim_invite(invite.validation_code, guest1.id)
+        await db_session.commit()
+
+        guest2 = await UserService(db_session).get_or_create(PlatformType.telegram, "guest_2", "Другой")
+        import pytest
+        with pytest.raises(ValueError, match="уже активировано"):
+            await ticket_svc.claim_invite(invite.validation_code, guest2.id)
+
+    async def test_claim_invite_not_invite(self, db_session, sample_channel):
+        """Обычный билет нельзя активировать как пригласительное."""
+        from app.core.services import TicketService, UserService
+        from app.core.models import PlatformType
+        event = await self._make_invite_event(db_session, sample_channel, total=10, quota=5)
+        event.is_published = True  # buy_ticket требует опубликованное событие
+        await db_session.flush()
+        ticket_svc = TicketService(db_session)
+        user = await UserService(db_session).get_or_create(PlatformType.telegram, "buyer_x", "Покупатель")
+        ticket = await ticket_svc.buy_ticket(user.id, event.id)
+        await db_session.commit()
+
+        import pytest
+        with pytest.raises(ValueError, match="не пригласительное"):
+            await ticket_svc.claim_invite(ticket.validation_code, user.id)
+
+    async def test_claim_invite_not_found(self, db_session, sample_channel):
+        """Несуществующий код → ValueError."""
+        from app.core.services import TicketService
+        ticket_svc = TicketService(db_session)
+        import pytest
+        with pytest.raises(ValueError, match="не найден"):
+            await ticket_svc.claim_invite("ZZZZ-ZZZZ", None)
+
 
 class TestEventInvitesQuota:
     """Тесты квоты пригласительных на мероприятии."""

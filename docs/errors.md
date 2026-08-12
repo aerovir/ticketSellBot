@@ -1206,3 +1206,17 @@
   - `app.js` — после покупки мягкий запрос «получить в ЛС?» → `VKWebAppAllowMessagesFromGroup` → `POST send-vk`. Отказ — билет остаётся в кабинете.
 - **Коммит:** — (см. PR)
 - **Тесты:** +3 (send_vk_ticket_dm unit: success/no-token/api-error), +2 web (send-vk, foreign_403), +1 frontend
+
+---
+
+## 074 — validate_ticket не находил пригласительные (INNER JOIN на User)
+
+- **Дата:** 2026-08-12
+- **Статус:** ✅ Исправлено
+- **Описание:** Организатор не мог проверить пригласительное по коду на входе: `validate_ticket` использовал `INNER JOIN` на `users`, а пригласительное имеет `user_id=None` → строка не находилась, возвращалось `found=False`.
+- **Анализ:**
+  - **Подтверждено (`services.py validate_ticket`):** `select(Ticket, User.name, Event.title).join(User, Ticket.user_id == User.id)` — INNER JOIN отбрасывает пригласительные (user_id=None).
+  - **Подтверждено (модель `Ticket`):** `user_id nullable`, пригласительные (`is_invite=True`) не привязаны к пользователю.
+- **Исправление:** `validate_ticket` — `join` → `outerjoin` (LEFT JOIN) по User; пригласительные теперь находятся по коду, `user_name` = «—».
+- **Коммит:** — (см. PR)
+- **Тесты:** +1 e2e (`test_invite_claimed_by_guest_via_link` шаг 4: validate пригласительного → found=True)

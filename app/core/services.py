@@ -1952,7 +1952,8 @@ class TicketService:
         start = time.perf_counter()
         stmt = (
             select(Ticket, User.name, Event.title)
-            .join(User, Ticket.user_id == User.id)
+            # LEFT JOIN: пригласительные (user_id=None) тоже должны находиться по коду
+            .outerjoin(User, Ticket.user_id == User.id)
             .join(Event, Ticket.event_id == Event.id)
             .where(Ticket.validation_code == code)
         )
@@ -2155,6 +2156,45 @@ class TicketService:
         if event:
             event.available_tickets += ticket.seats
         await self.session.flush()
+        return ticket
+
+    async def claim_invite(self, code: str, user_id: uuid.UUID) -> Ticket:
+        """Активировать пригласительное гостем по коду из ссылки.
+
+        Привязывает пригласительный (is_invite=True) к пользователю-гостю —
+        билет появляется в его «Моих билетах». Места резервируются при выдаче
+        (available -= seats), здесь только привязка владельца.
+
+        Raises:
+            ValueError: код не найден / не пригласительное / уже активировано другим.
+        """
+        start = time.perf_counter()
+        code = code.strip().upper()
+        stmt = select(Ticket).where(Ticket.validation_code == code)
+        result = await self.session.execute(stmt)
+        ticket = result.scalar_one_or_none()
+
+        if ticket is None:
+            raise ValueError("Билет не найден")
+        if not ticket.is_invite:
+            raise ValueError("Это не пригласительное")
+        if ticket.status == TicketStatus.refunded:
+            raise ValueError("Пригласительное отозвано")
+        if ticket.user_id is not None and ticket.user_id != user_id:
+            raise ValueError("Пригласительное уже активировано другим гостем")
+
+        ticket.user_id = user_id
+        await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "ticket.invite_claimed",
+            "ticket_id": str(ticket.id),
+            "event_id": str(ticket.event_id),
+            "user_id": str(user_id),
+            "seats": ticket.seats,
+            "status": "success",
+            "duration_ms": _ms(start),
+        })
         return ticket
 
     async def get_event_invites(self, event_id: uuid.UUID) -> list[dict]:
