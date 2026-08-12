@@ -523,6 +523,79 @@ class TestOrganizerE2E:
         resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers=HEADERS)
         assert resp.json()["available"] == 20, resp.json()
 
+    async def test_invites_not_counted_in_sold(self, db_client, db_session):
+        """F-invites (owner-путь): пригласительное НЕ в sold, но вычитается из available.
+
+        Контракт пригласительного как «ссылки»:
+        - is_invite=True, seats=N → stats.sold НЕ меняется (растёт только invites_issued);
+        - stats.available уменьшается на N (места резервируются);
+        - отмена пригласительного → available += N, sold не трогает.
+        Реальная БД, роль организатора — через реальную pro-подписку.
+        """
+        user = await _organizer_user(db_session)
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.pro,
+        )
+        await db_session.commit()
+
+        resp = await db_client.post(
+            "/api/admin/events",
+            headers=HEADERS,
+            json={**_event_payload(owner_user_id=str(user.id), price=100, total=10), "invites_quota": 5},
+        )
+        assert resp.status_code == 201, resp.text
+        event_id = resp.json()["id"]
+
+        # Опубликовать, чтобы купить билет (черновик → продажа)
+        ev = await db_session.get(Event, uuid.UUID(event_id))
+        ev.is_published = True
+        await db_session.commit()
+
+        # Базовые stats
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["sold"] == 0
+        assert resp.json()["available"] == 10
+
+        # Один ОБЫЧНЫЙ билет, чтобы отличать sold от пригласительных
+        resp = await db_client.post(f"/api/events/{event_id}/buy", headers=HEADERS)
+        assert resp.status_code == 201, resp.text
+
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers=HEADERS)
+        assert resp.json()["sold"] == 1, resp.json()
+        assert resp.json()["available"] == 9, resp.json()
+
+        # Выдать пригласительное seats=2
+        resp = await db_client.post(
+            f"/api/admin/events/{event_id}/invites",
+            headers=HEADERS,
+            json={"seats": 2},
+        )
+        assert resp.status_code == 201, resp.text
+        invite_id = resp.json()["ticket_id"]
+        assert resp.json()["seats"] == 2
+
+        # stats: sold НЕ изменился (1), invites_issued=1, available 9 → 7
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers=HEADERS)
+        stats = resp.json()
+        assert stats["sold"] == 1, stats          # пригласительное не считается проданным
+        assert stats["invites_issued"] == 1, stats
+        assert stats["invites_used"] == 0, stats
+        assert stats["available"] == 7, stats     # 10 - 1 билет - 2 места приглашения
+
+        # Отмена → места возвращаются (available 7 → 9), sold не трогает
+        resp = await db_client.post(
+            f"/api/admin/events/{event_id}/invites/{invite_id}/cancel",
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "refunded"
+
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers=HEADERS)
+        stats = resp.json()
+        assert stats["sold"] == 1, stats
+        assert stats["available"] == 9, stats
+
     async def test_buyer_cannot_admin(self, db_client, db_session):
         """Покупатель (без подписки и канала): открытое создание мероприятий,
         но нет доступа к организаторским функциям (статистика, каналы)."""

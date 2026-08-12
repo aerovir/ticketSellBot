@@ -226,3 +226,13 @@
 | 182 | Feat: e2e send-vk F1 — шаг в `test_vk_e2e.test_full_vk_organizer_cycle` (билет в ЛС VK от реальной группы) | ✅ done | 2026-08-12 | — (там же) |
 | 183 | Feat: TG-сим F7 check-in + F5 анонс — `tests/test_telegram_sim.py` (/check → checked_in; репост анонсов в канал) | ✅ done | 2026-08-12 | — (там же) |
 | 184 | TechDeBT: `/check` и `/repost_events` не зарегистрированы в режиме «только web» — TG-sim вызывает хендлеры напрямую; при возврате команд — перевести на полный конвейер `feed_update` | ⏳ pending | 2026-08-12 | — |
+
+### E2E синхронизация билетов между платформами (2026-08-12, `feature/e2e-crossplatform-sync`)
+
+Дополняет киллер-фичу (одно мероприятие на всех площадках) e2e-контуром синхронизации в обе стороны. Все на реальной БД (`db_client`/`db_session`); VK-аутентификация — реальные launch params (X-VK-Init-Data), роль — реальная линковка/подписка, без моков ролей.
+
+| # | Задача | Статус | Дата | Коммит |
+|---|--------|--------|------|--------|
+| 185 | Feat: e2e синхронизация VK→TG — покупка/возврат в VK (X-VK-Init-Data) отражаются в статистике TG (`sold`/`refunded`/`available`) — `tests/test_vk_e2e.py::test_vk_buy_refund_sync_to_tg` | ✅ done | 2026-08-12 | — (ветка `feature/e2e-crossplatform-sync`) |
+| 186 | Feat: e2e симметрия TG→VK — билет, купленный в TG (X-Skip-Auth), проверяется VK-организатором (линкованный канон) validate/checkin → 200 — `tests/test_vk_e2e.py::test_tg_buy_vk_checkin_symmetry` | ✅ done | 2026-08-12 | — (там же) |
+| 187 | Feat: e2e пригласительные как ссылки (F18, owner-путь) — не считаются в `sold`, вычитаются из `available`, отмена возвращает места — `tests/test_organizer_e2e.py::test_invites_not_counted_in_sold` | ✅ done | 2026-08-12 | — (там же) |
