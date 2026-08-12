@@ -240,3 +240,5 @@
 | 189 | Fix: `validate_ticket` INNER JOIN не находил пригласительные (user_id=None) → LEFT JOIN | ✅ done | 2026-08-12 | — (PR #11, errors #074) |
 | 190 | Feat: предъявление билета — бесплатный → код, платный → QR (renderTickets по is_free; is_free в buy_ticket_webapp dict; код в DM только для free) | ✅ done | 2026-08-12 | — (PR #12) |
 | 191 | Feat: лимит «1 опубликованное будущее» для free-организатора (EventService.count_published_future/ensure_free_slot, гейт в admin_publish_event, 409 при превышении) | ✅ done | 2026-08-12 | — (PR #13) |
+| 192 | Feat: per-event премиум — `EventUpgrade` + миграция 0011, `purchase_event_premium`, `has_event_pro_feature`, `POST /api/me/events/{id}/premium`, is_premium в admin/events, гейты invite/QR, кнопка в UI | ✅ done | 2026-08-12 | — (PR #14, errors #075) |
+| 193 | Fix: баг #075 — `EventService.update` не проверял paid_events (обход через PATCH price) — гейт с учётом премиума события | ✅ done | 2026-08-12 | — (PR #14, errors #075) |

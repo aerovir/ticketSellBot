@@ -368,6 +368,41 @@ class Payment(Base):
         return f"<Payment {self.id} — {self.status.value}>"
 
 
+class EventUpgrade(Base):
+    """Per-event премиум — единовременная оплата pro-фич на одно мероприятие.
+
+    Даёт paid_events / qr_codes / invite_tickets для конкретного события,
+    независимо от подписки организатора (User/Channel). Оплата — заглушка
+    (status=completed), колонка provider — под будущий Telegram Stars / YooKassa.
+    expires_at = event.date (премиум действует до даты мероприятия).
+    """
+
+    __tablename__ = "event_upgrades"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    amount: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), default=0, nullable=False)
+    status: Mapped[PaymentStatus] = mapped_column(
+        SAEnum(PaymentStatus), default=PaymentStatus.completed, nullable=False
+    )
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    event = relationship("Event", lazy="raise")
+
+    def __repr__(self):
+        return f"<EventUpgrade {self.event_id} — {self.status.value}>"
+
+
 class ChannelAdmin(Base):
     __tablename__ = "channel_admins"
 

@@ -1220,3 +1220,17 @@
 - **Исправление:** `validate_ticket` — `join` → `outerjoin` (LEFT JOIN) по User; пригласительные теперь находятся по коду, `user_name` = «—».
 - **Коммит:** — (см. PR)
 - **Тесты:** +1 e2e (`test_invite_claimed_by_guest_via_link` шаг 4: validate пригласительного → found=True)
+
+---
+
+## 075 — EventService.update не проверял paid_events (обход через PATCH price)
+
+- **Дата:** 2026-08-12
+- **Статус:** ✅ Исправлено
+- **Описание:** Гейт платных мероприятий есть только в `EventService.create` (price>0 требует pro). `EventService.update` (services.py:1204) НЕ проверял `paid_events` при смене `price` — basic-юзер может создать `price=0`, затем `PATCH price=500` и обойти гейт.
+- **Анализ:**
+  - **Подтверждено (`services.py:1204-1244`):** `update` применяет setattr для всех полей, включая `price`, без проверки `require_feature("paid_events")`.
+  - **Подтверждено (маршрут `PATCH /admin/events/{id}`):** routes.py admin_update_event вызывает `update` без гейта цены.
+- **Исправление:** в `EventService.update` добавлен гейт: при `price>0` проверяется `has_event_pro_feature(event_id, "paid_events")` (подписка ИЛИ per-event премиум); при переносе даты обновляется `expires_at` премиума события.
+- **Коммит:** — (см. PR)
+- **Тесты:** +1 сервис (`test_update_price_gate_fixed`), +1 e2e (`test_event_premium_unlocks_paid_features`)

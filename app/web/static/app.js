@@ -1128,6 +1128,8 @@ async function showAdminEventForm(eventId) {
 
     const me = state.me || {};
     const myChannels = me.channels || [];
+    // C: можно платное/инвайты, если pro-подписка ИЛИ у события куплен премиум.
+    const canPaid = isPro() || !!(event && event.is_premium);
     const options = myChannels.map(c => {
         const hasSub = c.is_subscription_active;
         return `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}${hasSub ? '' : ' (нет подписки)'}</option>`;
@@ -1154,14 +1156,14 @@ async function showAdminEventForm(eventId) {
                 <input class="form-input" id="f_location" value="${escapeHtml(event ? (event.location || '') : '')}">
             </div>
             <div class="form-field">
-                <label class="form-label">Цена (₽, 0 = бесплатно)${isPro() ? '' : ' — только бесплатные на вашем тарифе'}</label>
-                <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}" ${isPro() ? '' : 'disabled'}>
+                <label class="form-label">Цена (₽, 0 = бесплатно)${canPaid ? '' : ' — только бесплатные на вашем тарифе'}</label>
+                <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}" ${canPaid ? '' : 'disabled'}>
             </div>
             <div class="form-field">
                 <label class="form-label">Количество билетов *</label>
                 <input class="form-input" type="number" min="1" step="1" id="f_tickets" required value="${event ? event.total_tickets : 100}">
             </div>
-            ${isPro() ? `
+            ${canPaid ? `
             <div class="form-field">
                 <label class="form-label">Пригласительных (лимит, Pro)</label>
                 <input class="form-input" type="number" min="0" step="1" id="f_invites" value="${event ? (event.invites_quota || 0) : 0}">
@@ -1328,6 +1330,7 @@ function renderAdminEventDetail(event, stats, tickets, invites) {
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
+            ${!event.is_premium ? `<button class="btn btn-sm btn-primary" onclick="purchaseEventPremium('${event.id}')">💎 Премиум за событие</button>` : '<span class="badge badge-tier-pro">💎 Премиум</span>'}
         </div>
         <button class="btn btn-secondary" onclick="showAdminEvents()">← К списку</button>
     `;
@@ -1455,6 +1458,20 @@ async function adminToggle(eventId) {
     try { await api(`/api/admin/events/${eventId}/toggle`, { method: "POST" }); showToast("✅ Статус изменён"); }
     catch (e) { showToast(e.message || "Ошибка", true); }
     await showAdminEventDetail(eventId);
+}
+
+// C: купить премиум на одно мероприятие (единовременная оплата, stub).
+async function purchaseEventPremium(eventId) {
+    if (!(await tgConfirm("Купить премиум на это мероприятие?\n\nДаст платные билеты, QR и пригласительные для этого события."))) return;
+    try {
+        const res = await api(`/api/me/events/${eventId}/premium`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        });
+        showToast("💎 Премиум активирован на событие");
+        await showAdminEventDetail(eventId);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
 async function adminDelete(eventId) {
