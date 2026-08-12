@@ -14,8 +14,11 @@
 """
 
 import uuid
+import base64
+import time
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
+from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet
 
@@ -23,6 +26,22 @@ from app.core.models import PlatformType, SubscriptionTier
 from app.core.services import UserService, EventService, VKGroupService, TicketService
 
 TEST_KEY = Fernet.generate_key().decode()
+
+
+def _vk_auth_header(user_id=5305539, app_id=123456, secret="test_vk_secret_key"):
+    """Валидный X-VK-Init-Data (launch params + подпись) для аутентификации VK-покупателя."""
+    from app.web.vk_auth import compute_sign
+
+    params = {
+        "vk_app_id": str(app_id),
+        "vk_user_id": str(user_id),
+        "vk_ts": str(int(time.time())),
+        "vk_ref": "catalog",
+    }
+    sign = compute_sign(params, secret)
+    params["sign"] = sign
+    query = urlencode(sorted(params.items()))
+    return base64.b64encode(query.encode()).decode()
 
 
 async def test_full_vk_organizer_cycle(db_client, db_session):
@@ -38,8 +57,9 @@ async def test_full_vk_organizer_cycle(db_client, db_session):
 
     # ── 2. VK-пользователь привязывается → канон организатора ──
     await user_svc.consume_link_code(code, PlatformType.vk, "vk_buyer_uid", current_user_id=None)
-    # Покупатель (другой VK-пользователь, не привязан) — раздельный аккаунт
-    buyer = await user_svc.get_or_create(PlatformType.vk, "vk_buyer_uid2", name="Покупатель VK")
+    # Покупатель (другой VK-пользователь, не привязан) — раздельный аккаунт.
+    # Числовой VK ID, чтобы аутентифицироваться как покупатель через launch params (X-VK-Init-Data).
+    buyer = await user_svc.get_or_create(PlatformType.vk, "7777777", name="Покупатель VK")
     assert buyer.id != org.id
 
     # ── 3. VK-группа (self-service, token шифруется) ──
@@ -84,6 +104,23 @@ async def test_full_vk_organizer_cycle(db_client, db_session):
     ticket = await ticket_svc.buy_ticket(buyer.id, event.id)
     assert ticket.validation_code is not None
     await db_session.commit()
+
+    # ── 6b. F1: билет в ЛС VK — POST /tickets/{id}/send-vk.
+    #        Реальная VK-группа (шаг 3) + реальная принадлежность билета.
+    #        Отправка в VK (messages.send) замокана — сети в тесте нет. ──
+    vk_header = _vk_auth_header(user_id=7777777)
+    with (
+        patch("app.web.vk_auth.settings.vk_app_id", 123456),
+        patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret_key"),
+        patch("app.web.routes.send_vk_ticket_dm", new_callable=AsyncMock, return_value=True),
+    ):
+        resp = await db_client.post(
+            f"/api/tickets/{ticket.id}/send-vk",
+            headers={"X-VK-Init-Data": vk_header},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["sent"] is True, resp.json()
+    assert resp.json()["group_id"] == group.group_id, resp.json()
 
     # ── 7. Статистика учитывает проданный билет (куплен в VK) ──
     resp = await db_client.get(f"/api/admin/events/{event.id}/stats", headers={"X-Skip-Auth": "1"})

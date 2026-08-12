@@ -16,8 +16,13 @@ from aiogram import Bot
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.models import SubscriptionTier, Ticket
-from app.core.services import ChannelService, EventService, TicketService
+from app.core.models import SubscriptionTier, Ticket, TicketStatus
+from app.core.services import (
+    ChannelAdminService,
+    ChannelService,
+    EventService,
+    TicketService,
+)
 
 from tests.harness import (
     FakeTelegramSession,
@@ -129,5 +134,158 @@ class TestTelegramSimulation:
             sent = [c for c in fake.calls if c.__class__.__name__ == "SendMessage"]
             assert len(sent) >= 1
             assert "TicketBot" in sent[0].text
+        finally:
+            await _clean_db(sf)
+
+    async def test_organizer_checkin_ticket_via_check_command(self, test_engine):
+        """F7: организатор вводит код билета → /check → билет отмечен на входе.
+
+        Покупатель (9999) покупает билет через deep-link /start buy_<id> (бот),
+        организатор-админ канала (12345) вводит код → «Вход разрешён», статус checked_in.
+        Хендлер не зарегистрирован в режиме «только web» — вызываем метод напрямую
+        с реальным Message (бот с фейк-сессией, БД реальная).
+        """
+        sf = _make_session_factory(test_engine)
+
+        # ── Подготовка: канал + опубликованное мероприятие ──
+        async with sf() as s:
+            channel_svc = ChannelService(s)
+            channel = await channel_svc.create("@sim_checkin", "", "Checkin Channel")
+            channel = await channel_svc.activate_subscription(
+                channel.id, duration_days=365, tier=SubscriptionTier.basic,
+            )
+            event_svc = EventService(s)
+            event = await event_svc.create(
+                title="Checkin Event",
+                description=None,
+                date=datetime.now(timezone.utc) + timedelta(days=7),
+                location=None,
+                price=0,
+                total_tickets=10,
+                channel_id=channel.id,
+            )
+            event.is_published = True
+            await s.commit()
+            event_id = event.id
+            channel_id = channel.id
+
+        try:
+            fake = FakeTelegramSession()
+            bot = Bot(token="123456789:TESTTOKEN", session=fake)
+
+            import app.platforms.telegram.bot as _bot_mod
+            with (
+                patch.object(_bot_mod.settings, "telegram_token", "123456789:TESTTOKEN"),
+                patch.object(_bot_mod, "Bot", lambda token, **kw: bot),
+                patch.object(_bot_mod, "async_session_factory", sf),
+            ):
+                from app.platforms.telegram.bot import TelegramBot
+                tb = TelegramBot()
+
+                # Покупатель 9999 покупает билет через deep-link (F1)
+                buy_update = make_message_update(
+                    user_id=9999, text=f"/start buy_{event_id}", bot=bot,
+                )
+                await tb.dp.feed_update(bot, buy_update)
+
+                # Организатор 12345 — админ канала (реальная БД)
+                async with sf() as s:
+                    await ChannelAdminService(s).sync_admins(channel_id, ["12345"])
+                    await s.commit()
+
+                # Код купленного билета
+                async with sf() as s:
+                    ticket = (await s.execute(
+                        select(Ticket).where(Ticket.event_id == event_id),
+                    )).scalars().one()
+                    code = ticket.validation_code
+
+                # F7: организатор вводит код → check-in
+                check_update = make_message_update(
+                    user_id=12345, text=f"/check {code}", bot=bot,
+                )
+                await tb.cmd_check(check_update.message)
+
+            # ── Проверки ──
+            sent = [c for c in fake.calls if c.__class__.__name__ == "SendMessage"]
+            assert any("Вход разрешён" in c.text for c in sent), [
+                c.text for c in sent
+            ]
+
+            async with sf() as s:
+                ticket = (await s.execute(
+                    select(Ticket).where(Ticket.event_id == event_id),
+                )).scalars().one()
+                assert ticket.status == TicketStatus.checked_in
+                assert ticket.checked_in_by == "12345"
+        finally:
+            await _clean_db(sf)
+
+    async def test_admin_reposts_announcement_to_channel(self, test_engine):
+        """F5: анонс мероприятия публикуется в канал (перепост анонсов).
+
+        Организатор-админ канала (12345) запускает перепост анонсов →
+        бот отправляет сообщение с анонсом в telegram_channel_id канала.
+        Хендлер не зарегистрирован в режиме «только web» — вызываем метод
+        напрямую с реальным Message (бот с фейк-сессией, БД реальная).
+        """
+        sf = _make_session_factory(test_engine)
+
+        # ── Подготовка: канал + опубликованное предстоящее мероприятие ──
+        async with sf() as s:
+            channel_svc = ChannelService(s)
+            channel = await channel_svc.create("@sim_announce", "", "Announce Channel")
+            channel = await channel_svc.activate_subscription(
+                channel.id, duration_days=365, tier=SubscriptionTier.basic,
+            )
+            event_svc = EventService(s)
+            event = await event_svc.create(
+                title="Announce Event",
+                description=None,
+                date=datetime.now(timezone.utc) + timedelta(days=7),
+                location=None,
+                price=0,
+                total_tickets=10,
+                channel_id=channel.id,
+            )
+            event.is_published = True
+            await s.commit()
+            channel_id = channel.id
+            channel_tg_id = channel.telegram_channel_id
+
+        try:
+            fake = FakeTelegramSession()
+            bot = Bot(token="123456789:TESTTOKEN", session=fake)
+
+            import app.platforms.telegram.bot as _bot_mod
+            with (
+                patch.object(_bot_mod.settings, "telegram_token", "123456789:TESTTOKEN"),
+                patch.object(_bot_mod, "Bot", lambda token, **kw: bot),
+                patch.object(_bot_mod, "async_session_factory", sf),
+            ):
+                from app.platforms.telegram.bot import TelegramBot
+                tb = TelegramBot()
+
+                # Организатор 12345 — админ канала (реальная БД)
+                async with sf() as s:
+                    await ChannelAdminService(s).sync_admins(channel_id, ["12345"])
+                    await s.commit()
+
+                # F5: перепост анонсов в канал
+                repost_update = make_message_update(
+                    user_id=12345, text="/repost_events", bot=bot,
+                )
+                await tb.admin_repost_events(repost_update.message)
+
+            # ── Проверки: анонс ушёл в канал (chat_id = telegram_channel_id) ──
+            sent_to_channel = [
+                c for c in fake.calls
+                if c.__class__.__name__ == "SendMessage"
+                and getattr(c, "chat_id", None) == channel_tg_id
+            ]
+            assert len(sent_to_channel) == 1, [
+                (c.__class__.__name__, getattr(c, "chat_id", None)) for c in fake.calls
+            ]
+            assert "Announce Event" in sent_to_channel[0].text
         finally:
             await _clean_db(sf)
