@@ -212,3 +212,17 @@
 | 175 | Fix: VK API 5.131 → 5.199 | ✅ done | 2026-08-11 | — (PR #7, errors #071) |
 | 176 | Feat: билет покупателю — код для входа + QR в «Моих билетах» (GET /tickets/{id}/qr, владелец) | ✅ done | 2026-08-12 | — (PR #8, errors #072) |
 | 177 | Feat: VK-покупатель получает билет в ЛС VK — messages.send от группы, soft-ask + VKWebAppAllowMessagesFromGroup | ✅ done | 2026-08-12 | — (PR #8, errors #073) |
+| 178 | Docs: канонические user flows для всех ролей (docs/user-flows.md) — основа для e2e и новых фич | ✅ done | 2026-08-12 | — (см. docs/user-flows.md) |
+
+### E2E-покрытие канонических flows (2026-08-12, `feature/e2e-coverage-flows`)
+
+Закрывает пробелы e2e по `docs/user-flows.md`: F2 QR, F3 возврат, F5/F7 TG-сим, F13-F17 супер-админ, F1 send-vk. Все на реальной БД (`db_client`/`sf`); роль супер-админа — из конфига, БД/сервисы реальные.
+
+| # | Задача | Статус | Дата | Коммит |
+|---|--------|--------|------|--------|
+| 179 | Feat: e2e супер-админ F13-F17 — `tests/test_super_admin_e2e.py` (канал+подписка, смена админа, глоб. статистика, рассылка, здоровье) | ✅ done | 2026-08-12 | — (ветка `feature/e2e-coverage-flows`) |
+| 180 | Feat: e2e QR покупателя F2 — шаг в `TestCabinetFlow` (GET /tickets/{id}/qr → реальный PNG) | ✅ done | 2026-08-12 | — (там же) |
+| 181 | Feat: e2e возврат билета F3 — `TestCabinetFlow.test_buyer_refund_releases_seat` (status=refunded, available+1) | ✅ done | 2026-08-12 | — (там же) |
+| 182 | Feat: e2e send-vk F1 — шаг в `test_vk_e2e.test_full_vk_organizer_cycle` (билет в ЛС VK от реальной группы) | ✅ done | 2026-08-12 | — (там же) |
+| 183 | Feat: TG-сим F7 check-in + F5 анонс — `tests/test_telegram_sim.py` (/check → checked_in; репост анонсов в канал) | ✅ done | 2026-08-12 | — (там же) |
+| 184 | TechDeBT: `/check` и `/repost_events` не зарегистрированы в режиме «только web» — TG-sim вызывает хендлеры напрямую; при возврате команд — перевести на полный конвейер `feed_update` | ⏳ pending | 2026-08-12 | — |

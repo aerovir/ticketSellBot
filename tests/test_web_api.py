@@ -1309,6 +1309,12 @@ class TestCabinetFlow:
         assert len(tickets) == 1
         assert tickets[0]["validation_code"] is not None
 
+        # 3b. QR покупателя (F2) — реальный PNG на реальной БД (generate_qr_png)
+        resp = await db_client.get(f"/api/tickets/{ticket_id}/qr", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert "image/png" in resp.headers["content-type"]
+        assert resp.content.startswith(b"\x89PNG"), "ответ не является PNG"
+
         # 4. admin — событие в списке и его билеты
         resp = await db_client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
@@ -1348,6 +1354,37 @@ class TestCabinetFlow:
         assert stats["sold"] == 0, f"sold={stats['sold']}"
         assert stats["invites_issued"] == 1, f"invites_issued={stats['invites_issued']}"
         assert stats["invites_quota"] == 5
+
+    async def test_buyer_refund_releases_seat(self, db_client, db_session, sample_channel, sample_event):
+        """F3: возврат билета — статус refunded, место возвращено в продажу.
+
+        Покупатель (12345) покупает билет → POST /api/tickets/{id}/cancel →
+        status=refunded → available увеличился на 1 (реальная БД).
+        """
+        from app.core.services import ChannelAdminService
+
+        event_id = str(sample_event.id)
+        await ChannelAdminService(db_session).sync_admins(sample_channel.id, ["12345"])
+        await db_session.commit()
+
+        # 1. Покупка
+        resp = await db_client.post(f"/api/events/{event_id}/buy", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 201, resp.text
+        ticket_id = resp.json()["ticket_id"]
+
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        available_after_buy = resp.json()["available"]
+
+        # 2. Возврат билета (владелец, без подписки)
+        resp = await db_client.post(f"/api/tickets/{ticket_id}/cancel", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "refunded"
+
+        # 3. Место вернулось в продажу
+        resp = await db_client.get(f"/api/admin/events/{event_id}/stats", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["available"] == available_after_buy + 1, resp.json()
 
 
 class TestCoverageGaps:
