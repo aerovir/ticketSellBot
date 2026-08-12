@@ -29,6 +29,7 @@ from app.core.schemas import (
     LinkCodeIn,
     LinkConsumeIn,
     MeUpdateIn,
+    EventPremiumIn,
     PublishIn,
     SubscribeIn,
     SubscribeMeIn,
@@ -517,6 +518,42 @@ async def subscribe_me(
     }
 
 
+@router.post("/me/events/{event_id}/premium", status_code=status.HTTP_201_CREATED)
+async def purchase_event_premium(
+    event_id: str,
+    body: EventPremiumIn | None = None,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Купить премиум на одно мероприятие (единовременная оплата).
+
+    Даёт pro-фичи (платные билеты, QR, пригласительные) для этого события,
+    независимо от подписки. Stub-оплата (как подписка): сразу completed.
+    """
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    body = body or EventPremiumIn()
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        try:
+            upgrade = await event_svc.purchase_event_premium(
+                uid, current.user_id, amount=body.amount, provider=body.provider,
+            )
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "event_id": str(uid),
+        "is_premium": True,
+        "status": upgrade.status.value,
+        "expires_at": upgrade.expires_at.isoformat() if upgrade.expires_at else None,
+    }
+
+
 @router.post("/me/link-code")
 async def create_me_link_code(
     body: LinkCodeIn,
@@ -795,6 +832,9 @@ async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
             if ch:
                 channels[cid] = ch
 
+        # C: карта per-event премиума
+        premium_map = await event_svc.get_event_premium_map([e.id for e in events])
+
     return [
         {
             "id": str(e.id),
@@ -810,6 +850,7 @@ async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
             "is_active": e.is_active,
             "is_published": e.is_published,
             "is_free": e.is_free,
+            "is_premium": premium_map.get(e.id, False),
         }
         for e in events
     ]
@@ -887,6 +928,8 @@ async def admin_get_event(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         channel_svc = ChannelService(session)
         channel = await channel_svc.get_by_id(event.channel_id) if event.channel_id else None
+        # C: per-event премиум
+        is_premium = await event_svc.get_event_is_premium(event.id)
 
     return {
         "id": str(event.id),
@@ -903,6 +946,7 @@ async def admin_get_event(
         "is_active": event.is_active,
         "is_published": event.is_published,
         "is_free": event.is_free,
+        "is_premium": is_premium,
     }
 
 
@@ -1934,15 +1978,10 @@ async def admin_issue_invite(
         if not _can_issue_invites(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пригласительные выдаёт только админ канала")
 
-        # Pro-гейт: канальный организатор — подписка канала; организатор без канала — подписка пользователя
-        if event.channel_id is not None:
-            channel_svc = ChannelService(session)
-            has_feature = await channel_svc.require_feature(event.channel_id, "invite_tickets")
-        else:
-            user_svc = UserService(session)
-            has_feature = await user_svc.require_feature(event.owner_user_id, "invite_tickets")
+        # Pro-гейт: подписка канала/владельца ИЛИ per-event премиум
+        has_feature = await event_svc.has_event_pro_feature(uid, "invite_tickets")
         if not has_feature:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Для пригласительных нужна подписка Pro")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Для пригласительных нужна подписка Pro или премиум на событие")
 
         ticket_svc = TicketService(session)
         try:
@@ -2035,16 +2074,12 @@ async def admin_ticket_qr(
         ticket, event = pair
         if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        event_svc = EventService(session)
 
-        # QR-коды — фича pro (матрица qr_codes)
-        if event.channel_id is not None:
-            channel_svc = ChannelService(session)
-            has_qr = await channel_svc.require_feature(event.channel_id, "qr_codes")
-        else:
-            user_svc = UserService(session)
-            has_qr = await user_svc.require_feature(event.owner_user_id, "qr_codes")
+        # QR-коды — фича pro (подписка ИЛИ per-event премиум)
+        has_qr = await event_svc.has_event_pro_feature(event.id, "qr_codes")
         if not has_qr:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="QR-коды доступны на подписке Pro")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="QR-коды доступны на подписке Pro или премиуме события")
 
     code = ticket.validation_code or str(ticket.id)
     png = generate_qr_png(code)

@@ -594,6 +594,7 @@ class TestAdminAPI:
         with (
             admin_auth(is_super=True, channel_ids=[]),
             patch("app.web.routes.EventService.list_all", new_callable=AsyncMock, return_value=[mock_event]),
+            patch("app.web.routes.EventService.get_event_premium_map", new_callable=AsyncMock, return_value={}),
             patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=Mock(title="Channel")),
         ):
             resp = client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
@@ -1053,7 +1054,7 @@ class TestInviteApi:
         with (
             admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
-            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.TicketService.issue_invite", new_callable=AsyncMock, return_value=mock_invite),
         ):
             resp = client.post(
@@ -1107,7 +1108,7 @@ class TestInviteApi:
         with (
             admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
-            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=False),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=False),
         ):
             resp = client.post(
                 f"/api/admin/events/{EVENT_ID}/invites",
@@ -1125,7 +1126,7 @@ class TestInviteApi:
         with (
             admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
-            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.TicketService.issue_invite", new_callable=AsyncMock, side_effect=ValueError("Квота исчерпана")),
         ):
             resp = client.post(
@@ -1184,7 +1185,7 @@ class TestInviteApi:
         with (
             admin_auth(is_super=True, channel_ids=[]),
             patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
-            patch("app.web.routes.ChannelService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.generate_qr_png", new_callable=Mock, return_value=b"\x89PNG..."),
         ):
             resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
@@ -1516,6 +1517,55 @@ class TestCabinetFlow:
             p2b = await db_client.post(f"/api/admin/events/{id2}/publish", headers={"X-Skip-Auth": "1"}, json={})
             assert p2b.status_code == 200, p2b.text
 
+    async def test_event_premium_unlocks_paid_features(self, db_client, db_session):
+        """C: basic-организатор покупает премиум на событие → платное + QR + пригласительные."""
+        from datetime import datetime, timezone, timedelta
+        from app.core.models import Event as EventModel, PlatformType
+        from app.core.services import UserService
+        from sqlalchemy import select
+
+        user = await UserService(db_session).get_or_create(
+            PlatformType.telegram, "12345", "Org",
+        )
+        await db_session.commit()
+
+        # Черновик (бесплатный)
+        resp = await db_client.post(
+            "/api/admin/events", headers={"X-Skip-Auth": "1"},
+            json={
+                "title": "Premium Event", "price": 0, "total_tickets": 10,
+                "owner_user_id": str(user.id),
+                "date": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        event_id = resp.json()["id"]
+
+        # Купить премиум на событие
+        resp = await db_client.post(
+            f"/api/me/events/{event_id}/premium", headers={"X-Skip-Auth": "1"}, json={},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["is_premium"] is True
+
+        # is_premium виден в деталях
+        resp = await db_client.get(f"/api/admin/events/{event_id}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_premium"] is True
+
+        # Теперь цену поднять можно (премиум дал paid_events)
+        resp = await db_client.patch(
+            f"/api/admin/events/{event_id}", headers={"X-Skip-Auth": "1"},
+            json={"price": 500},
+        )
+        assert resp.status_code == 200, resp.text
+
+        # Проверим цену через детали
+        resp = await db_client.get(f"/api/admin/events/{event_id}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["price"] == 500
+        assert resp.json()["is_premium"] is True
+
 
 class TestCoverageGaps:
     """Покрытие эндпоинтов, не имевших тестов."""
@@ -1552,6 +1602,7 @@ class TestCoverageGaps:
         with (
             admin_auth(is_super=True, channel_ids=[]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.get_event_is_premium", new_callable=AsyncMock, return_value=False),
             patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=Mock(title="Ch")),
         ):
             resp = client.get(f"/api/admin/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
@@ -1889,6 +1940,7 @@ class TestOrganizerApi:
         with (
             admin_auth(is_super=False, channel_ids=[], sub_valid=True, organizer=True),
             patch("app.web.routes.EventService.list_all", new_callable=AsyncMock, return_value=[mock_event]),
+            patch("app.web.routes.EventService.get_event_premium_map", new_callable=AsyncMock, return_value={}),
             patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=None),
         ):
             resp = client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
@@ -2029,7 +2081,7 @@ class TestQrGate:
         # owner-мероприятие, basic-подписка (require_feature False)
         with (
             admin_auth(is_super=False, channel_ids=[], organizer=True),
-            patch("app.web.routes.UserService.require_feature", new_callable=AsyncMock, return_value=False),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=False),
             patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
         ):
             resp = client.get(f"/api/admin/tickets/{EVENT_ID}/qr", headers={"X-Skip-Auth": "1"})
@@ -2048,7 +2100,7 @@ class TestQrGate:
 
         with (
             admin_auth(is_super=False, channel_ids=[], organizer=True),
-            patch("app.web.routes.UserService.require_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
             patch("app.web.routes.generate_qr_png", new_callable=Mock, return_value=b"\x89PNG..."),
         ):

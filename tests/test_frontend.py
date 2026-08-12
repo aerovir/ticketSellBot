@@ -115,3 +115,12 @@ def test_appjs_ticket_presentation_free_vs_paid():
     assert "Платный билет" in APP_JS
     # ветвление: тернарник по isFree
     assert "isFree" in APP_JS
+
+
+def test_appjs_event_premium():
+    """C: per-event премиум — canPaid учитывает is_premium события."""
+    assert "canPaid" in APP_JS
+    assert "is_premium" in APP_JS
+    assert "isPro() || !!(event && event.is_premium)" in APP_JS
+    # эндпоинт покупки премиума
+    assert "/premium" in APP_JS

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
     User, UserIdentity, LinkCode, Event, EventManager, EventPublication, Ticket, Payment,
-    Channel, ChannelAdmin, VKGroup,
+    Channel, ChannelAdmin, VKGroup, EventUpgrade,
     TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
 )
 from dateutil.relativedelta import relativedelta
@@ -1226,6 +1226,21 @@ class EventService:
                     changed[key] = {"from": str(old), "to": str(value)}
                 setattr(event, key, value)
 
+        # C/баг #075: платное мероприятие требует pro (подписка ИЛИ per-event премиум).
+        if "price" in data and data["price"] > 0:
+            has_feature = await self.has_event_pro_feature(event_id, "paid_events")
+            if not has_feature:
+                raise ValueError(
+                    "Ваш тариф поддерживает только бесплатные мероприятия. "
+                    "Для платных мероприятий нужна подписка Pro или премиум на событие."
+                )
+
+        # C: при переносе даты обновляем expires_at премиума события
+        if "date" in data:
+            upgrade = await self._get_upgrade(event_id)
+            if upgrade is not None:
+                upgrade.expires_at = event.date
+
         # Sync available_tickets when total_tickets changes
         if "total_tickets" in data:
             old_total = before["total_tickets"]
@@ -1507,6 +1522,100 @@ class EventService:
             "invites_issued": invites_issued,
             "invites_used": invites_used,
         }
+
+    # ═══════════════════════════════════════════════════════════════
+    # C: per-event премиум (единовременная оплата за мероприятие)
+    # ═══════════════════════════════════════════════════════════════
+
+    async def _get_upgrade(self, event_id: uuid.UUID) -> EventUpgrade | None:
+        """Запись премиума события (или None)."""
+        stmt = select(EventUpgrade).where(EventUpgrade.event_id == event_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_event_is_premium(self, event_id: uuid.UUID) -> bool:
+        """Премиум ли событие (активная запись EventUpgrade, не истекла)."""
+        upgrade = await self._get_upgrade(event_id)
+        if upgrade is None or upgrade.status != PaymentStatus.completed:
+            return False
+        if upgrade.expires_at and upgrade.expires_at < datetime.now(timezone.utc):
+            return False
+        return True
+
+    async def purchase_event_premium(
+        self,
+        event_id: uuid.UUID,
+        user_id: uuid.UUID,
+        amount: float = 0,
+        provider: str | None = None,
+    ) -> EventUpgrade:
+        """Купить премиум на одно мероприятие (владелец события).
+
+        Stub-оплата (как подписка): сразу completed. Модель под будущий
+        провайдер (Telegram Stars / YooKassa). expires_at = event.date.
+
+        Raises:
+            ValueError: событие не найдено, пользователь не владелец.
+        """
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            raise ValueError("Мероприятие не найдено")
+        if event.owner_user_id is None or event.owner_user_id != user_id:
+            raise ValueError("Премиум на событие покупает только его владелец")
+
+        upgrade = await self._get_upgrade(event_id)
+        if upgrade is None:
+            upgrade = EventUpgrade(event_id=event_id)
+            self.session.add(upgrade)
+        upgrade.status = PaymentStatus.completed
+        upgrade.amount = amount
+        upgrade.provider = provider
+        upgrade.completed_at = datetime.now(timezone.utc)
+        upgrade.expires_at = event.date
+        await self.session.flush()
+
+        logger.info("", extra={
+            "event_type": "event.premium_purchased",
+            "event_id": str(event_id),
+            "user_id": str(user_id),
+            "status": "success",
+            "provider": provider,
+        })
+        return upgrade
+
+    async def has_event_pro_feature(self, event_id: uuid.UUID, feature: str) -> bool:
+        """Есть ли у события pro-фича (paid_events/qr_codes/invite_tickets).
+
+        Сначала per-event премиум; иначе fallback на подписку канала/владельца.
+        """
+        if await self.get_event_is_premium(event_id):
+            return feature in ("paid_events", "qr_codes", "invite_tickets")
+
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            return False
+        if event.channel_id is not None:
+            channel_svc = ChannelService(self.session)
+            return await channel_svc.require_feature(event.channel_id, feature)
+        if event.owner_user_id is not None:
+            user_svc = UserService(self.session)
+            return await user_svc.require_feature(event.owner_user_id, feature)
+        return False
+
+    async def get_event_premium_map(self, event_ids: list[uuid.UUID]) -> dict[uuid.UUID, bool]:
+        """Батч: какие события премиум (для списка)."""
+        if not event_ids:
+            return {}
+        now = datetime.now(timezone.utc)
+        stmt = select(EventUpgrade).where(
+            and_(
+                EventUpgrade.event_id.in_(event_ids),
+                EventUpgrade.status == PaymentStatus.completed,
+                (EventUpgrade.expires_at.is_(None) | (EventUpgrade.expires_at >= now)),
+            )
+        )
+        result = await self.session.execute(stmt)
+        return {u.event_id: True for u in result.scalars().all()}
 
 
 # ─── Ticket Service ──────────────────────────────────────────────────────────

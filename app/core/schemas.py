@@ -215,3 +215,11 @@ class PaymentOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ─── Per-event premium (единовременная оплата) ───────────────────
+
+class EventPremiumIn(BaseModel):
+    """Покупка премиума на одно мероприятие (stub-оплата)."""
+    amount: float = 0
+    provider: Optional[str] = None

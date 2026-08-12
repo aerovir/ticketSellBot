@@ -1610,3 +1610,113 @@ class TestFreeOrganizerEventLimit:
 
         with pytest.raises(ValueError, match="только одно мероприятие"):
             await svc.ensure_free_slot(second)
+
+
+# ═══════════════════════════════════════════════════════════════
+# C: per-event премиум (единовременная оплата за мероприятие)
+# ═══════════════════════════════════════════════════════════════
+
+class TestEventUpgrade:
+    """Per-event премиум: покупка, is_premium, pro-фичи, баг update."""
+
+    async def _make_event(self, db_session, owner_user_id, price=0):
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Prem Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=price, total_tickets=10,
+            channel_id=None, owner_user_id=owner_user_id,
+        )
+        await db_session.flush()
+        return event
+
+    async def test_purchase_sets_premium(self, db_session, sample_user):
+        """Покупка премиума → событие премиум."""
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        event = await self._make_event(db_session, sample_user.id)
+        await db_session.commit()
+
+        up = await svc.purchase_event_premium(event.id, sample_user.id)
+        await db_session.commit()
+
+        assert up.event_id == event.id
+        assert await svc.get_event_is_premium(event.id) is True
+
+    async def test_purchase_upsert(self, db_session, sample_user):
+        """Повторная покупка премиума — не дублирует запись (upsert)."""
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        event = await self._make_event(db_session, sample_user.id)
+        await db_session.commit()
+
+        await svc.purchase_event_premium(event.id, sample_user.id)
+        await svc.purchase_event_premium(event.id, sample_user.id)
+        await db_session.commit()
+
+        up = await svc._get_upgrade(event.id)
+        assert up is not None
+        assert await svc.get_event_is_premium(event.id) is True
+
+    async def test_not_owner_cannot_purchase(self, db_session, sample_user):
+        """Не-владелец не может купить премиум для чужого события."""
+        from app.core.services import EventService, UserService
+        from app.core.models import PlatformType
+        svc = EventService(db_session)
+        event = await self._make_event(db_session, sample_user.id)
+        await db_session.commit()
+
+        stranger = await UserService(db_session).get_or_create(
+            PlatformType.telegram, "stranger_1", "Чужой",
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValueError, match="владелец"):
+            await svc.purchase_event_premium(event.id, stranger.id)
+
+    async def test_premium_grants_pro_features(self, db_session, sample_user):
+        """Премиум события даёт paid_events/qr_codes/invite_tickets без подписки."""
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        event = await self._make_event(db_session, sample_user.id)
+        await svc.purchase_event_premium(event.id, sample_user.id)
+        await db_session.commit()
+
+        for feat in ("paid_events", "qr_codes", "invite_tickets"):
+            assert await svc.has_event_pro_feature(event.id, feat) is True, feat
+
+    async def test_no_premium_falls_back_to_subscription(self, db_session, sample_user, sample_channel):
+        """Без премиума — pro-фичи решаются подпиской (pro-канал даёт)."""
+        from app.core.services import EventService
+        svc = EventService(db_session)
+        event = await svc.create(
+            title="Chan Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=0, total_tickets=10,
+            channel_id=sample_channel.id, owner_user_id=None,  # sample_channel = pro
+        )
+        await db_session.commit()
+
+        # pro-канал даёт фичи и без премиума
+        assert await svc.has_event_pro_feature(event.id, "paid_events") is True
+
+    async def test_update_price_gate_fixed(self, db_session, sample_user):
+        """Баг #075: free-юзер не может поднять цену без премиума (PATCH) — но может с премиумом."""
+        from app.core.services import EventService
+        user_id = sample_user.id  # сохраняем ДО операций
+        svc = EventService(db_session)
+
+        # Событие без премиума: поднять цену → ошибка (объект остаётся price=0)
+        ev_free = await self._make_event(db_session, user_id, price=0)
+        await db_session.commit()
+        with pytest.raises(ValueError, match="платн"):
+            await svc.update(ev_free.id, price=500)
+
+        # Отдельное событие с премиумом: поднять цену можно
+        ev_prem = await self._make_event(db_session, user_id, price=0)
+        await svc.purchase_event_premium(ev_prem.id, user_id)
+        await db_session.commit()
+        ev2 = await svc.update(ev_prem.id, price=500)
+        await db_session.commit()
+        assert ev2.price == 500
