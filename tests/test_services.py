@@ -696,11 +696,22 @@ class TestTicketValidation:
         assert result["event_title"] == "Тестовое мероприятие"
         assert result["already_checked_in"] is False
 
+    async def test_validate_ticket_found_exposes_event_and_ticket_id(self, db_session, ticket_svc, sample_user, sample_event):
+        """validate_ticket отдаёт event_id/ticket_id (для проверки доступа в web-маршруте)."""
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
+        await db_session.commit()
+
+        result = await ticket_svc.validate_ticket(ticket.validation_code)
+        assert result["event_id"] == str(sample_event.id)
+        assert result["ticket_id"] == str(ticket.id)
+
     async def test_validate_ticket_not_found(self, db_session, ticket_svc):
-        """Несуществующий код -> not found."""
+        """Несуществующий код -> not found (без event_id/ticket_id)."""
         result = await ticket_svc.validate_ticket("ZZZZ-ZZZZ")
         assert result["found"] is False
         assert result["status"] == "not_found"
+        assert "event_id" not in result
+        assert "ticket_id" not in result
 
     async def test_validate_ticket_refunded(self, db_session, ticket_svc, sample_user, sample_event):
         """Возвращённый билет -> status=refunded."""
@@ -794,6 +805,8 @@ class TestTicketValidation:
         assert result["status"] == "checked_in"
         assert result["already_checked_in"] is True
         assert result["checked_in_at"] is not None
+        assert result["event_id"] == str(sample_event.id)
+        assert result["ticket_id"] == str(ticket.id)
 
     async def test_check_in_by_code_not_found(self, db_session, ticket_svc):
         """Чекин по несуществующему коду -> ошибка."""

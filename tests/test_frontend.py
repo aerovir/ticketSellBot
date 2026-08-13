@@ -124,3 +124,42 @@ def test_appjs_event_premium():
     assert "isPro() || !!(event && event.is_premium)" in APP_JS
     # эндпоинт покупки премиума
     assert "/premium" in APP_JS
+
+
+# ─── QR-сканер для админа (#94, Feature Future #5) ────────────────────
+
+
+def test_html_includes_jsqr():
+    """jsQR подключён в оба entry (TG и VK) перед app.js."""
+    assert "jsqr@1.4.0" in INDEX
+    assert "jsqr@1.4.0" in VK_APP
+
+
+def test_appjs_has_qr_scanner():
+    """Сканер: живой поток камеры (getUserMedia + jsQR)."""
+    assert "openQrScanner" in APP_JS
+    assert "getUserMedia" in APP_JS
+    assert "facingMode: \"environment\"" in APP_JS
+    assert "jsQR(" in APP_JS
+    assert "closeQrScanner" in APP_JS
+    # stop потока при закрытии — освобождение камеры
+    assert "getTracks().forEach(t => t.stop())" in APP_JS
+
+
+def test_appjs_has_photo_fallback():
+    """Фото-фоллбек: нативный capture (работает в Android WebView)."""
+    assert "qrScanPhotoFallback" in APP_JS
+    assert "scanFromPhoto" in APP_JS
+    assert "accept=\"image/*\"" in APP_JS
+    assert "capture=\"environment\"" in APP_JS
+
+
+def test_appjs_checkin_has_scan_button():
+    """На странице check-in есть кнопка «Сканировать QR»."""
+    assert "Сканировать QR" in APP_JS
+
+
+def test_appjs_scanner_format_gate():
+    """Формат-гейт: авто-check-in только для кода билета XXXX-XXXX."""
+    assert "QR_CODE_RE" in APP_JS
+    assert "^[0-9A-F]{4}-[0-9A-F]{4}$" in APP_JS

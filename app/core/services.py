@@ -2130,6 +2130,8 @@ class TicketService:
                 event_title: str — название мероприятия
                 already_checked_in: bool — уже ли использован
                 checked_in_at: str|None — время чекина (если был)
+                event_id: str|None — ID мероприятия (для проверки доступа)
+                ticket_id: str|None — ID билета
         """
         start = time.perf_counter()
         stmt = (
@@ -2160,6 +2162,9 @@ class TicketService:
             "event_title": event_title,
             "already_checked_in": ticket.status == TicketStatus.checked_in,
             "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
+            # Для проверки доступа в web-маршруте (GET /admin/tickets/validate):
+            "event_id": str(ticket.event_id),
+            "ticket_id": str(ticket.id),
         }
 
         logger.info("", extra={
