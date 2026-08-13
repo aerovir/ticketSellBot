@@ -848,3 +848,25 @@ textarea.form-input {
     display: block;
     margin: 0 auto;
 }
+
+/* ─── QR-сканер (камера) ─── */
+
+.qr-scanner-card {
+    max-width: 340px;
+}
+
+.qr-scanner-video {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: var(--radius);
+    background: #000;
+    object-fit: cover;
+}
+
+.qr-scanner-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 12px;
+}

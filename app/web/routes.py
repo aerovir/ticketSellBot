@@ -1454,7 +1454,7 @@ async def admin_validate_ticket(
     """
     async with async_session_factory() as session:
         ticket_svc = TicketService(session)
-        result = await ticket_svc.validate_ticket(code.strip().upper())
+        result = await ticket_svc.validate_ticket(_normalize_ticket_code(code))
 
         if result.get("found") and result.get("event_id"):
             event_svc = EventService(session)
@@ -1470,10 +1470,7 @@ async def admin_checkin_ticket(
     current: CurrentUser = Depends(get_current_user),
 ):
     """Отметить вход по коду билета."""
-    code = body.code.strip().upper()
-    # Нормализация: AB3XK7M9 (8 символов без дефиса) → AB3X-K7M9
-    if len(code) == 8 and "-" not in code:
-        code = f"{code[:4]}-{code[4:]}"
+    code = _normalize_ticket_code(body.code)
 
     async with async_session_factory() as session:
         ticket_svc = TicketService(session)
@@ -1912,6 +1909,18 @@ async def admin_health(current: CurrentUser = Depends(require_super_admin)):
 # ═══════════════════════════════════════════════════════════════
 # Админ: пригласительные (pro, только админ канала)
 # ═══════════════════════════════════════════════════════════════
+
+
+def _normalize_ticket_code(raw: str) -> str:
+    """Привести код билета к каноническому виду XXXX-XXXX.
+
+    AB3XK7M9 (8 символов без дефиса) → AB3X-K7M9. Используется и в validate,
+    и в checkin — единый источник нормализации.
+    """
+    code = (raw or "").strip().upper()
+    if len(code) == 8 and "-" not in code:
+        code = f"{code[:4]}-{code[4:]}"
+    return code
 
 
 def _can_manage_event(current: CurrentUser, event) -> bool:

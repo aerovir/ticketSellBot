@@ -1317,6 +1317,15 @@ class TestCabinetFlow:
         assert "image/png" in resp.headers["content-type"]
         assert resp.content.startswith(b"\x89PNG"), "ответ не является PNG"
 
+        # 3c. validate (путь сканера): QR кодирует validation_code, сканер прогоняет
+        # его через GET /validate → в ответе event_id/ticket_id (для проверки доступа)
+        code = tickets[0]["validation_code"]
+        resp = await db_client.get(f"/api/admin/tickets/validate?code={code}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        vdata = resp.json()
+        assert vdata["event_id"] == event_id
+        assert vdata["ticket_id"] == ticket_id
+
         # 4. admin — событие в списке и его билеты
         resp = await db_client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
@@ -2062,6 +2071,99 @@ class TestCheckinAccess:
                 json={"code": "AB3X-K7M9"},
             )
         assert resp.status_code == 403
+
+
+class TestValidateAccess:
+    """Доступ к GET /api/admin/tickets/validate — только организатор мероприятия.
+
+    Регресс-тесты фикса: validate_ticket теперь возвращает event_id,
+    и проверка _can_manage_event в маршруте реально срабатывает (раньше была мёртвой).
+    """
+
+    def _validate(self, client, code="AB3X-K7M9"):
+        return client.get(f"/api/admin/tickets/validate?code={code}", headers={"X-Skip-Auth": "1"})
+
+    def test_admin_validate_owner_allowed(self, client):
+        """Владелец owner-мероприятия может валидировать билет (200)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID(USER_ID)
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.TicketService.validate_ticket", new_callable=AsyncMock, return_value={
+                "found": True, "status": "active", "event_id": EVENT_ID, "ticket_id": EVENT_ID,
+            }),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = self._validate(client)
+        assert resp.status_code == 200
+
+    def test_admin_validate_other_organizer_forbidden(self, client):
+        """Чужой организатор НЕ может валидировать билет чужого события (403).
+
+        Главный security-тест: раньше проверка доступа была мёртвой и вернул бы 200.
+        """
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID("99999999-9999-4999-8999-999999999999")  # другой владелец
+
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.TicketService.validate_ticket", new_callable=AsyncMock, return_value={
+                "found": True, "status": "active", "event_id": EVENT_ID, "ticket_id": EVENT_ID,
+            }),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = self._validate(client)
+        assert resp.status_code == 403
+
+    def test_admin_validate_super_admin_allowed(self, client):
+        """Супер-админ валидирует билет чужого события (200)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = None
+        mock_event.owner_user_id = _UUID("99999999-9999-4999-8999-999999999999")
+
+        with (
+            admin_auth(is_super=True, channel_ids=[], organizer=True),
+            patch("app.web.routes.TicketService.validate_ticket", new_callable=AsyncMock, return_value={
+                "found": True, "status": "active", "event_id": EVENT_ID, "ticket_id": EVENT_ID,
+            }),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = self._validate(client)
+        assert resp.status_code == 200
+
+    def test_admin_validate_channel_admin_allowed(self, client):
+        """Админ канала мероприятия может валидировать билет (200)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
+        mock_event.owner_user_id = None
+
+        with (
+            # managed_channel_ids — list[UUID] (как на проде); строки в списке канал НЕ находят
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.TicketService.validate_ticket", new_callable=AsyncMock, return_value={
+                "found": True, "status": "active", "event_id": EVENT_ID, "ticket_id": EVENT_ID,
+            }),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = self._validate(client)
+        assert resp.status_code == 200
+
+    def test_admin_validate_not_found_no_403(self, client):
+        """Несуществующий код → 200 found:false (без 403 — не светим существование билета)."""
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.TicketService.validate_ticket", new_callable=AsyncMock, return_value={"found": False, "status": "not_found"}),
+        ):
+            resp = self._validate(client, code="ZZZZ-ZZZZ")
+        assert resp.status_code == 200
+        assert resp.json()["found"] is False
 
 
 class TestQrGate:

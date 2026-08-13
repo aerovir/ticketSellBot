@@ -1516,6 +1516,7 @@ function showCheckin() {
             <label class="form-label">Код билета</label>
             <input class="form-input" id="ci_code" placeholder="AB3X-K7M9" autocomplete="off" inputmode="text" style="text-transform:uppercase;font-size:20px;letter-spacing:2px;text-align:center">
             <button class="btn btn-primary" onclick="doCheckin()">🔍 Проверить и отметить вход</button>
+            <button class="btn btn-secondary" onclick="openQrScanner()">📷 Сканировать QR</button>
         </div>
         <div id="checkinResult"></div>
     `;
@@ -1524,12 +1525,16 @@ function showCheckin() {
     setTimeout(() => input.focus(), 100);
 }
 
-async function doCheckin() {
-    const raw = document.getElementById("ci_code").value.trim().toUpperCase();
-    if (!raw) { showToast("Введите код", true); return; }
-    // Нормализация: 8 символов без дефиса → XXXX-XXXX
-    let code = raw;
+function normalizeTicketCode(raw) {
+    let code = (raw || "").trim().toUpperCase();
     if (code.length === 8 && !code.includes("-")) code = code.slice(0, 4) + "-" + code.slice(4);
+    return code;
+}
+
+async function doCheckin(prefilled) {
+    const raw = prefilled !== undefined ? prefilled : document.getElementById("ci_code").value;
+    let code = normalizeTicketCode(raw);
+    if (!code) { showToast("Введите код", true); return; }
 
     const resultBox = document.getElementById("checkinResult");
     resultBox.innerHTML = '<p class="hint">Проверяю...</p>';
@@ -1563,6 +1568,152 @@ async function doCheckin() {
     } catch (err) {
         resultBox.innerHTML = `<div class="checkin-result checkin-fail">❌ ${escapeHtml(err.message || "Ошибка")}</div>`;
     }
+}
+
+// ─── QR-сканер (камера + фото-фоллбек) ──────────────────────────
+// Формат кода билета подтверждён генератором (services.generate_validation_code):
+// 8 hex-символов → XXXX-XXXX. Сканер авто-check-in только для такого формата.
+const QR_CODE_RE = /^[0-9A-F]{4}-[0-9A-F]{4}$/;
+let qrScannerStream = null;
+let qrScanRaf = null;
+let qrScanning = false;
+let qrScannerOverlay = null;
+
+function isTicketCode(raw) {
+    return QR_CODE_RE.test(normalizeTicketCode(raw));
+}
+
+function openQrScanner() {
+    if (typeof jsQR === "undefined") {
+        showToast("Сканер не загрузился — введите код вручную", true);
+        return;
+    }
+    if (qrScannerOverlay) return; // уже открыт
+
+    qrScannerOverlay = document.createElement("div");
+    qrScannerOverlay.className = "qr-modal";
+    qrScannerOverlay.innerHTML = `
+        <div class="qr-modal-card qr-scanner-card">
+            <video id="qrScannerVideo" class="qr-scanner-video" playsinline muted autoplay></video>
+            <canvas id="qrScannerCanvas" hidden></canvas>
+            <p class="hint" style="margin:8px 0 0">Наведите камеру на QR билета</p>
+            <div class="qr-scanner-actions">
+                <button class="btn btn-sm btn-secondary" onclick="qrScanPhotoFallback()">📷 Сфотографировать QR</button>
+                <button class="btn btn-sm btn-secondary" onclick="closeQrScanner()">Закрыть</button>
+            </div>
+            <input id="qrFileInput" type="file" accept="image/*" capture="environment" hidden onchange="scanFromPhoto(this)">
+        </div>`;
+    qrScannerOverlay.addEventListener("click", (e) => { if (e.target === qrScannerOverlay) closeQrScanner(); });
+    document.body.appendChild(qrScannerOverlay);
+    startQrCamera();
+}
+
+async function startQrCamera() {
+    const video = document.getElementById("qrScannerVideo");
+    const canvas = document.getElementById("qrScannerCanvas");
+    if (!video || !canvas) return;
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast("Камера недоступна — используйте фото", true);
+        qrScanPhotoFallback();
+        return;
+    }
+
+    // Android Telegram WebView: getUserMedia может «виснуть» — таймаут → фото-фоллбек
+    let timedOut = false;
+    const timeoutId = setTimeout(() => { timedOut = true; qrScanPhotoFallback(); }, 3000);
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        clearTimeout(timeoutId);
+        if (timedOut || !qrScannerOverlay) { stream.getTracks().forEach(t => t.stop()); return; }
+        qrScannerStream = stream;
+        video.srcObject = stream;
+
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        const tick = () => {
+            if (qrScanning) return;
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const r = jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+                if (r && r.data && isTicketCode(r.data)) {
+                    qrScanning = true;
+                    const code = r.data;
+                    closeQrScanner();
+                    doCheckin(code);
+                    return;
+                }
+            }
+            qrScanRaf = requestAnimationFrame(tick);
+        };
+        qrScanRaf = requestAnimationFrame(tick);
+    } catch (err) {
+        clearTimeout(timeoutId);
+        if (timedOut || !qrScannerOverlay) return;
+        if (err && err.name === "NotAllowedError") {
+            showToast("Доступ к камере запрещён. Разрешите или используйте фото", true);
+        } else {
+            showToast("Камера недоступна — используйте фото", true);
+        }
+        qrScanPhotoFallback();
+    }
+}
+
+function qrScanPhotoFallback() {
+    stopQrScanner(); // не удаляем оверлей — внутри него input
+    const input = document.getElementById("qrFileInput");
+    if (input) input.click();
+}
+
+async function scanFromPhoto(input) {
+    const file = input && input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    if (typeof jsQR === "undefined") { showToast("Сканер не загрузился — введите код вручную", true); return; }
+
+    try {
+        const img = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const image = new Image();
+                image.onload = () => resolve(image);
+                image.onerror = reject;
+                image.src = reader.result;
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const scale = Math.min(1, 600 / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const r = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+        if (r && r.data && isTicketCode(r.data)) {
+            closeQrScanner();
+            doCheckin(r.data);
+        } else {
+            showToast("QR не распознан — попробуйте ещё раз", true);
+        }
+    } catch (e) {
+        showToast("Не удалось прочитать фото", true);
+    }
+}
+
+function stopQrScanner() {
+    if (qrScanRaf) { cancelAnimationFrame(qrScanRaf); qrScanRaf = null; }
+    if (qrScannerStream) { qrScannerStream.getTracks().forEach(t => t.stop()); qrScannerStream = null; }
+    qrScanning = false;
+}
+
+function closeQrScanner() {
+    stopQrScanner();
+    if (qrScannerOverlay) { qrScannerOverlay.remove(); qrScannerOverlay = null; }
 }
 
 // ─── Каналы (super-admin) ──────────────────────────────────────
