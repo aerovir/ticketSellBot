@@ -244,6 +244,11 @@
 | 193 | Fix: баг #075 — `EventService.update` не проверял paid_events (обход через PATCH price) — гейт с учётом премиума события | ✅ done | 2026-08-12 | — (PR #14, errors #075) |
 | 194 | Feat: QR-сканер для админа — jsQR (CDN), живой поток камеры + фото-фоллбек (`capture="environment"` для Android TG WebView), авто-check-in через `doCheckin`, формат-гейт `^[0-9A-F]{4}-[0-9A-F]{4}$`, `stopQrScanner` (освобождение камеры) | ✅ done (код) | 2026-08-13 | — (feature/qr-scanner, PR #15) |
 | 195 | Fix: `GET /admin/tickets/validate` — проверка доступа была мёртвой (validate_ticket не возвращал event_id) → теперь 403 при чужом событии; нормализация кода вынесена в `_normalize_ticket_code` (validate + checkin) | ✅ done | 2026-08-13 | — (PR #15, errors #076) |
+| 196 | Feat: система промокодов (скидки на билеты, pro) — модель `PromoCode` (event_id, code, discount_type percent/fixed, discount_value, starts_at/ends_at, max_uses, used_count, is_active) + миграция 0012 + поля Payment (base_amount/discount_amount/promo_code) | ✅ done (код) | 2026-08-17 | — (feature/promo-codes) |
+| 197 | Feat: промокоды — сервис (create/list/toggle/_validate/_compute), применение в buy_ticket/buy_ticket_webapp (Decimal, amount со скидкой, used_count+1), гейты promo_codes (FEATURES ×2 + has_event_pro_feature) | ✅ done (код) | 2026-08-17 | — (feature/promo-codes) |
+| 198 | Feat: промокоды — эндпоинты (POST/GET /admin/events/{id}/promo-codes, POST /admin/promo-codes/{id}/toggle, body promo_code в POST /events/{id}/buy), схемы PromoCodeCreate/BuyIn | ✅ done (код) | 2026-08-17 | — (feature/promo-codes) |
+| 199 | Feat: промокоды — frontend (поле «Промокод» в подтверждении, скидка/итого на странице успеха, секция «Промокоды» в админке: форма + список + вкл/выкл) | ✅ done (код) | 2026-08-17 | — (feature/promo-codes) |
+| 200 | Тесты: промокоды — 22 сервисных (TestPromoCodes), 9 web API (TestPromoCodesAPI), 2 frontend smoke, 1 e2e (test_promo_e2e.py) — всего 465 | ✅ done (код) | 2026-08-17 | — (feature/promo-codes) |
 
 ## Feature Future — что не реализовано по действиям пользователей (2026-08-13)
 

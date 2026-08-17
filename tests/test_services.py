@@ -8,9 +8,9 @@ from datetime import datetime, timezone, timedelta
 import pytest
 from sqlalchemy import select, func
 
-from app.core.models import User, Event, Ticket, Payment, ChannelAdmin
-from app.core.models import PlatformType, TicketStatus, PaymentStatus, SubscriptionTier
-from app.core.services import ChannelService, ChannelAdminService
+from app.core.models import User, Event, Ticket, Payment, ChannelAdmin, PromoCode
+from app.core.models import PlatformType, TicketStatus, PaymentStatus, SubscriptionTier, DiscountType
+from app.core.services import ChannelService, ChannelAdminService, TicketService
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1733,3 +1733,249 @@ class TestEventUpgrade:
         ev2 = await svc.update(ev_prem.id, price=500)
         await db_session.commit()
         assert ev2.price == 500
+
+
+# ═══════════════════════════════════════════════════════════════
+# Промокоды (скидки на билеты, pro-фича)
+# ═══════════════════════════════════════════════════════════════
+
+class TestPromoCodes:
+    """Создание, валидация и применение промокодов при покупке."""
+
+    async def _create(self, ticket_svc, event_id, code="SUMMER10",
+                      discount_type=DiscountType.percent, value=10.0,
+                      starts_at=None, ends_at=None, max_uses=0):
+        return await ticket_svc.create_promo_code(
+            event_id, code, discount_type, value,
+            starts_at=starts_at, ends_at=ends_at, max_uses=max_uses,
+        )
+
+    async def _payment(self, db_session, ticket_id):
+        """Payment билета отдельным SELECT (Ticket.payment — lazy='raise')."""
+        stmt = select(Payment).where(Payment.ticket_id == ticket_id)
+        return (await db_session.execute(stmt)).scalar_one_or_none()
+
+    # ─── Создание ───────────────────────────────────────────────
+
+    async def test_create_promo_code(self, db_session, ticket_svc, sample_event):
+        """Создание промокода: код нормализован в upper, поля заполнены."""
+        promo = await self._create(ticket_svc, sample_event.id, code="summer10")
+        await db_session.commit()
+        assert promo.code == "SUMMER10"
+        assert promo.discount_type == DiscountType.percent
+        assert promo.discount_value == 10
+        assert promo.max_uses == 0
+        assert promo.used_count == 0
+        assert promo.is_active is True
+
+    async def test_create_promo_code_duplicate_code_raises(self, db_session, ticket_svc, sample_event):
+        """Дубликат кода в рамках события → ошибка."""
+        await self._create(ticket_svc, sample_event.id, code="SUMMER10")
+        await db_session.commit()
+        with pytest.raises(Exception):
+            await self._create(ticket_svc, sample_event.id, code="SUMMER10")
+            await db_session.commit()
+
+    async def test_create_promo_code_same_code_other_event_ok(self, db_session, ticket_svc, sample_event, sample_channel):
+        """Тот же код на другом мероприятии допустим."""
+        from app.core.services import EventService
+        ev2 = await EventService(db_session).create(
+            title="Второе", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=500, total_tickets=10,
+            channel_id=sample_channel.id,
+        )
+        await db_session.commit()
+        p1 = await self._create(ticket_svc, sample_event.id, code="SUMMER10")
+        p2 = await self._create(ticket_svc, ev2.id, code="SUMMER10")
+        await db_session.commit()
+        assert p1.id != p2.id
+
+    async def test_create_promo_percent_range_validation(self, db_session, ticket_svc, sample_event):
+        """Percent больше 100 → ошибка."""
+        with pytest.raises(ValueError, match="Процент"):
+            await self._create(ticket_svc, sample_event.id, discount_type=DiscountType.percent, value=150)
+
+    async def test_create_promo_fixed_negative_raises(self, db_session, ticket_svc, sample_event):
+        """Fixed с отрицательным значением → ошибка."""
+        with pytest.raises(ValueError):
+            await self._create(ticket_svc, sample_event.id, discount_type=DiscountType.fixed, value=-5)
+
+    async def test_create_promo_ends_before_starts_raises(self, db_session, ticket_svc, sample_event):
+        """ends_at раньше starts_at → ошибка."""
+        now = datetime.now(timezone.utc)
+        with pytest.raises(ValueError, match="позже"):
+            await self._create(ticket_svc, sample_event.id,
+                               starts_at=now + timedelta(days=2), ends_at=now + timedelta(days=1))
+
+    # ─── Применение при покупке ─────────────────────────────────
+
+    async def test_apply_promo_percent(self, db_session, ticket_svc, sample_user, sample_event):
+        """Покупка с percent-промокодом: amount со скидкой, поля Payment, used_count."""
+        promo = await self._create(ticket_svc, sample_event.id, discount_type=DiscountType.percent, value=10)
+        await db_session.commit()
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        payment = await self._payment(db_session, ticket.id)
+        assert float(payment.amount) == 900.0
+        assert float(payment.base_amount) == 1000.0
+        assert float(payment.discount_amount) == 100.0
+        assert payment.promo_code == "SUMMER10"
+        assert promo.used_count == 1
+
+    async def test_apply_promo_fixed(self, db_session, ticket_svc, sample_user, sample_event):
+        """Покупка с fixed-промокодом (скидка 250 от 1000)."""
+        promo = await self._create(ticket_svc, sample_event.id, discount_type=DiscountType.fixed, value=250)
+        await db_session.commit()
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        payment = await self._payment(db_session, ticket.id)
+        assert float(payment.amount) == 750.0
+        assert float(payment.discount_amount) == 250.0
+        assert promo.used_count == 1
+
+    async def test_apply_promo_percent_rounding(self, db_session, ticket_svc, sample_user, sample_event):
+        """Процентная скидка округляется до 2 знаков (33% от 1000 = 330.00)."""
+        await self._create(ticket_svc, sample_event.id, discount_type=DiscountType.percent, value=33)
+        await db_session.commit()
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        payment = await self._payment(db_session, ticket.id)
+        assert float(payment.amount) == 670.0
+        assert float(payment.discount_amount) == 330.0
+
+    async def test_apply_promo_fixed_over_price_zero_amount(self, db_session, ticket_svc, sample_user, sample_event):
+        """Fixed-скидка больше цены → amount клампится до 0 (не отрицательно)."""
+        await self._create(ticket_svc, sample_event.id, discount_type=DiscountType.fixed, value=5000)
+        await db_session.commit()
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        payment = await self._payment(db_session, ticket.id)
+        assert float(payment.amount) == 0.0
+        assert float(payment.discount_amount) == 1000.0
+
+    # ─── Валидация промокода ────────────────────────────────────
+
+    async def test_promo_not_found_raises(self, db_session, ticket_svc, sample_user, sample_event):
+        with pytest.raises(ValueError, match="не найден"):
+            await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="NOCODE")
+
+    async def test_promo_other_event_raises(self, db_session, ticket_svc, sample_user, sample_event, sample_channel):
+        """Код изолирован по событию: промокод на другом событии не действует на этом."""
+        from app.core.services import EventService
+        ev2 = await EventService(db_session).create(
+            title="Второе", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=500, total_tickets=10,
+            channel_id=sample_channel.id,
+        )
+        await db_session.commit()
+        # Тот же код SUMMER10 создан ТОЛЬКО на другом событии
+        await self._create(ticket_svc, ev2.id, code="SUMMER10")
+        await db_session.commit()
+        with pytest.raises(ValueError, match="не найден"):
+            await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+
+    async def test_promo_inactive_raises(self, db_session, ticket_svc, sample_user, sample_event):
+        promo = await self._create(ticket_svc, sample_event.id)
+        await ticket_svc.toggle_promo_code(promo.id)
+        await db_session.commit()
+        with pytest.raises(ValueError, match="неактивен"):
+            await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+
+    async def test_promo_not_started_raises(self, db_session, ticket_svc, sample_user, sample_event):
+        await self._create(ticket_svc, sample_event.id,
+                           starts_at=datetime.now(timezone.utc) + timedelta(days=1))
+        await db_session.commit()
+        with pytest.raises(ValueError, match="не действует"):
+            await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+
+    async def test_promo_expired_raises(self, db_session, ticket_svc, sample_user, sample_event):
+        await self._create(ticket_svc, sample_event.id,
+                           ends_at=datetime.now(timezone.utc) - timedelta(days=1))
+        await db_session.commit()
+        with pytest.raises(ValueError, match="истёк"):
+            await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+
+    async def test_promo_limit_reached_raises(self, db_session, ticket_svc, sample_user, sample_event):
+        await self._create(ticket_svc, sample_event.id, max_uses=1)
+        await db_session.commit()
+        await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        from app.core.services import UserService
+        user2 = await UserService(db_session).get_or_create(
+            platform=PlatformType.telegram, platform_user_id="test_other", name="Другой")
+        with pytest.raises(ValueError, match="исчерпан"):
+            await ticket_svc.buy_ticket(user2.id, sample_event.id, promo_code="SUMMER10")
+
+    async def test_promo_limit_consumed_after_n_buys(self, db_session, ticket_svc, sample_user, sample_event):
+        """max_uses=2: две покупки ок, третья — лимит."""
+        await self._create(ticket_svc, sample_event.id, max_uses=2)
+        await db_session.commit()
+        from app.core.services import UserService
+        svc = UserService(db_session)
+        u1 = await svc.get_or_create(platform=PlatformType.telegram, platform_user_id="u1", name="U1")
+        u2 = await svc.get_or_create(platform=PlatformType.telegram, platform_user_id="u2", name="U2")
+        u3 = await svc.get_or_create(platform=PlatformType.telegram, platform_user_id="u3", name="U3")
+        await db_session.commit()
+        await ticket_svc.buy_ticket(u1.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        await ticket_svc.buy_ticket(u2.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        with pytest.raises(ValueError, match="исчерпан"):
+            await ticket_svc.buy_ticket(u3.id, sample_event.id, promo_code="SUMMER10")
+
+    # ─── Webapp, совместимость, возврат, список ─────────────────
+
+    async def test_buy_webapp_with_promo_dict_fields(self, db_session, ticket_svc, sample_user, sample_event):
+        """buy_ticket_webapp возвращает amount со скидкой + поля скидки."""
+        await self._create(ticket_svc, sample_event.id, discount_type=DiscountType.percent, value=20)
+        await db_session.commit()
+        result = await ticket_svc.buy_ticket_webapp(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        assert result["amount"] == 800.0
+        assert result["base_amount"] == 1000.0
+        assert result["discount_amount"] == 200.0
+        assert result["promo_code"] == "SUMMER10"
+
+    async def test_buy_without_promo_backward_compat(self, db_session, ticket_svc, sample_user, sample_event):
+        """Покупка без промокода: base==price, discount==0, promo None."""
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
+        await db_session.commit()
+        payment = await self._payment(db_session, ticket.id)
+        assert float(payment.base_amount) == 1000.0
+        assert float(payment.discount_amount) == 0.0
+        assert payment.promo_code is None
+
+    async def test_cancel_ticket_keeps_used_count(self, db_session, ticket_svc, sample_user, sample_event):
+        """Возврат билета НЕ возвращает слот использований промокода."""
+        promo = await self._create(ticket_svc, sample_event.id, max_uses=2)
+        await db_session.commit()
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        await ticket_svc.cancel_ticket(ticket.id, sample_user.id)
+        await db_session.commit()
+        assert promo.used_count == 1  # слот потреблён при покупке
+
+    async def test_toggle_promo_deactivates(self, db_session, ticket_svc, sample_event):
+        """Toggle выключает промокод."""
+        promo = await self._create(ticket_svc, sample_event.id)
+        await db_session.commit()
+        assert promo.is_active is True
+        await ticket_svc.toggle_promo_code(promo.id)
+        await db_session.commit()
+        assert promo.is_active is False
+
+    async def test_list_promo_codes_fields(self, db_session, ticket_svc, sample_event):
+        """Список промокодов события: нужные поля."""
+        await self._create(ticket_svc, sample_event.id, code="ONE", discount_type=DiscountType.fixed, value=50)
+        await self._create(ticket_svc, sample_event.id, code="TWO", discount_type=DiscountType.percent, value=15, max_uses=5)
+        await db_session.commit()
+        promos = await ticket_svc.list_promo_codes(sample_event.id)
+        assert len(promos) == 2
+        codes = {p["code"]: p for p in promos}
+        assert codes["TWO"]["discount_type"] == "percent"
+        assert codes["TWO"]["discount_value"] == 15
+        assert codes["TWO"]["max_uses"] == 5
+        assert codes["TWO"]["used_count"] == 0
+        assert codes["TWO"]["is_active"] is True
