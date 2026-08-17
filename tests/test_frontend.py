@@ -163,3 +163,22 @@ def test_appjs_scanner_format_gate():
     """Формат-гейт: авто-check-in только для кода билета XXXX-XXXX."""
     assert "QR_CODE_RE" in APP_JS
     assert "^[0-9A-F]{4}-[0-9A-F]{4}$" in APP_JS
+
+
+# ─── Промокоды (скидки на билеты, pro) ──────────────────────────
+
+
+def test_appjs_promo_buy_flow():
+    """Поле «Промокод» на странице покупки и передача promo_code в body."""
+    assert "Промокод" in APP_JS
+    assert "promoInput_" in APP_JS
+    assert "promo_code" in APP_JS
+    assert "body: JSON.stringify(promo ? { promo_code: promo } : {})" in APP_JS
+
+
+def test_appjs_admin_promo_section():
+    """Секция «Промокоды» в админ-панели события."""
+    assert "Промокоды" in APP_JS
+    assert "/promo-codes" in APP_JS
+    assert "adminCreatePromo" in APP_JS
+    assert "adminTogglePromo" in APP_JS

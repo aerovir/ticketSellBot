@@ -35,6 +35,8 @@ from app.core.schemas import (
     SubscribeMeIn,
     UpdateSubscriptionIn,
     VKGroupRegisterIn,
+    PromoCodeCreate,
+    BuyIn,
 )
 from app.core.services import (
     ChannelAdminService,
@@ -142,8 +144,12 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
 
 
 @router.post("/events/{event_id}/buy", status_code=status.HTTP_201_CREATED)
-async def buy_ticket(event_id: str, auth_data: dict = Depends(validate_init_data)):
-    """Purchase a ticket for an event."""
+async def buy_ticket(
+    event_id: str,
+    body: BuyIn | None = None,
+    auth_data: dict = Depends(validate_init_data),
+):
+    """Purchase a ticket for an event. Опциональный промокод в теле."""
     try:
         uid = UUID(event_id)
     except ValueError:
@@ -166,7 +172,8 @@ async def buy_ticket(event_id: str, auth_data: dict = Depends(validate_init_data
         # Buy ticket via Mini App flow
         ticket_svc = TicketService(session)
         try:
-            result = await ticket_svc.buy_ticket_webapp(user.id, uid)
+            promo = body.promo_code if body else None
+            result = await ticket_svc.buy_ticket_webapp(user.id, uid, promo_code=promo)
             await session.commit()
 
             # A: код в DM — только для бесплатного билета (платный предъявляется QR).
@@ -2062,6 +2069,117 @@ async def admin_list_invites(
         invites = await ticket_svc.get_event_invites(uid)
 
     return {"event_id": str(uid), "invites": invites}
+
+
+# ─── Промокоды (скидки на билеты, pro) ─────────────────────────
+
+@router.post("/admin/events/{event_id}/promo-codes", status_code=status.HTTP_201_CREATED)
+async def admin_create_promo(
+    event_id: str,
+    body: PromoCodeCreate,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Создать промокод для мероприятия (владелец/админ канала, pro-фича)."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_admin_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Промокоды управляет владелец мероприятия")
+
+        has_feature = await event_svc.has_event_pro_feature(uid, "promo_codes")
+        if not has_feature:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Промокоды доступны на подписке Pro или премиуме события")
+
+        ticket_svc = TicketService(session)
+        try:
+            promo = await ticket_svc.create_promo_code(
+                event_id=uid,
+                code=body.code,
+                discount_type=body.discount_type,
+                discount_value=body.discount_value,
+                starts_at=body.starts_at,
+                ends_at=body.ends_at,
+                max_uses=body.max_uses,
+            )
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {
+        "id": str(promo.id),
+        "code": promo.code,
+        "discount_type": promo.discount_type.value,
+        "discount_value": float(promo.discount_value),
+        "starts_at": promo.starts_at.isoformat() if promo.starts_at else None,
+        "ends_at": promo.ends_at.isoformat() if promo.ends_at else None,
+        "max_uses": promo.max_uses,
+        "used_count": promo.used_count,
+        "is_active": promo.is_active,
+        "created_at": promo.created_at.isoformat(),
+    }
+
+
+@router.get("/admin/events/{event_id}/promo-codes")
+async def admin_list_promos(
+    event_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Список промокодов мероприятия."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_admin_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Промокоды управляет владелец мероприятия")
+        ticket_svc = TicketService(session)
+        promos = await ticket_svc.list_promo_codes(uid)
+
+    return {"event_id": str(uid), "promo_codes": promos}
+
+
+@router.post("/admin/promo-codes/{code_id}/toggle")
+async def admin_toggle_promo(
+    code_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Вкл/выкл промокода (ручная деактивация, владелец мероприятия)."""
+    try:
+        cid = UUID(code_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID промокода")
+
+    async with async_session_factory() as session:
+        ticket_svc = TicketService(session)
+        promo = await ticket_svc.get_promo_code_by_id(cid)
+        if promo is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Промокод не найден")
+
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(promo.event_id)
+        if event is None or not _can_admin_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Промокоды управляет владелец мероприятия")
+        has_feature = await event_svc.has_event_pro_feature(promo.event_id, "promo_codes")
+        if not has_feature:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Промокоды доступны на подписке Pro или премиуме события")
+
+        toggled = await ticket_svc.toggle_promo_code(cid)
+        await session.commit()
+
+    return {"id": str(toggled.id), "is_active": toggled.is_active}
 
 
 @router.get("/admin/tickets/{ticket_id}/qr")

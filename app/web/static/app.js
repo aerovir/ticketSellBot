@@ -729,6 +729,10 @@ function showConfirm(eventId) {
                     <span>Цена</span>
                     <span><b>${formatPrice(event.price)}</b></span>
                 </div>
+                <div class="confirm-row">
+                    <span>Промокод</span>
+                    <input class="form-input" id="promoInput_${eventId}" placeholder="Например, SUMMER10" autocomplete="off" style="text-align:right;max-width:180px;text-transform:uppercase">
+                </div>
             </div>
             <button class="btn btn-primary btn-lg" onclick="confirmBuy('${eventId}')" id="confirmBtn">
                 ✅ Подтвердить покупку
@@ -746,7 +750,13 @@ async function confirmBuy(eventId) {
     btn.textContent = "⏳ Оформление...";
 
     try {
-        const result = await api(`/api/events/${eventId}/buy`, { method: "POST" });
+        const promoInput = document.getElementById(`promoInput_${eventId}`);
+        const promo = promoInput ? promoInput.value.trim() : "";
+        const result = await api(`/api/events/${eventId}/buy`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(promo ? { promo_code: promo } : {}),
+        });
 
         // Haptic feedback
         if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback) {
@@ -816,6 +826,11 @@ function showSuccess(result) {
     updateToolbar("Успешно!", false, true);
     showPage("success");
     document.getElementById("successTicketId").textContent = result.ticket_id || "—";
+    // Скидка по промокоду (если была)
+    const hint = document.getElementById("successHint");
+    if (hint && result.discount_amount > 0) {
+        hint.innerHTML = `🎟 Промокод ${escapeHtml(result.promo_code || "")} — скидка ${formatPrice(result.discount_amount)}. Итого: <b>${formatPrice(result.amount)}</b>`;
+    }
 }
 
 function copyTicketId() {
@@ -1240,21 +1255,23 @@ async function showAdminEventDetail(eventId) {
     try {
         const event = await api(`/api/admin/events/${eventId}`);
         state.currentAdminEvent = event;
-        let stats = null, tickets = null, invites = [];
+        let stats = null, tickets = null, invites = [], promos = [];
         try { stats = await api(`/api/admin/events/${eventId}/stats`); } catch (e) { /* нет доступа */ }
         try { tickets = await api(`/api/admin/events/${eventId}/tickets`); } catch (e) { /* нет доступа */ }
         try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
-        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites);
+        try { promos = (await api(`/api/admin/events/${eventId}/promo-codes`)).promo_codes || []; } catch (e) { /* нет доступа */ }
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos);
     } catch (err) {
         hideLoading();
         showError(err.message || "Ошибка загрузки");
     }
 }
 
-function renderAdminEventDetail(event, stats, tickets, invites) {
+function renderAdminEventDetail(event, stats, tickets, invites, promos) {
     hideLoading();
     const container = document.getElementById("adminEventContent");
     invites = invites || [];
+    promos = promos || [];
 
     const statsHtml = stats ? `
         <div class="stat-grid">
@@ -1300,6 +1317,42 @@ function renderAdminEventDetail(event, stats, tickets, invites) {
                 </div>`).join('')}</div>`}
     `;
 
+    // Блок промокодов (pro-фича)
+    const canPromo = isPro() || !!(event && event.is_premium);
+    const promoFormHtml = canPromo ? `
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0" id="promoForm_${event.id}">
+            <input class="form-input" id="promo_code_${event.id}" placeholder="Код" style="width:110px;text-transform:uppercase">
+            <select class="form-input" id="promo_type_${event.id}" style="width:110px">
+                <option value="percent">% скидка</option>
+                <option value="fixed">сумма ₽</option>
+            </select>
+            <input class="form-input" id="promo_value_${event.id}" placeholder="Скидка" type="number" min="1" style="width:90px">
+            <input class="form-input" id="promo_start_${event.id}" type="datetime-local" style="width:160px" title="С (необязательно)">
+            <input class="form-input" id="promo_end_${event.id}" type="datetime-local" style="width:160px" title="По (необязательно)">
+            <input class="form-input" id="promo_limit_${event.id}" placeholder="Лимит (0=∞)" type="number" min="0" value="0" style="width:90px">
+            <button class="btn btn-sm btn-primary" onclick="adminCreatePromo('${event.id}')">+ Создать</button>
+        </div>` : '<p class="hint">Промокоды доступны на подписке Pro или премиуме события</p>';
+
+    const promosHtml = `
+        <h3 style="margin:16px 0 8px">Промокоды</h3>
+        ${promoFormHtml}
+        ${promos.length === 0
+            ? '<p class="hint">Промокодов пока нет</p>'
+            : `<div class="admin-list" style="margin-top:10px">${promos.map(p => `
+                <div class="admin-list-item">
+                    <div style="flex:1">
+                        <div><code>${escapeHtml(p.code)}</code>
+                            <span class="badge badge-tier-pro">${p.discount_type === 'percent' ? p.discount_value + '%' : formatPrice(p.discount_value)}</span>
+                            ${p.is_active ? '<span class="badge badge-published">вкл</span>' : '<span class="badge badge-off">выкл</span>'}
+                        </div>
+                        <div class="hint">${p.starts_at || p.ends_at
+                            ? (p.starts_at ? 'с ' + formatDate(p.starts_at) : '') + (p.ends_at ? ' по ' + formatDate(p.ends_at) : '')
+                            : 'бессрочно'} · использовано ${p.used_count}/${p.max_uses || '∞'}</div>
+                    </div>
+                    <button class="btn btn-sm btn-secondary" onclick="adminTogglePromo('${event.id}','${p.id}')">${p.is_active ? 'Выключить' : 'Включить'}</button>
+                </div>`).join('')}</div>`}
+    `;
+
     container.innerHTML = `
         <h2>${escapeHtml(event.title)}</h2>
         <div class="event-meta">
@@ -1316,6 +1369,7 @@ function renderAdminEventDetail(event, stats, tickets, invites) {
         </div>
         ${ticketsHtml}
         ${invitesHtml}
+        ${promosHtml}
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1388,6 +1442,47 @@ async function adminCancelInvite(eventId, ticketId) {
     try {
         await api(`/api/admin/events/${eventId}/invites/${ticketId}/cancel`, { method: "POST" });
         showToast("✅ Пригласительное отменено, места возвращены");
+        await showAdminEventDetail(eventId);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ─── Промокоды: создать / вкл-выкл ─────────────────────────────
+
+async function adminCreatePromo(eventId) {
+    const code = (document.getElementById(`promo_code_${eventId}`)?.value || "").trim();
+    const type = document.getElementById(`promo_type_${eventId}`)?.value;
+    const value = parseFloat(document.getElementById(`promo_value_${eventId}`)?.value);
+    const startEl = document.getElementById(`promo_start_${eventId}`);
+    const endEl = document.getElementById(`promo_end_${eventId}`);
+    const limit = parseInt(document.getElementById(`promo_limit_${eventId}`)?.value || "0", 10);
+
+    if (!code) { showToast("Укажите код промокода", true); return; }
+    if (!value || value <= 0) { showToast("Укажите скидку", true); return; }
+
+    const payload = {
+        code,
+        discount_type: type,
+        discount_value: value,
+        max_uses: limit || 0,
+    };
+    if (startEl && startEl.value) payload.starts_at = new Date(startEl.value).toISOString();
+    if (endEl && endEl.value) payload.ends_at = new Date(endEl.value).toISOString();
+
+    try {
+        await api(`/api/admin/events/${eventId}/promo-codes`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        showToast("✅ Промокод создан");
+        await showAdminEventDetail(eventId);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminTogglePromo(eventId, promoId) {
+    try {
+        await api(`/api/admin/promo-codes/${promoId}/toggle`, { method: "POST" });
+        showToast("✅ Статус обновлён");
         await showAdminEventDetail(eventId);
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }

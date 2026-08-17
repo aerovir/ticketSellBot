@@ -11,6 +11,7 @@ from uuid import UUID as _UUID
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import urlencode
 
@@ -2398,3 +2399,159 @@ class TestMyChannelsApi:
         # Без subscription-полей — только идентификация канала
         assert "is_subscription_active" not in channels[0]
         assert "status" not in channels[0]
+
+
+class TestPromoCodesAPI:
+    """Админ-эндпоинты промокодов: create/list/toggle + гейты pro."""
+
+    def _mock_event(self):
+        ev = Mock()
+        ev.id = EVENT_ID
+        ev.owner_user_id = None
+        ev.channel_id = _UUID(CHANNEL_ID)
+        return ev
+
+    def test_admin_create_promo_success(self, client):
+        """Канальный админ создаёт промокод на своё событие (201)."""
+        mock_promo = Mock()
+        mock_promo.id = EVENT_ID
+        mock_promo.code = "SUMMER10"
+        mock_promo.discount_type.value = "percent"
+        mock_promo.discount_value = 10
+        mock_promo.starts_at = None
+        mock_promo.ends_at = None
+        mock_promo.max_uses = 0
+        mock_promo.used_count = 0
+        mock_promo.is_active = True
+        mock_promo.created_at = datetime.now(timezone.utc)
+
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.TicketService.create_promo_code", new_callable=AsyncMock, return_value=mock_promo),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/promo-codes",
+                headers={"X-Skip-Auth": "1"},
+                json={"code": "SUMMER10", "discount_type": "percent", "discount_value": 10},
+            )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["code"] == "SUMMER10"
+
+    def test_admin_create_promo_no_pro(self, client):
+        """Без pro-фичи promo_codes → 403."""
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/promo-codes",
+                headers={"X-Skip-Auth": "1"},
+                json={"code": "SUMMER10", "discount_type": "percent", "discount_value": 10},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_create_promo_not_admin(self, client):
+        """Пользователь без доступа к событию → 403."""
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/promo-codes",
+                headers={"X-Skip-Auth": "1"},
+                json={"code": "SUMMER10", "discount_type": "percent", "discount_value": 10},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_create_promo_conflict(self, client):
+        """Конфликт (дубликат кода) → 409."""
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.TicketService.create_promo_code", new_callable=AsyncMock, side_effect=ValueError("Промокод не найден")),
+        ):
+            resp = client.post(
+                f"/api/admin/events/{EVENT_ID}/promo-codes",
+                headers={"X-Skip-Auth": "1"},
+                json={"code": "SUMMER10", "discount_type": "percent", "discount_value": 10},
+            )
+        assert resp.status_code == 409
+
+    def test_admin_list_promos(self, client):
+        """Список промокодов события (200)."""
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.TicketService.list_promo_codes", new_callable=AsyncMock, return_value=[{"code": "SUMMER10"}]),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/promo-codes", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()["promo_codes"]) == 1
+
+    def test_admin_list_promos_not_admin(self, client):
+        """Список промокодов чужого события → 403."""
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/promo-codes", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+    def test_admin_toggle_promo(self, client):
+        """Toggle вкл/выкл промокода (200)."""
+        mock_promo = Mock()
+        mock_promo.id = EVENT_ID
+        mock_promo.event_id = EVENT_ID
+        mock_promo.is_active = False
+
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.TicketService.get_promo_code_by_id", new_callable=AsyncMock, return_value=mock_promo),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.TicketService.toggle_promo_code", new_callable=AsyncMock, return_value=mock_promo),
+        ):
+            resp = client.post(f"/api/admin/promo-codes/{EVENT_ID}/toggle", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_active"] is False
+
+    def test_admin_toggle_promo_no_pro(self, client):
+        """Toggle без pro-фичи → 403."""
+        mock_promo = Mock()
+        mock_promo.id = EVENT_ID
+        mock_promo.event_id = EVENT_ID
+
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.TicketService.get_promo_code_by_id", new_callable=AsyncMock, return_value=mock_promo),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.post(f"/api/admin/promo-codes/{EVENT_ID}/toggle", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+    def test_buy_ticket_with_promo_code(self, client):
+        """POST /buy с промокодом передаёт promo_code в сервис."""
+        mock_buy = AsyncMock(return_value={
+            "ticket_id": EVENT_ID,
+            "amount": 900.0,
+            "event_title": "Тест",
+            "event_date": "2026-08-20T12:00:00+00:00",
+            "validation_code": "AB3X-K7M9",
+            "is_free": False,
+        })
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.TicketService.buy_ticket_webapp", mock_buy),
+        ):
+            resp = client.post(
+                f"/api/events/{EVENT_ID}/buy",
+                headers={"X-Skip-Auth": "1"},
+                json={"promo_code": "SUMMER10"},
+            )
+        assert resp.status_code == 201, resp.text
+        assert mock_buy.await_args.kwargs["promo_code"] == "SUMMER10"

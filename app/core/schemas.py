@@ -2,9 +2,9 @@ from datetime import datetime
 from uuid import UUID
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from app.core.models import SubscriptionTier, PeriodUnit, PlatformType
+from app.core.models import SubscriptionTier, PeriodUnit, PlatformType, DiscountType
 
 
 # ─── User ────────────────────────────────────────────────────────────────────
@@ -54,6 +54,34 @@ class EventUpdateIn(BaseModel):
 class InviteIssueIn(BaseModel):
     """Выдать пригласительный: вместимость 1/2/3 человека."""
     seats: int = Field(default=1, ge=1, le=3)
+
+
+class PromoCodeCreate(BaseModel):
+    """Создать промокод для мероприятия (pro-фича).
+
+    discount_type: percent (процент от суммы) или fixed (фиксированная сумма).
+    starts_at/ends_at — срок действия (None = без границы).
+    max_uses — лимит использований (0 = без лимита).
+    """
+    code: str = Field(min_length=1, max_length=64)
+    discount_type: DiscountType
+    discount_value: float = Field(gt=0)
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    max_uses: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_ranges(self):
+        if self.discount_type == DiscountType.percent and self.discount_value > 100:
+            raise ValueError("Процент скидки должен быть от 1 до 100")
+        if self.ends_at is not None and self.starts_at is not None and self.ends_at <= self.starts_at:
+            raise ValueError("Дата окончания должна быть позже даты начала")
+        return self
+
+
+class BuyIn(BaseModel):
+    """Тело покупки билета: опциональный промокод."""
+    promo_code: Optional[str] = Field(default=None, max_length=64)
 
 
 class EventOut(BaseModel):

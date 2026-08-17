@@ -37,6 +37,12 @@ class PaymentStatus(str, enum.Enum):
     refunded = "refunded"
 
 
+class DiscountType(str, enum.Enum):
+    """Тип скидки промокода."""
+    percent = "percent"  # процент от суммы
+    fixed = "fixed"      # фиксированная скидка в единицах стоимости
+
+
 class PlatformType(str, enum.Enum):
     telegram = "telegram"
     vk = "vk"
@@ -358,6 +364,11 @@ class Payment(Base):
     status: Mapped[PaymentStatus] = mapped_column(
         SAEnum(PaymentStatus), default=PaymentStatus.pending, nullable=False
     )
+    # Промокод, применённый при покупке (nullable — исторические платежи без скидки).
+    # amount — фактически уплачено (со скидкой); base_amount — исходная цена события.
+    base_amount: Mapped[float | None] = mapped_column(Numeric(precision=10, scale=2), nullable=True)
+    discount_amount: Mapped[float | None] = mapped_column(Numeric(precision=10, scale=2), nullable=True)
+    promo_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -401,6 +412,43 @@ class EventUpgrade(Base):
 
     def __repr__(self):
         return f"<EventUpgrade {self.event_id} — {self.status.value}>"
+
+
+class PromoCode(Base):
+    """Скидка-промокод на билеты одного мероприятия (pro-фича).
+
+    Привязан к событию (event_id). Организатор создаёт код с типом скидки
+    (percent — процент от суммы / fixed — фиксированная сумма), сроком действия
+    (starts_at/ends_at, None = без границы), лимитом использований
+    (max_uses, 0 = без лимита) и ручным вкл/выкл (is_active).
+    """
+
+    __tablename__ = "promo_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    discount_type: Mapped[DiscountType] = mapped_column(SAEnum(DiscountType), nullable=False)
+    discount_value: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), nullable=False)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    max_uses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # 0 = без лимита
+    used_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    event = relationship("Event", lazy="raise")
+
+    __table_args__ = (UniqueConstraint("event_id", "code", name="uq_promo_code_event_code"),)
+
+    def __repr__(self):
+        return f"<PromoCode {self.code} — {self.discount_type.value}:{self.discount_value}>"
 
 
 class ChannelAdmin(Base):

@@ -3,6 +3,7 @@ import logging
 import time
 import secrets
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from sqlalchemy import select, func, and_, delete
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
     User, UserIdentity, LinkCode, Event, EventManager, EventPublication, Ticket, Payment,
-    Channel, ChannelAdmin, VKGroup, EventUpgrade,
+    Channel, ChannelAdmin, VKGroup, EventUpgrade, PromoCode, DiscountType,
     TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
 )
 from dateutil.relativedelta import relativedelta
@@ -334,6 +335,7 @@ class UserService:
             "paid_events": {SubscriptionTier.pro},
             "qr_codes": {SubscriptionTier.pro},
             "invite_tickets": {SubscriptionTier.pro},
+            "promo_codes": {SubscriptionTier.pro},
         }
         return tier in FEATURES.get(feature, set())
 
@@ -558,6 +560,7 @@ class ChannelService:
             "paid_events": {SubscriptionTier.pro},
             "qr_codes": {SubscriptionTier.pro},
             "invite_tickets": {SubscriptionTier.pro},
+            "promo_codes": {SubscriptionTier.pro},
         }
 
         return tier in FEATURES.get(feature, set())
@@ -1584,12 +1587,12 @@ class EventService:
         return upgrade
 
     async def has_event_pro_feature(self, event_id: uuid.UUID, feature: str) -> bool:
-        """Есть ли у события pro-фича (paid_events/qr_codes/invite_tickets).
+        """Есть ли у события pro-фича (paid_events/qr_codes/invite_tickets/promo_codes).
 
         Сначала per-event премиум; иначе fallback на подписку канала/владельца.
         """
         if await self.get_event_is_premium(event_id):
-            return feature in ("paid_events", "qr_codes", "invite_tickets")
+            return feature in ("paid_events", "qr_codes", "invite_tickets", "promo_codes")
 
         event = await self.session.get(Event, event_id)
         if event is None:
@@ -1634,8 +1637,11 @@ class TicketService:
         raw = secrets.token_hex(4).upper()
         return f"{raw[:4]}-{raw[4:]}"
 
-    async def buy_ticket(self, user_id: uuid.UUID, event_id: uuid.UUID) -> Ticket:
-        """Purchase a ticket for an event."""
+    async def buy_ticket(self, user_id: uuid.UUID, event_id: uuid.UUID, promo_code: str | None = None) -> Ticket:
+        """Purchase a ticket for an event.
+
+        promo_code: опциональный промокод — применяет скидку к цене билета.
+        """
         start = time.perf_counter()
         event = await self.session.get(Event, event_id)
         if event is None:
@@ -1728,11 +1734,25 @@ class TicketService:
         # Decrease available tickets
         event.available_tickets -= 1
 
+        # Применение промокода (если передан)
+        base = Decimal(str(event.price))
+        discount = Decimal("0")
+        pcode = None
+        if promo_code:
+            promo = await self._validate_promo(event_id, promo_code)
+            discount = self._compute_discount(promo, base)
+            promo.used_count += 1
+            pcode = promo.code
+        amount = max(base - discount, Decimal("0"))
+
         # Create payment stub
         payment = Payment(
             ticket_id=ticket.id,
-            amount=event.price,
+            amount=amount,
             status=PaymentStatus.completed,  # stub — mark as completed
+            base_amount=base,
+            discount_amount=discount,
+            promo_code=pcode,
         )
         self.session.add(payment)
 
@@ -1744,7 +1764,10 @@ class TicketService:
             "event_id": str(event_id),
             "event_title": event.title,
             "user_id": str(user_id),
-            "amount": float(event.price),
+            "amount": float(amount),
+            "base_amount": float(base),
+            "discount_amount": float(discount),
+            "promo_code": pcode,
             "is_free": ticket.is_free,
             "validation_code": ticket.validation_code,
             "payment_status": "completed",
@@ -1754,7 +1777,7 @@ class TicketService:
         })
         return ticket
 
-    async def buy_ticket_webapp(self, user_id: uuid.UUID, event_id: uuid.UUID) -> dict:
+    async def buy_ticket_webapp(self, user_id: uuid.UUID, event_id: uuid.UUID, promo_code: str | None = None) -> dict:
         """Purchase a ticket through the Mini App.
 
         Same validation as buy_ticket(), but creates Payment with
@@ -1853,11 +1876,25 @@ class TicketService:
         # Decrease available tickets
         event.available_tickets -= 1
 
+        # Применение промокода (если передан)
+        base = Decimal(str(event.price))
+        discount = Decimal("0")
+        pcode = None
+        if promo_code:
+            promo = await self._validate_promo(event_id, promo_code)
+            discount = self._compute_discount(promo, base)
+            promo.used_count += 1
+            pcode = promo.code
+        amount = max(base - discount, Decimal("0"))
+
         # Create payment stub with pending status (Mini App flow)
         payment = Payment(
             ticket_id=ticket.id,
-            amount=event.price,
+            amount=amount,
             status=PaymentStatus.pending,
+            base_amount=base,
+            discount_amount=discount,
+            promo_code=pcode,
         )
         self.session.add(payment)
 
@@ -1869,7 +1906,10 @@ class TicketService:
             "event_id": str(event_id),
             "event_title": event.title,
             "user_id": str(user_id),
-            "amount": float(event.price),
+            "amount": float(amount),
+            "base_amount": float(base),
+            "discount_amount": float(discount),
+            "promo_code": pcode,
             "is_free": ticket.is_free,
             "validation_code": ticket.validation_code,
             "payment_status": "pending",
@@ -1882,13 +1922,130 @@ class TicketService:
             "ticket_id": str(ticket.id),
             "event_title": event.title,
             "event_date": event.date.isoformat(),
-            "amount": float(event.price),
+            "amount": float(amount),
+            "base_amount": float(base),
+            "discount_amount": float(discount),
+            "promo_code": pcode,
             "payment_id": str(payment.id),
             "payment_status": payment.status.value,
             "purchase_date": ticket.purchase_date.isoformat(),
             "validation_code": ticket.validation_code,
             "is_free": ticket.is_free,
         }
+
+    # ═══════════════════════════════════════════════════════════
+    # Промокоды (скидки на билеты, pro-фича)
+    # ═══════════════════════════════════════════════════════════
+
+    async def create_promo_code(
+        self,
+        event_id: uuid.UUID,
+        code: str,
+        discount_type: DiscountType,
+        discount_value: float,
+        starts_at: datetime | None = None,
+        ends_at: datetime | None = None,
+        max_uses: int = 0,
+    ) -> PromoCode:
+        """Создать промокод для мероприятия.
+
+        Код нормализуется (strip + upper), уникален в рамках события.
+        Валидация: percent 0<value<=100, fixed value>=0, end>start если оба заданы.
+        max_uses=0 — без лимита использований.
+        """
+        code = (code or "").strip().upper()
+        if not code:
+            raise ValueError("Укажите код промокода")
+
+        if discount_type == DiscountType.percent and not (0 < discount_value <= 100):
+            raise ValueError("Процент скидки должен быть от 1 до 100")
+        if discount_type == DiscountType.fixed and discount_value < 0:
+            raise ValueError("Скидка не может быть отрицательной")
+        if starts_at is not None and ends_at is not None and ends_at <= starts_at:
+            raise ValueError("Дата окончания должна быть позже даты начала")
+
+        promo = PromoCode(
+            event_id=event_id,
+            code=code,
+            discount_type=discount_type,
+            discount_value=discount_value,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            max_uses=max_uses or 0,
+        )
+        self.session.add(promo)
+        await self.session.flush()
+        return promo
+
+    async def list_promo_codes(self, event_id: uuid.UUID) -> list[dict]:
+        """Список промокодов мероприятия для отображения."""
+        stmt = select(PromoCode).where(PromoCode.event_id == event_id).order_by(PromoCode.created_at)
+        result = await self.session.execute(stmt)
+        promos = result.scalars().all()
+        return [
+            {
+                "id": str(p.id),
+                "code": p.code,
+                "discount_type": p.discount_type.value,
+                "discount_value": float(p.discount_value),
+                "starts_at": p.starts_at.isoformat() if p.starts_at else None,
+                "ends_at": p.ends_at.isoformat() if p.ends_at else None,
+                "max_uses": p.max_uses,
+                "used_count": p.used_count,
+                "is_active": p.is_active,
+                "created_at": p.created_at.isoformat(),
+            }
+            for p in promos
+        ]
+
+    async def toggle_promo_code(self, code_id: uuid.UUID) -> PromoCode:
+        """Вкл/выкл промокода (ручная деактивация)."""
+        promo = await self.session.get(PromoCode, code_id)
+        if promo is None:
+            raise ValueError("Промокод не найден")
+        promo.is_active = not promo.is_active
+        await self.session.flush()
+        return promo
+
+    async def get_promo_code_by_id(self, code_id: uuid.UUID) -> PromoCode | None:
+        """Промокод по ID (для проверки доступа к событию в toggle-эндпоинте)."""
+        return await self.session.get(PromoCode, code_id)
+
+    async def _get_promo_code(self, event_id: uuid.UUID, code: str) -> PromoCode | None:
+        stmt = select(PromoCode).where(
+            and_(PromoCode.event_id == event_id, PromoCode.code == code)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _validate_promo(self, event_id: uuid.UUID, code: str | None) -> PromoCode:
+        """Проверить промокод перед применением. Raises ValueError с понятным сообщением."""
+        code = (code or "").strip().upper()
+        promo = await self._get_promo_code(event_id, code)
+        if promo is None:
+            raise ValueError("Промокод не найден")
+        if promo.event_id != event_id:
+            raise ValueError("Промокод не применим к этому мероприятию")
+        if not promo.is_active:
+            raise ValueError("Промокод неактивен")
+        now = datetime.now(timezone.utc)
+        if promo.starts_at is not None and now < promo.starts_at:
+            raise ValueError("Промокод ещё не действует")
+        if promo.ends_at is not None and now > promo.ends_at:
+            raise ValueError("Срок действия промокода истёк")
+        if promo.max_uses > 0 and promo.used_count >= promo.max_uses:
+            raise ValueError("Лимит использований промокода исчерпан")
+        return promo
+
+    @staticmethod
+    def _compute_discount(promo: PromoCode, base_price: Decimal) -> Decimal:
+        """Расчёт скидки от базовой цены (Decimal, округление до 2 знаков)."""
+        if promo.discount_type == DiscountType.percent:
+            value = Decimal(str(promo.discount_value))
+            discount = (base_price * value / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        else:
+            discount = min(Decimal(str(promo.discount_value)), base_price)
+        return discount
 
     async def cancel_ticket(self, ticket_id: uuid.UUID, user_id: uuid.UUID) -> Ticket:
         """Cancel a ticket (refund)."""
