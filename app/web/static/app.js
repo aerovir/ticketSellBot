@@ -1174,6 +1174,13 @@ async function showAdminEventForm(eventId) {
                 <label class="form-label">Цена (₽, 0 = бесплатно)${canPaid ? '' : ' — только бесплатные на вашем тарифе'}</label>
                 <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}" ${canPaid ? '' : 'disabled'}>
             </div>
+            ${canPaid ? `
+            <div class="form-field">
+                <label class="form-label">Цены по дате (Pro)</label>
+                <div id="priceRangesList_${event ? event.id : 'new'}"></div>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="addPriceRangeRow('${event ? event.id : 'new'}')">+ Добавить диапазон</button>
+                <div class="hint" style="margin:4px 0 0">Диапазоны покрывают весь период от публикации до даты мероприятия. Цена фиксируется при покупке.</div>
+            </div>` : ''}
             <div class="form-field">
                 <label class="form-label">Количество билетов *</label>
                 <input class="form-input" type="number" min="1" step="1" id="f_tickets" required value="${event ? event.total_tickets : 100}">
@@ -1196,6 +1203,27 @@ async function showAdminEventForm(eventId) {
             <button class="btn btn-secondary" type="button" onclick="showAdminEvents()">Отмена</button>
         </form>
     `;
+    // Предзаполнение диапазонов при редактировании
+    if (eventId && canPaid) {
+        try {
+            const pr = (await api(`/api/admin/events/${eventId}/price-ranges`)).price_ranges || [];
+            const scope = `priceRangesList_${eventId}`;
+            const list = document.getElementById(scope);
+            if (list) {
+                pr.forEach(r => {
+                    const row = document.createElement("div");
+                    row.className = "price-range-row";
+                    row.style.cssText = "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap";
+                    row.innerHTML = `
+                        <input class="form-input pr_start" type="datetime-local" style="width:150px" value="${toLocalInputValue(r.starts_at)}" title="С">
+                        <input class="form-input pr_end" type="datetime-local" style="width:150px" value="${toLocalInputValue(r.ends_at)}" title="По">
+                        <input class="form-input pr_price" type="number" min="0" step="0.01" placeholder="Цена ₽" style="width:80px" value="${r.price}">
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="adminDeletePriceRange(this)">✕</button>`;
+                    list.appendChild(row);
+                });
+            }
+        } catch (e) { /* нет доступа к диапазонам — игнор */ }
+    }
 }
 
 function toLocalInputValue(iso) {
@@ -1232,12 +1260,26 @@ async function submitAdminEventForm(eventId) {
     }
 
     try {
+        let savedId = eventId;
         if (eventId) {
             await api(`/api/admin/events/${eventId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
             showToast("✅ Мероприятие обновлено");
         } else {
-            await api("/api/admin/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+            const created = await api("/api/admin/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+            savedId = created.id;
             showToast("✅ Мероприятие создано (черновик)");
+        }
+        // Сохранить динамические цены, если заполнены диапазоны
+        if (price > 0 && savedId) {
+            // Для нового события диапазоны лежали в priceRangesList_new
+            const ranges = collectPriceRanges(eventId || "new");
+            if (ranges.length > 0) {
+                await api(`/api/admin/events/${savedId}/price-ranges`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ranges }),
+                });
+            }
         }
         await showAdminEvents();
     } catch (err) {
@@ -1255,23 +1297,25 @@ async function showAdminEventDetail(eventId) {
     try {
         const event = await api(`/api/admin/events/${eventId}`);
         state.currentAdminEvent = event;
-        let stats = null, tickets = null, invites = [], promos = [];
+        let stats = null, tickets = null, invites = [], promos = [], priceRanges = [];
         try { stats = await api(`/api/admin/events/${eventId}/stats`); } catch (e) { /* нет доступа */ }
         try { tickets = await api(`/api/admin/events/${eventId}/tickets`); } catch (e) { /* нет доступа */ }
         try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
         try { promos = (await api(`/api/admin/events/${eventId}/promo-codes`)).promo_codes || []; } catch (e) { /* нет доступа */ }
-        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos);
+        try { priceRanges = (await api(`/api/admin/events/${eventId}/price-ranges`)).price_ranges || []; } catch (e) { /* нет доступа */ }
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges);
     } catch (err) {
         hideLoading();
         showError(err.message || "Ошибка загрузки");
     }
 }
 
-function renderAdminEventDetail(event, stats, tickets, invites, promos) {
+function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges) {
     hideLoading();
     const container = document.getElementById("adminEventContent");
     invites = invites || [];
     promos = promos || [];
+    priceRanges = priceRanges || [];
 
     const statsHtml = stats ? `
         <div class="stat-grid">
@@ -1353,6 +1397,21 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos) {
                 </div>`).join('')}</div>`}
     `;
 
+    // Секция «Цены по дате» (динамические цены, pro)
+    const priceRangesHtml = `
+        <h3 style="margin:16px 0 8px">Цены по дате</h3>
+        <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Изменить</button>
+        ${priceRanges.length === 0
+            ? '<p class="hint">Динамические цены не настроены — действует базовая цена</p>'
+            : `<div class="admin-list" style="margin-top:10px">${priceRanges.map(r => `
+                <div class="admin-list-item">
+                    <div style="flex:1">
+                        <div><b>${formatPrice(r.price)}</b></div>
+                        <div class="hint">с ${formatDate(r.starts_at)} по ${formatDate(r.ends_at)}</div>
+                    </div>
+                </div>`).join('')}</div>`}
+    `;
+
     container.innerHTML = `
         <h2>${escapeHtml(event.title)}</h2>
         <div class="event-meta">
@@ -1370,6 +1429,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos) {
         ${ticketsHtml}
         ${invitesHtml}
         ${promosHtml}
+        ${priceRangesHtml}
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1483,6 +1543,56 @@ async function adminTogglePromo(eventId, promoId) {
     try {
         await api(`/api/admin/promo-codes/${promoId}/toggle`, { method: "POST" });
         showToast("✅ Статус обновлён");
+        await showAdminEventDetail(eventId);
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// ─── Цены по дате: редактор диапазонов ─────────────────────────
+
+function addPriceRangeRow(scopeId) {
+    const list = document.getElementById(`priceRangesList_${scopeId}`);
+    if (!list) return;
+    const row = document.createElement("div");
+    row.className = "price-range-row";
+    row.style.cssText = "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap";
+    row.innerHTML = `
+        <input class="form-input" type="datetime-local" class="pr_start" style="width:150px" title="С">
+        <input class="form-input" type="datetime-local" class="pr_end" style="width:150px" title="По">
+        <input class="form-input" type="number" min="0" step="0.01" class="pr_price" placeholder="Цена ₽" style="width:80px">
+        <button type="button" class="btn btn-sm btn-secondary" onclick="adminDeletePriceRange(this)">✕</button>`;
+    list.appendChild(row);
+}
+
+function adminDeletePriceRange(btn) {
+    const row = btn.closest(".price-range-row");
+    if (row) row.remove();
+}
+
+function collectPriceRanges(scopeId) {
+    const list = document.getElementById(`priceRangesList_${scopeId}`);
+    if (!list) return [];
+    const ranges = [];
+    list.querySelectorAll(".price-range-row").forEach(row => {
+        const start = row.querySelector(".pr_start").value;
+        const end = row.querySelector(".pr_end").value;
+        const price = parseFloat(row.querySelector(".pr_price").value);
+        if (start && end && !isNaN(price)) {
+            ranges.push({ starts_at: new Date(start).toISOString(), ends_at: new Date(end).toISOString(), price });
+        }
+    });
+    return ranges;
+}
+
+async function adminCreatePriceRange(eventId) {
+    const ranges = collectPriceRanges(eventId);
+    if (ranges.length === 0) { showToast("Добавьте хотя бы один диапазон", true); return; }
+    try {
+        await api(`/api/admin/events/${eventId}/price-ranges`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ranges }),
+        });
+        showToast("✅ Цены по дате сохранены");
         await showAdminEventDetail(eventId);
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }

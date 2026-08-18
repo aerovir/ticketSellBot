@@ -1979,3 +1979,249 @@ class TestPromoCodes:
         assert codes["TWO"]["max_uses"] == 5
         assert codes["TWO"]["used_count"] == 0
         assert codes["TWO"]["is_active"] is True
+
+
+# ═══════════════════════════════════════════════════════════════
+# Динамические цены по дате (early bird, pro-фича)
+# ═══════════════════════════════════════════════════════════════
+
+class TestPriceRanges:
+    """Эшелоны цен по датам: effective_price_at + replace_price_ranges + покупка."""
+
+    async def _ranges(self, db_session, event, price=100):
+        """Выставить базовую цену + published_at (now-2d) и вернуть единый `now`
+        для построения диапазонов — чтобы не было микро-дыр от разных now."""
+        event.price = price
+        now = datetime.now(timezone.utc)
+        event.published_at = now - timedelta(days=2)
+        await db_session.flush()
+        return event, now
+
+    # ─── effective_price_at ─────────────────────────────────────
+
+    async def test_effective_price_inside_range(self, db_session, event_svc, sample_event):
+        """dt в диапазоне → цена диапазона."""
+        _, now = await self._ranges(db_session, sample_event)
+        end = now + timedelta(days=3)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": end, "price": 150},
+            {"starts_at": end, "ends_at": sample_event.date, "price": 200},
+        ])
+        # dt сейчас → первый диапазон (150)
+        assert float(await event_svc.effective_price_at(sample_event, now)) == 150.0
+
+    async def test_effective_price_no_ranges_fallback(self, db_session, event_svc, sample_event):
+        """Без диапазонов → базовая цена."""
+        await self._ranges(db_session, sample_event, price=300)
+        assert float(await event_svc.effective_price_at(sample_event, datetime.now(timezone.utc))) == 300.0
+
+    async def test_effective_price_boundary_start_inclusive(self, db_session, event_svc, sample_event):
+        """dt == starts_at → цена диапазона (граница включительно)."""
+        _, now = await self._ranges(db_session, sample_event)
+        start = now - timedelta(days=2)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": start, "ends_at": now + timedelta(days=3), "price": 120},
+            {"starts_at": now + timedelta(days=3), "ends_at": sample_event.date, "price": 200},
+        ])
+        assert float(await event_svc.effective_price_at(sample_event, start)) == 120.0
+
+    async def test_effective_price_boundary_end_exclusive(self, db_session, event_svc, sample_event):
+        """dt == ends_at промежуточного → следующий диапазон (end не включается)."""
+        _, now = await self._ranges(db_session, sample_event)
+        mid = now + timedelta(days=3)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": mid, "price": 120},
+            {"starts_at": mid, "ends_at": sample_event.date, "price": 200},
+        ])
+        assert float(await event_svc.effective_price_at(sample_event, mid)) == 200.0
+
+    async def test_effective_price_last_range_includes_event_date(self, db_session, event_svc, sample_event):
+        """dt == event.date → цена последнего диапазона (включительно)."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date, "price": 200},
+        ])
+        assert float(await event_svc.effective_price_at(sample_event, sample_event.date)) == 200.0
+
+    async def test_effective_price_free_event_ignored(self, db_session, event_svc, sample_event):
+        """Бесплатное событие (price=0) → 0 независимо от диапазонов."""
+        await self._ranges(db_session, sample_event, price=0)
+        assert float(await event_svc.effective_price_at(sample_event, datetime.now(timezone.utc))) == 0.0
+
+    # ─── replace_price_ranges ───────────────────────────────────
+
+    async def test_replace_ranges_success(self, db_session, event_svc, sample_event):
+        """2 диапазона с полным покрытием; старые удалены."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": now + timedelta(days=3), "price": 100},
+            {"starts_at": now + timedelta(days=3), "ends_at": sample_event.date, "price": 200},
+        ])
+        ranges = await event_svc.get_price_ranges(sample_event.id)
+        assert len(ranges) == 2
+        assert [r["price"] for r in ranges] == [100.0, 200.0]
+
+    async def test_replace_hole_in_middle_raises(self, db_session, event_svc, sample_event):
+        """Дыра между диапазонами → ValueError."""
+        _, now = await self._ranges(db_session, sample_event)
+        with pytest.raises(ValueError, match="не покрывают|дыра"):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now - timedelta(days=2), "ends_at": now + timedelta(days=2), "price": 100},
+                {"starts_at": now + timedelta(days=4), "ends_at": sample_event.date, "price": 200},
+            ])
+
+    async def test_replace_gap_at_start_raises(self, db_session, event_svc, sample_event):
+        """Первый диапазон начинается позже published_at → дыра в начале."""
+        _, now = await self._ranges(db_session, sample_event)
+        with pytest.raises(ValueError, match="не покрывают"):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now + timedelta(days=1), "ends_at": sample_event.date, "price": 100},
+            ])
+
+    async def test_replace_gap_at_end_raises(self, db_session, event_svc, sample_event):
+        """Последний диапазон заканчивается раньше event.date → дыра в конце."""
+        _, now = await self._ranges(db_session, sample_event)
+        with pytest.raises(ValueError, match="не покрывают"):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date - timedelta(days=1), "price": 100},
+            ])
+
+    async def test_replace_overlap_raises(self, db_session, event_svc, sample_event):
+        """Пересечение диапазонов → ValueError."""
+        _, now = await self._ranges(db_session, sample_event)
+        with pytest.raises(ValueError, match="пересекаются"):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now - timedelta(days=2), "ends_at": now + timedelta(days=5), "price": 100},
+                {"starts_at": now + timedelta(days=3), "ends_at": sample_event.date, "price": 200},
+            ])
+
+    async def test_replace_ends_before_starts_raises(self, db_session, event_svc, sample_event):
+        """end раньше start → ValueError."""
+        _, now = await self._ranges(db_session, sample_event)
+        with pytest.raises(ValueError, match="позже"):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now + timedelta(days=3), "ends_at": now, "price": 100},
+            ])
+
+    async def test_replace_negative_price_raises(self, db_session, event_svc, sample_event):
+        """Отрицательная цена → ValueError."""
+        _, now = await self._ranges(db_session, sample_event)
+        with pytest.raises(ValueError, match="отрицательн"):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date, "price": -5},
+            ])
+
+    async def test_replace_range_outside_window_raises(self, db_session, event_svc, sample_event):
+        """Диапазон выходит за [published_at, event.date] → ValueError."""
+        _, now = await self._ranges(db_session, sample_event)
+        with pytest.raises(ValueError):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now - timedelta(days=10), "ends_at": sample_event.date, "price": 100},
+            ])
+
+    async def test_replace_empty_clears(self, db_session, event_svc, sample_event):
+        """Пустой список → диапазоны удалены (выключить динамику)."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date, "price": 100},
+        ])
+        await event_svc.replace_price_ranges(sample_event.id, [])
+        assert await event_svc.get_price_ranges(sample_event.id) == []
+
+    async def test_replace_free_event_raises(self, db_session, event_svc, sample_event):
+        """Бесплатное событие (price=0) не может иметь диапазоны."""
+        _, now = await self._ranges(db_session, sample_event, price=0)
+        with pytest.raises(ValueError, match="платн"):
+            await event_svc.replace_price_ranges(sample_event.id, [
+                {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date, "price": 100},
+            ])
+
+    # ─── Покупка с диапазоном ──────────────────────────────────
+
+    async def test_buy_ticket_uses_range_price(self, db_session, ticket_svc, sample_user, sample_event, event_svc):
+        """Покупка берёт цену диапазона (base_amount = цена диапазона)."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": now + timedelta(days=3), "price": 150},
+            {"starts_at": now + timedelta(days=3), "ends_at": sample_event.date, "price": 200},
+        ])
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
+        await db_session.commit()
+        pm = (await db_session.execute(select(Payment).where(Payment.ticket_id == ticket.id))).scalar_one()
+        assert float(pm.base_amount) == 150.0
+        assert float(pm.amount) == 150.0
+
+    async def test_buy_webapp_uses_range_price_dict_fields(self, db_session, ticket_svc, sample_user, sample_event, event_svc):
+        """buy_ticket_webapp возвращает base_amount = цена диапазона."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date, "price": 250},
+        ])
+        result = await ticket_svc.buy_ticket_webapp(sample_user.id, sample_event.id)
+        await db_session.commit()
+        assert result["base_amount"] == 250.0
+        assert result["amount"] == 250.0
+
+    async def test_buy_with_promo_on_top_of_range_price(self, db_session, ticket_svc, sample_user, sample_event, event_svc):
+        """Промокод применяется к цене диапазона."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date, "price": 200},
+        ])
+        await ticket_svc.create_promo_code(sample_event.id, "SUMMER10", DiscountType.percent, 10)
+        await db_session.commit()
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id, promo_code="SUMMER10")
+        await db_session.commit()
+        pm = (await db_session.execute(select(Payment).where(Payment.ticket_id == ticket.id))).scalar_one()
+        assert float(pm.base_amount) == 200.0
+        assert float(pm.amount) == 180.0  # 200 - 10%
+
+    async def test_buy_fixes_price_for_ticket(self, db_session, ticket_svc, sample_user, sample_event, event_svc):
+        """Цена фиксируется при покупке: рост цены не меняет купленный билет."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": now + timedelta(days=3), "price": 100},
+            {"starts_at": now + timedelta(days=3), "ends_at": sample_event.date, "price": 200},
+        ])
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
+        await db_session.commit()
+        pm1 = (await db_session.execute(select(Payment).where(Payment.ticket_id == ticket.id))).scalar_one()
+        assert float(pm1.base_amount) == 100.0
+        # Организатор поднял первый диапазон — купленный билет не тронут
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": now + timedelta(days=3), "price": 700},
+            {"starts_at": now + timedelta(days=3), "ends_at": sample_event.date, "price": 200},
+        ])
+        pm2 = (await db_session.execute(select(Payment).where(Payment.ticket_id == ticket.id))).scalar_one()
+        assert float(pm2.base_amount) == 100.0
+
+    # ─── Гейты и мутации ───────────────────────────────────────
+
+    async def test_has_event_pro_feature_dynamic_pricing_premium(self, db_session, event_svc, sample_user):
+        """Премиум события даёт dynamic_pricing."""
+        from app.core.services import EventService, UserService
+        user_id = sample_user.id
+        # Pro-подписка нужна, чтобы создать платное owner-событие
+        await UserService(db_session).activate_subscription(
+            user_id, days=30, tier=SubscriptionTier.pro
+        )
+        await db_session.commit()
+        ev = await EventService(db_session).create(
+            title="Prem", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=100, total_tickets=10,
+            channel_id=None, owner_user_id=user_id,
+        )
+        await event_svc.purchase_event_premium(ev.id, user_id)
+        await db_session.commit()
+        assert await event_svc.has_event_pro_feature(ev.id, "dynamic_pricing") is True
+
+    async def test_update_price_to_zero_deletes_ranges(self, db_session, event_svc, sample_event):
+        """Смена цены на 0 удаляет диапазоны (инвариант «динамика только для платных»)."""
+        _, now = await self._ranges(db_session, sample_event)
+        await event_svc.replace_price_ranges(sample_event.id, [
+            {"starts_at": now - timedelta(days=2), "ends_at": sample_event.date, "price": 100},
+        ])
+        await event_svc.update(sample_event.id, price=0)
+        await db_session.commit()
+        assert await event_svc.get_price_ranges(sample_event.id) == []

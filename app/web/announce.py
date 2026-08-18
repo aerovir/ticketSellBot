@@ -4,6 +4,7 @@ Web-контейнер использует тот же TELEGRAM_TOKEN (env_file
 что и telegram-бот, поэтому может постить анонсы напрямую через ChannelManager.
 """
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from aiogram import Bot
@@ -48,12 +49,14 @@ async def post_event_announcement(event_id: UUID) -> bool:
         if channel is None:
             logger.warning("Анонс: канал мероприятия %s не найден", event_id)
             return False
+        # Актуальная цена по дате (динамические цены)
+        price_effective = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
 
     bot = _get_bot()
     if bot is None:
         return False
 
-    text = format_event_text(event, mode="full")
+    text = format_event_text(event, mode="full", price_effective=price_effective)
     manager = ChannelManager(bot)
     try:
         await manager.post_event_announcement(
@@ -79,12 +82,13 @@ async def send_announcement_dm(event_id: UUID, user_telegram_id: str) -> bool:
         event = await event_svc.get_by_id(event_id)
         if event is None:
             return False
+        price_effective = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
 
     bot = _get_bot()
     if bot is None:
         return False
 
-    text = format_event_text(event, mode="full")
+    text = format_event_text(event, mode="full", price_effective=price_effective)
     try:
         await bot.send_message(
             chat_id=int(user_telegram_id),

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
     User, UserIdentity, LinkCode, Event, EventManager, EventPublication, Ticket, Payment,
-    Channel, ChannelAdmin, VKGroup, EventUpgrade, PromoCode, DiscountType,
+    Channel, ChannelAdmin, VKGroup, EventUpgrade, PromoCode, DiscountType, EventPriceRange,
     TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
 )
 from dateutil.relativedelta import relativedelta
@@ -336,6 +336,7 @@ class UserService:
             "qr_codes": {SubscriptionTier.pro},
             "invite_tickets": {SubscriptionTier.pro},
             "promo_codes": {SubscriptionTier.pro},
+            "dynamic_pricing": {SubscriptionTier.pro},
         }
         return tier in FEATURES.get(feature, set())
 
@@ -561,6 +562,7 @@ class ChannelService:
             "qr_codes": {SubscriptionTier.pro},
             "invite_tickets": {SubscriptionTier.pro},
             "promo_codes": {SubscriptionTier.pro},
+            "dynamic_pricing": {SubscriptionTier.pro},
         }
 
         return tier in FEATURES.get(feature, set())
@@ -1237,12 +1239,21 @@ class EventService:
                     "Ваш тариф поддерживает только бесплатные мероприятия. "
                     "Для платных мероприятий нужна подписка Pro или премиум на событие."
                 )
+        # Инвариант динамики цен: при смене цены на 0 диапазоны удаляются.
+        if "price" in data and data["price"] <= 0:
+            await self.session.execute(
+                delete(EventPriceRange).where(EventPriceRange.event_id == event_id)
+            )
 
         # C: при переносе даты обновляем expires_at премиума события
         if "date" in data:
             upgrade = await self._get_upgrade(event_id)
             if upgrade is not None:
                 upgrade.expires_at = event.date
+
+        # C: дата публикации (начало покрытия динамических цен) — ставится один раз
+        if data.get("is_published") and event.published_at is None:
+            event.published_at = datetime.now(timezone.utc)
 
         # Sync available_tickets when total_tickets changes
         if "total_tickets" in data:
@@ -1499,7 +1510,19 @@ class EventService:
         invites_used = (await self.session.execute(invites_used_stmt)).scalar() or 0
 
         sold_pct = round((sold / event.total_tickets * 100), 1) if event.total_tickets > 0 else 0
-        revenue = sold * event.price
+        # Выручка — по фактическим Payment.amount (учитывает скидки и динамические цены).
+        revenue_stmt = (
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .join(Ticket, Payment.ticket_id == Ticket.id)
+            .where(
+                and_(
+                    Ticket.event_id == event_id,
+                    Ticket.status == TicketStatus.active,
+                    Ticket.is_invite == False,
+                )
+            )
+        )
+        revenue = float((await self.session.execute(revenue_stmt)).scalar() or 0)
 
         logger.info("", extra={
             "event_type": "event.get_stats",
@@ -1525,6 +1548,130 @@ class EventService:
             "invites_issued": invites_issued,
             "invites_used": invites_used,
         }
+
+    # ═══════════════════════════════════════════════════════════════
+    # B2: динамические цены по дате (early bird, pro-фича)
+    # ═══════════════════════════════════════════════════════════════
+
+    async def effective_price_at(self, event: Event, dt: datetime) -> Decimal:
+        """Актуальная цена события на момент dt (динамические цены по дате).
+
+        Диапазоны [starts, ends); последний (ends == event.date) — включительно.
+        Если диапазонов нет или событие бесплатное — базовая цена event.price.
+        """
+        if event.price <= 0:
+            return Decimal(str(event.price))
+        stmt = select(EventPriceRange).where(
+            EventPriceRange.event_id == event.id
+        ).order_by(EventPriceRange.starts_at)
+        ranges = list((await self.session.execute(stmt)).scalars().all())
+        for i, r in enumerate(ranges):
+            if r.starts_at <= dt < r.ends_at:
+                return Decimal(str(r.price))
+            if i == len(ranges) - 1 and r.ends_at == event.date and r.starts_at <= dt <= r.ends_at:
+                return Decimal(str(r.price))
+        return Decimal(str(event.price))
+
+    async def get_price_ranges(self, event_id: uuid.UUID) -> list[dict]:
+        """Список ценовых диапазонов мероприятия (sorted by starts_at)."""
+        stmt = select(EventPriceRange).where(
+            EventPriceRange.event_id == event_id
+        ).order_by(EventPriceRange.starts_at)
+        rows = (await self.session.execute(stmt)).scalars().all()
+        return [
+            {
+                "id": str(r.id),
+                "starts_at": r.starts_at.isoformat(),
+                "ends_at": r.ends_at.isoformat(),
+                "price": float(r.price),
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ]
+
+    async def replace_price_ranges(self, event_id: uuid.UUID, ranges: list[dict]) -> list[dict]:
+        """Заменить весь набор ценовых диапазонов (PUT-стиль).
+
+        Диапазоны обязаны сплошь покрывать [event.published_at, event.date]
+        без дыр и пересечений. Только для платных событий (price > 0).
+        """
+        event = await self.session.get(Event, event_id)
+        if event is None:
+            raise ValueError("Мероприятие не найдено")
+        if event.price <= 0:
+            raise ValueError("Динамические цены доступны только для платных мероприятий")
+
+        # Пустой список = выключить динамику (просто очистить, без валидации покрытия)
+        if not ranges:
+            await self.session.execute(
+                delete(EventPriceRange).where(EventPriceRange.event_id == event_id)
+            )
+            await self.session.flush()
+            return []
+
+        start_bound = event.published_at or event.created_at
+        parsed = []
+        for r in ranges:
+            start = r["starts_at"]
+            end = r["ends_at"]
+            price = r["price"]
+            if not start.tzinfo or not end.tzinfo:
+                raise ValueError("Даты диапазонов должны быть с таймзоной")
+            if end <= start:
+                raise ValueError("Дата окончания должна быть позже даты начала")
+            if price < 0:
+                raise ValueError("Цена не может быть отрицательной")
+            if start < start_bound:
+                raise ValueError("Диапазон не может начинаться раньше публикации мероприятия")
+            if end > event.date:
+                raise ValueError("Диапазон не может заканчиваться позже даты мероприятия")
+            parsed.append({"starts_at": start, "ends_at": end, "price": price})
+
+        parsed.sort(key=lambda x: x["starts_at"])
+        cursor = start_bound
+        for p in parsed:
+            if p["starts_at"] > cursor:
+                raise ValueError("Ценовые диапазоны не покрывают весь период (есть «дыра»)")
+            if p["starts_at"] < cursor:
+                raise ValueError("Ценовые диапазоны пересекаются")
+            cursor = p["ends_at"]
+        if cursor < event.date:
+            raise ValueError("Ценовые диапазоны не покрывают период до даты мероприятия")
+
+        await self.session.execute(
+            delete(EventPriceRange).where(EventPriceRange.event_id == event_id)
+        )
+        for p in parsed:
+            self.session.add(EventPriceRange(event_id=event_id, **p))
+        await self.session.flush()
+        return await self.get_price_ranges(event_id)
+
+    async def price_ranges_map(self, event_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[EventPriceRange]]:
+        """Все диапазоны для набора событий одним SELECT (без N+1 в GET /events)."""
+        if not event_ids:
+            return {}
+        stmt = (
+            select(EventPriceRange)
+            .where(EventPriceRange.event_id.in_(event_ids))
+            .order_by(EventPriceRange.starts_at)
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+        out: dict[uuid.UUID, list[EventPriceRange]] = {}
+        for r in rows:
+            out.setdefault(r.event_id, []).append(r)
+        return out
+
+    @staticmethod
+    def resolve_price(ranges: list[EventPriceRange] | None, event, dt: datetime) -> float:
+        """Актуальная цена для buyer-ответа (граничная логика effective_price_at)."""
+        if not ranges:
+            return float(event.price)
+        for i, r in enumerate(ranges):
+            if r.starts_at <= dt < r.ends_at:
+                return float(r.price)
+            if i == len(ranges) - 1 and r.ends_at == event.date and r.starts_at <= dt <= r.ends_at:
+                return float(r.price)
+        return float(event.price)
 
     # ═══════════════════════════════════════════════════════════════
     # C: per-event премиум (единовременная оплата за мероприятие)
@@ -1592,7 +1739,7 @@ class EventService:
         Сначала per-event премиум; иначе fallback на подписку канала/владельца.
         """
         if await self.get_event_is_premium(event_id):
-            return feature in ("paid_events", "qr_codes", "invite_tickets", "promo_codes")
+            return feature in ("paid_events", "qr_codes", "invite_tickets", "promo_codes", "dynamic_pricing")
 
         event = await self.session.get(Event, event_id)
         if event is None:
@@ -1643,6 +1790,7 @@ class TicketService:
         promo_code: опциональный промокод — применяет скидку к цене билета.
         """
         start = time.perf_counter()
+        now = datetime.now(timezone.utc)  # единый момент: валидация и цена по дате
         event = await self.session.get(Event, event_id)
         if event is None:
             logger.warning("", extra={
@@ -1676,7 +1824,7 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Мероприятие неактивно")
-        if event.date < datetime.now(timezone.utc):
+        if event.date < now:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_failed",
                 "event_id": str(event_id),
@@ -1734,8 +1882,11 @@ class TicketService:
         # Decrease available tickets
         event.available_tickets -= 1
 
+        # Актуальная цена по дате (динамические цены) → фиксируется в base_amount
+        event_svc = EventService(self.session)
+        base = await event_svc.effective_price_at(event, now)
+
         # Применение промокода (если передан)
-        base = Decimal(str(event.price))
         discount = Decimal("0")
         pcode = None
         if promo_code:
@@ -1785,6 +1936,7 @@ class TicketService:
         a dict for the API response.
         """
         start = time.perf_counter()
+        now = datetime.now(timezone.utc)  # единый момент: валидация и цена по дате
         event = await self.session.get(Event, event_id)
         if event is None:
             logger.warning("", extra={
@@ -1818,7 +1970,7 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Мероприятие неактивно")
-        if event.date < datetime.now(timezone.utc):
+        if event.date < now:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_webapp_failed",
                 "event_id": str(event_id),
@@ -1876,8 +2028,11 @@ class TicketService:
         # Decrease available tickets
         event.available_tickets -= 1
 
+        # Актуальная цена по дате (динамические цены) → фиксируется в base_amount
+        event_svc = EventService(self.session)
+        base = await event_svc.effective_price_at(event, now)
+
         # Применение промокода (если передан)
-        base = Decimal(str(event.price))
         discount = Decimal("0")
         pcode = None
         if promo_code:

@@ -11,7 +11,7 @@ from uuid import UUID as _UUID
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import urlencode
 
@@ -231,10 +231,9 @@ class TestAPIEndpoints:
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
 
-        with patch(
-            "app.web.routes.EventService.list_upcoming",
-            new_callable=AsyncMock,
-            return_value=[mock_event],
+        with (
+            patch("app.web.routes.EventService.list_upcoming", new_callable=AsyncMock, return_value=[mock_event]),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
         ):
             resp = client.get(
                 "/api/events",
@@ -261,10 +260,9 @@ class TestAPIEndpoints:
         mock_event.total_tickets = 100
         mock_event.is_active = True
 
-        with patch(
-            "app.web.routes.EventService.get_by_id",
-            new_callable=AsyncMock,
-            return_value=mock_event,
+        with (
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
         ):
             resp = client.get(
                 "/api/events/550e8400-e29b-41d4-a716-446655440000",
@@ -2555,3 +2553,144 @@ class TestPromoCodesAPI:
             )
         assert resp.status_code == 201, resp.text
         assert mock_buy.await_args.kwargs["promo_code"] == "SUMMER10"
+
+
+class TestPriceRangesAPI:
+    """Эндпоинты динамических цен: PUT/GET price-ranges + актуальная цена в buyer-ответах."""
+
+    def _mock_event(self):
+        ev = Mock()
+        ev.id = EVENT_ID
+        ev.owner_user_id = None
+        ev.channel_id = _UUID(CHANNEL_ID)
+        ev.price = 100
+        ev.created_at = datetime.now(timezone.utc)
+        return ev
+
+    def test_admin_replace_price_ranges_success(self, client):
+        """PUT price-ranges канальным админом (200)."""
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.EventService.replace_price_ranges", new_callable=AsyncMock, return_value=[{"price": 100}]),
+        ):
+            resp = client.put(
+                f"/api/admin/events/{EVENT_ID}/price-ranges",
+                headers={"X-Skip-Auth": "1"},
+                json={"ranges": [{"starts_at": "2026-08-01T00:00:00Z", "ends_at": "2026-08-02T00:00:00Z", "price": 100}]},
+            )
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()["price_ranges"]) == 1
+
+    def test_admin_replace_price_ranges_no_pro(self, client):
+        """Без pro-фичи dynamic_pricing → 403."""
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.put(
+                f"/api/admin/events/{EVENT_ID}/price-ranges",
+                headers={"X-Skip-Auth": "1"},
+                json={"ranges": []},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_replace_price_ranges_not_admin(self, client):
+        """Пользователь без доступа → 403."""
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+        ):
+            resp = client.put(
+                f"/api/admin/events/{EVENT_ID}/price-ranges",
+                headers={"X-Skip-Auth": "1"},
+                json={"ranges": []},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_replace_price_ranges_conflict(self, client):
+        """Конфликт покрытия/бесплатное → 409."""
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
+            patch("app.web.routes.EventService.replace_price_ranges", new_callable=AsyncMock, side_effect=ValueError("есть «дыра»")),
+        ):
+            resp = client.put(
+                f"/api/admin/events/{EVENT_ID}/price-ranges",
+                headers={"X-Skip-Auth": "1"},
+                json={"ranges": []},
+            )
+        assert resp.status_code == 409
+
+    def test_admin_get_price_ranges(self, client):
+        """GET price-ranges (200)."""
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+            patch("app.web.routes.EventService.get_price_ranges", new_callable=AsyncMock, return_value=[{"price": 100}]),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/price-ranges", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()["price_ranges"]) == 1
+
+    def test_admin_get_price_ranges_not_admin(self, client):
+        """GET price-ranges чужого события → 403."""
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=False),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=self._mock_event()),
+        ):
+            resp = client.get(f"/api/admin/events/{EVENT_ID}/price-ranges", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+    @staticmethod
+    def _mock_range(price, ev):
+        """Мок-диапазон: обычный объект с атрибутами (не SQLAlchemy — избежать relationship)."""
+        rng = Mock()
+        rng.starts_at = datetime.now(timezone.utc) - timedelta(days=2)
+        rng.ends_at = ev.date
+        rng.price = price
+        return rng
+
+    @staticmethod
+    def _mock_event_full():
+        """Mock-событие со ВСЕМИ сериализуемыми атрибутами (иначе jsonable_encoder рекурсирует)."""
+        ev = Mock()
+        ev.id = EVENT_ID
+        ev.title = "Test Event"
+        ev.description = "Desc"
+        ev.location = "Msk"
+        ev.date = datetime.now(timezone.utc) + timedelta(days=14)
+        ev.price = 100
+        ev.available_tickets = 50
+        ev.total_tickets = 100
+        ev.is_active = True
+        return ev
+
+    def test_events_list_effective_price(self, client):
+        """GET /events отдаёт актуальную цену через resolve_price (реальная логика)."""
+        ev = self._mock_event_full()
+        rng = self._mock_range(150, ev)
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.list_upcoming", new_callable=AsyncMock, return_value=[ev]),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={EVENT_ID: [rng]}),
+        ):
+            resp = client.get("/api/events", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()[0]["price"] == 150.0
+
+    def test_event_detail_effective_price(self, client):
+        """GET /events/{id} отдаёт актуальную цену."""
+        ev = self._mock_event_full()
+        rng = self._mock_range(200, ev)
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=ev),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={_UUID(EVENT_ID): [rng]}),
+        ):
+            resp = client.get(f"/api/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["price"] == 200.0
