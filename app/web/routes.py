@@ -7,6 +7,7 @@ All endpoints (except health) require initData validation.
 import csv
 import io
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
@@ -37,6 +38,7 @@ from app.core.schemas import (
     VKGroupRegisterIn,
     PromoCodeCreate,
     BuyIn,
+    PriceRangesUpdate,
 )
 from app.core.services import (
     ChannelAdminService,
@@ -100,6 +102,9 @@ async def list_events(
             events = await svc.list_upcoming(channel_id=cid)
         else:
             events = await svc.list_upcoming()
+        # Актуальная цена по дате (динамические цены) — батч-загрузка диапазонов
+        now = datetime.now(timezone.utc)
+        ranges_map = await svc.price_ranges_map([e.id for e in events])
 
     return [
         {
@@ -107,7 +112,7 @@ async def list_events(
             "title": e.title,
             "date": e.date.isoformat(),
             "location": e.location,
-            "price": float(e.price),
+            "price": EventService.resolve_price(ranges_map.get(e.id), e, now),
             "available_tickets": e.available_tickets,
             "total_tickets": e.total_tickets,
         }
@@ -126,9 +131,12 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
     async with async_session_factory() as session:
         svc = EventService(session)
         event = await svc.get_by_id(uid)
-
-    if event is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        # Актуальная цена по дате (динамические цены)
+        now = datetime.now(timezone.utc)
+        ranges_map = await svc.price_ranges_map([uid])
+        effective_price = EventService.resolve_price(ranges_map.get(uid), event, now)
 
     return {
         "id": str(event.id),
@@ -136,7 +144,7 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         "description": event.description,
         "date": event.date.isoformat(),
         "location": event.location,
-        "price": float(event.price),
+        "price": effective_price,
         "available_tickets": event.available_tickets,
         "total_tickets": event.total_tickets,
         "is_active": event.is_active,
@@ -2180,6 +2188,67 @@ async def admin_toggle_promo(
         await session.commit()
 
     return {"id": str(toggled.id), "is_active": toggled.is_active}
+
+
+# ─── Динамические цены по дате (pro) ──────────────────────────
+
+@router.put("/admin/events/{event_id}/price-ranges")
+async def admin_replace_price_ranges(
+    event_id: str,
+    body: PriceRangesUpdate,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Заменить весь набор ценовых диапазонов (владелец/админ канала, pro).
+
+    Пустой список — выключить динамику. 409 при «дырах»/пересечениях/бесплатном событии.
+    """
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_admin_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Цены по дате управляет владелец мероприятия")
+        has_feature = await event_svc.has_event_pro_feature(uid, "dynamic_pricing")
+        if not has_feature:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Цены по дате доступны на подписке Pro или премиуме события")
+
+        try:
+            result = await event_svc.replace_price_ranges(uid, [r.model_dump() for r in body.ranges])
+            await session.commit()
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    return {"event_id": str(uid), "price_ranges": result}
+
+
+@router.get("/admin/events/{event_id}/price-ranges")
+async def admin_get_price_ranges(
+    event_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Список ценовых диапазонов мероприятия (админ)."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_admin_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Цены по дате управляет владелец мероприятия")
+        ranges = await event_svc.get_price_ranges(uid)
+
+    return {"event_id": str(uid), "price_ranges": ranges}
 
 
 @router.get("/admin/tickets/{ticket_id}/qr")

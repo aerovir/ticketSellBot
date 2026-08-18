@@ -231,6 +231,19 @@ jobs:
             ALTER TABLE payments ADD COLUMN IF NOT EXISTS promo_code VARCHAR(64);
             UPDATE payments SET base_amount = amount, discount_amount = 0 WHERE base_amount IS NULL;
 
+            -- Динамические цены по дате (миграция 0013)
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+            ALTER TABLE payments ADD COLUMN IF NOT EXISTS price_range_label VARCHAR(64);
+            CREATE TABLE IF NOT EXISTS event_price_ranges (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                starts_at TIMESTAMPTZ NOT NULL,
+                ends_at TIMESTAMPTZ NOT NULL,
+                price NUMERIC(10,2) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS ix_event_price_ranges_event_id ON event_price_ranges(event_id);
+
             -- Организатор: подписка на пользователя + owner-мероприятия
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ;

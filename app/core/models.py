@@ -263,6 +263,8 @@ class Event(Base):
     available_tickets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Дата публикации (начало обязательного покрытия ценовых диапазонов по дате).
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     media_telegram_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "photo" или "video"
     is_free: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -276,6 +278,7 @@ class Event(Base):
     channel = relationship("Channel", back_populates="events", lazy="raise")
     owner = relationship("User", back_populates="owned_events", lazy="raise")
     managers = relationship("EventManager", back_populates="event", lazy="raise", cascade="all, delete-orphan")
+    price_ranges = relationship("EventPriceRange", back_populates="event", lazy="raise", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Event {self.title}>"
@@ -369,6 +372,8 @@ class Payment(Base):
     base_amount: Mapped[float | None] = mapped_column(Numeric(precision=10, scale=2), nullable=True)
     discount_amount: Mapped[float | None] = mapped_column(Numeric(precision=10, scale=2), nullable=True)
     promo_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Снимок ценового диапазона, по которому куплен билет (динамические цены, pro).
+    price_range_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -449,6 +454,35 @@ class PromoCode(Base):
 
     def __repr__(self):
         return f"<PromoCode {self.code} — {self.discount_type.value}:{self.discount_value}>"
+
+
+class EventPriceRange(Base):
+    """Ценовой диапазон мероприятия по дате (динамические цены, pro).
+
+    Диапазоны обязаны без дыр покрывать [event.published_at, event.date].
+    Покупатель платит цену диапазона, покрывающего дату покупки;
+    цена фиксируется в Payment.base_amount при покупке.
+    """
+
+    __tablename__ = "event_price_ranges"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    price: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    event = relationship("Event", back_populates="price_ranges", lazy="raise")
+
+    def __repr__(self):
+        return f"<EventPriceRange {self.event_id} {self.starts_at}-{self.ends_at}: {self.price}>"
 
 
 class ChannelAdmin(Base):

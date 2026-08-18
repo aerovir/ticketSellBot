@@ -1,7 +1,7 @@
 """Унифицированное форматирование текста мероприятия (общее для бота и web)."""
 
 
-def format_event_text(event, mode: str = "full") -> str:
+def format_event_text(event, mode: str = "full", price_effective: float | None = None) -> str:
     """Форматировать мероприятие в текст (HTML-safe для parse_mode=HTML).
 
     Args:
@@ -9,18 +9,21 @@ def format_event_text(event, mode: str = "full") -> str:
         mode: "full" — анонс/детали пользователя,
               "short" — пункт списка,
               "admin" — админ-панель/список
+        price_effective: актуальная цена по дате (динамические цены).
+            Если передана — печатается она; иначе базовая event.price.
 
     Returns:
         str: форматированный текст
     """
     date_str = event.date.strftime("%d.%m.%Y %H:%M")
+    price = price_effective if price_effective is not None else float(event.price)
 
     if mode == "short":
         return (
             f"📌 <b>{event.title}</b>\n"
             f"📅 {date_str}\n"
             f"📍 {event.location or 'Не указано'}\n"
-            f"💰 {event.price:.0f}₽ | Осталось: {event.available_tickets}/{event.total_tickets}\n"
+            f"💰 {price:.0f}₽ | Осталось: {event.available_tickets}/{event.total_tickets}\n"
         )
 
     if mode == "admin":
@@ -36,7 +39,7 @@ def format_event_text(event, mode: str = "full") -> str:
             f"{event.description or 'Описание отсутствует'}\n\n"
             f"📅 {date_str}\n"
             f"📍 {event.location or 'Не указано'}\n"
-            f"💰 {event.price:.0f}₽\n"
+            f"💰 {price:.0f}₽\n"
             f"🎟 Осталось: {event.available_tickets}/{event.total_tickets}\n"
             f"{status_icon} {status_text} | {publish_icon} {publish_text}\n"
             f"{media_text}"
@@ -48,6 +51,6 @@ def format_event_text(event, mode: str = "full") -> str:
         f"{event.description or 'Описание отсутствует'}\n\n"
         f"📅 {date_str}\n"
         f"📍 {event.location or 'Не указано'}\n"
-        f"💰 {event.price:.0f}₽\n"
+        f"💰 {price:.0f}₽\n"
         f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}"
     )

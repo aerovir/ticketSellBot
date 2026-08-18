@@ -84,6 +84,18 @@ class BuyIn(BaseModel):
     promo_code: Optional[str] = Field(default=None, max_length=64)
 
 
+class PriceRangeIn(BaseModel):
+    """Один ценовой диапазон (динамические цены по дате)."""
+    starts_at: datetime
+    ends_at: datetime
+    price: float = Field(ge=0)
+
+
+class PriceRangesUpdate(BaseModel):
+    """Заменить весь набор ценовых диапазонов (пустой список = выключить динамику)."""
+    ranges: list[PriceRangeIn] = []
+
+
 class EventOut(BaseModel):
     id: UUID
     channel_id: UUID

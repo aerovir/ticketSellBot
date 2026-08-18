@@ -182,3 +182,15 @@ def test_appjs_admin_promo_section():
     assert "/promo-codes" in APP_JS
     assert "adminCreatePromo" in APP_JS
     assert "adminTogglePromo" in APP_JS
+
+
+# ─── Динамические цены по дате (early bird, pro) ────────────────
+
+
+def test_appjs_dynamic_pricing():
+    """Секция «Цены по дате» в форме/админке + CRUD-функции."""
+    assert "Цены по дате" in APP_JS
+    assert "/price-ranges" in APP_JS
+    assert "addPriceRangeRow" in APP_JS
+    assert "adminCreatePriceRange" in APP_JS
+    assert "adminDeletePriceRange" in APP_JS
