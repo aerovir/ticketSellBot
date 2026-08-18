@@ -225,6 +225,12 @@ jobs:
             ALTER TABLE tickets ADD COLUMN IF NOT EXISTS invited_by VARCHAR(255);
             ALTER TABLE tickets ALTER COLUMN user_id DROP NOT NULL;
 
+            -- Промокоды (миграция 0012): поля применения скидки на платеже
+            ALTER TABLE payments ADD COLUMN IF NOT EXISTS base_amount NUMERIC(10,2);
+            ALTER TABLE payments ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(10,2);
+            ALTER TABLE payments ADD COLUMN IF NOT EXISTS promo_code VARCHAR(64);
+            UPDATE payments SET base_amount = amount, discount_amount = 0 WHERE base_amount IS NULL;
+
             -- Организатор: подписка на пользователя + owner-мероприятия
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ;
