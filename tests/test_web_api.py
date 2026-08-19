@@ -230,6 +230,8 @@ class TestAPIEndpoints:
         mock_event.price = 1000.0
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
+        mock_event.media_telegram_file_id = None
+        mock_event.media_type = None
 
         with (
             patch("app.web.routes.EventService.list_upcoming", new_callable=AsyncMock, return_value=[mock_event]),
@@ -259,6 +261,8 @@ class TestAPIEndpoints:
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
         mock_event.is_active = True
+        mock_event.media_telegram_file_id = None
+        mock_event.media_type = None
 
         with (
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
@@ -589,6 +593,8 @@ class TestAdminAPI:
         mock_event.is_active = True
         mock_event.is_published = True
         mock_event.is_free = False
+        mock_event.media_telegram_file_id = None
+        mock_event.media_type = None
 
         with (
             admin_auth(is_super=True, channel_ids=[]),
@@ -954,7 +960,7 @@ class TestSuperAdminGaps:
         """GET /api/admin/health — статус, username, БД."""
         with (
             admin_auth(is_super=True, channel_ids=[]),
-            patch("app.web.routes._get_bot", return_value=Mock()),
+            patch("app.web.routes.get_telegram_bot", return_value=Mock()),
         ):
             resp = client.get("/api/admin/health", headers={"X-Skip-Auth": "1"})
         # Запрос к реальной БД может вернуть 500 в тесте — проверяем только код
@@ -1609,6 +1615,8 @@ class TestCoverageGaps:
         mock_event.is_active = True
         mock_event.is_published = True
         mock_event.is_free = False
+        mock_event.media_telegram_file_id = None
+        mock_event.media_type = None
 
         with (
             admin_auth(is_super=True, channel_ids=[]),
@@ -1947,6 +1955,8 @@ class TestOrganizerApi:
         mock_event.is_active = True
         mock_event.is_published = True
         mock_event.is_free = True
+        mock_event.media_telegram_file_id = None
+        mock_event.media_type = None
 
         with (
             admin_auth(is_super=False, channel_ids=[], sub_valid=True, organizer=True),
@@ -2670,6 +2680,8 @@ class TestPriceRangesAPI:
         ev.available_tickets = 50
         ev.total_tickets = 100
         ev.is_active = True
+        ev.media_telegram_file_id = None
+        ev.media_type = None
         return ev
 
     def test_events_list_effective_price(self, client):
@@ -2767,3 +2779,76 @@ class TestAdminUserSubscribe:
         assert resp.status_code == 200, resp.text
         assert resp.json()["is_subscription_active"] is True
         assert resp.json()["subscription_tier"] == "pro"
+
+
+class TestEventMedia:
+    """Постеры мероприятий: media в ответах API + прокси-эндпоинт."""
+
+    def test_events_list_includes_media(self, client):
+        """GET /events отдаёт media_file_id/media_type."""
+        from app.web.routes import EventService
+        mock_events = []
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.list_upcoming", new_callable=AsyncMock, return_value=mock_events),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+        ):
+            resp = client.get("/api/events", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        # пустой список — структура проверится через деталь
+
+    def test_event_detail_includes_media(self, client):
+        """GET /events/{id} отдаёт media_file_id/media_type."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.title = "Test"
+        mock_event.description = "Desc"
+        mock_event.date = datetime.now(timezone.utc) + timedelta(days=7)
+        mock_event.location = "Msk"
+        mock_event.price = 100
+        mock_event.available_tickets = 50
+        mock_event.total_tickets = 100
+        mock_event.is_active = True
+        mock_event.media_telegram_file_id = "AgAC_123"
+        mock_event.media_type = "photo"
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+        ):
+            resp = client.get(f"/api/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["media_file_id"] == "AgAC_123"
+        assert resp.json()["media_type"] == "photo"
+
+    def test_event_media_endpoint_returns_image(self, client):
+        """GET /events/{id}/media отдаёт картинку из Telegram."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.media_telegram_file_id = "AgAC_123"
+        mock_file = Mock()
+        mock_file.file_path = "photos/file.jpg"
+        mock_bot = AsyncMock()
+        mock_bot.get_file.return_value = mock_file
+        mock_bot.download_file.return_value = b"\xff\xd8\xff\xe0JFIF"
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.get_telegram_bot", new_callable=Mock, return_value=mock_bot),
+        ):
+            resp = client.get(f"/api/events/{EVENT_ID}/media", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert "image" in resp.headers["content-type"]
+        assert resp.content.startswith(b"\xff\xd8")
+
+    def test_event_media_endpoint_no_media(self, client):
+        """Нет media → 404."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.media_telegram_file_id = None
+        with (
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.get(f"/api/events/{EVENT_ID}/media", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 404

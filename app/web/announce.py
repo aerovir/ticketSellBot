@@ -7,30 +7,16 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from aiogram import Bot
 from sqlalchemy import select
 
-from app.config import settings
 from app.core.database import async_session_factory
 from app.core.models import Channel
 from app.core.services import ChannelService, EventService
 from app.platforms.telegram.channel import ChannelManager
 from app.platforms.telegram.formatting import format_event_text
+from app.web.telegram_client import get_telegram_bot
 
 logger = logging.getLogger("ticketbot.web.announce")
-
-_bot: Bot | None = None
-
-
-def _get_bot() -> Bot | None:
-    """Lazily create a Bot from settings; None if no token configured."""
-    global _bot
-    if not settings.telegram_token:
-        logger.warning("TELEGRAM_TOKEN не настроен — анонсы из web недоступны")
-        return None
-    if _bot is None:
-        _bot = Bot(token=settings.telegram_token)
-    return _bot
 
 
 async def post_event_announcement(event_id: UUID) -> bool:
@@ -52,7 +38,7 @@ async def post_event_announcement(event_id: UUID) -> bool:
         # Актуальная цена по дате (динамические цены)
         price_effective = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
 
-    bot = _get_bot()
+    bot = get_telegram_bot()
     if bot is None:
         return False
 
@@ -84,7 +70,7 @@ async def send_announcement_dm(event_id: UUID, user_telegram_id: str) -> bool:
             return False
         price_effective = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
 
-    bot = _get_bot()
+    bot = get_telegram_bot()
     if bot is None:
         return False
 
@@ -120,7 +106,7 @@ async def send_broadcast(text: str) -> tuple[int, int]:
     if not channels:
         return 0, 0
 
-    bot = _get_bot()
+    bot = get_telegram_bot()
     if bot is None:
         return 0, len(channels)
 

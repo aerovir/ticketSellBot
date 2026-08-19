@@ -14,6 +14,22 @@
     --tg-section-bg: var(--tg-theme-section-bg-color, #ffffff);
     --radius: 12px;
     --radius-sm: 8px;
+
+    /* Сдержанный минимализм: акцент + нейтральные поверхности */
+    --accent: #5b7cfa;
+    --surface: var(--tg-section-bg, #ffffff);
+    --border: var(--tg-secondary-bg, #e8e8ea);
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05);
+    --badge-green-bg: rgba(46, 204, 113, 0.12);
+    --badge-green-text: #1e8e4e;
+    --badge-orange-bg: rgba(243, 156, 18, 0.14);
+    --badge-orange-text: #b3741a;
+    --badge-red-bg: rgba(231, 76, 60, 0.12);
+    --badge-red-text: #c0392b;
+    --badge-purple-bg: rgba(155, 89, 182, 0.12);
+    --badge-purple-text: #7d3c98;
+    --badge-gray-bg: rgba(127, 140, 141, 0.12);
+    --badge-gray-text: #5f6a6a;
 }
 
 * {
@@ -710,11 +726,12 @@ body {
 
 /* ─── Badges ─── */
 
-.badge-published { background: #2ecc71; color: white; }
-.badge-draft { background: #f39c12; color: white; }
-.badge-off { background: #e74c3c; color: white; }
-.badge-tier-pro { background: #9b59b6; color: white; }
-.badge-tier-basic { background: #7f8c8d; color: white; }
+/* Приглушённые бейджи (сдержанный минимализм): мягкий фон + цветной текст */
+.badge-published { background: var(--badge-green-bg); color: var(--badge-green-text); }
+.badge-draft { background: var(--badge-orange-bg); color: var(--badge-orange-text); }
+.badge-off { background: var(--badge-red-bg); color: var(--badge-red-text); }
+.badge-tier-pro { background: var(--badge-purple-bg); color: var(--badge-purple-text); }
+.badge-tier-basic { background: var(--badge-gray-bg); color: var(--badge-gray-text); }
 
 /* ─── Forms ─── */
 
@@ -769,9 +786,9 @@ textarea.form-input {
 
 .stat-revenue {
     grid-column: 1 / -1;
-    background: linear-gradient(135deg, #f39c12, #e67e22);
-    color: white;
-    border: none;
+    background: var(--badge-orange-bg);
+    color: var(--badge-orange-text);
+    border: 1px solid var(--border);
 }
 
 .stat-value {
@@ -870,3 +887,66 @@ textarea.form-input {
     justify-content: center;
     margin-top: 12px;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Редизайн: сдержанный минимализм + постеры
+   ═══════════════════════════════════════════════════════════ */
+
+/* Лёгкие тени на карточках вместо плоских бордеров */
+.event-card, .ticket-card, .admin-list-item, .profile-card, .confirm-card, .checkin-box, .stat-card {
+    box-shadow: var(--shadow-card);
+    border: 1px solid var(--border);
+}
+
+/* Fade-переход между страницами */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.page-enter { animation: fadeIn 0.18s ease; }
+
+/* Аватар из фото Telegram (круглый) */
+.profile-avatar-img {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    object-fit: cover;
+    display: inline-block;
+    margin-bottom: 8px;
+}
+
+/* Постеры мероприятий */
+.event-poster {
+    width: 100%;
+    max-height: 180px;
+    object-fit: cover;
+    border-radius: var(--radius) var(--radius) 0 0;
+    margin: -16px -16px 12px;
+    width: calc(100% + 32px);
+    display: block;
+}
+.event-poster-detail {
+    max-height: 240px;
+    border-radius: var(--radius);
+    margin: 0 0 12px;
+    width: 100%;
+}
+
+/* Индикатор активного таба */
+.tab.active::after {
+    content: "";
+    display: block;
+    width: 20px;
+    height: 3px;
+    background: var(--accent);
+    border-radius: 2px;
+    margin: 3px auto 0;
+}
+
+/* Утилитарные классы (вместо inline-стилей) */
+.flex-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.mt-8 { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
+.mb-12 { margin-bottom: 12px; }
+.pad-16 { padding: 16px; }
+.text-hint { color: var(--tg-hint); }

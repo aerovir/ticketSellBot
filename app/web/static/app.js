@@ -469,13 +469,19 @@ function renderProfile() {
     const roleText = roleNames[me.role] || me.role;
     const channels = me.channels || [];
 
+    // Аватар из фото Telegram (если доступно), иначе эмодзи
+    const tgUser = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) || null;
+    const avatarHtml = tgUser && tgUser.photo_url
+        ? `<img class="profile-avatar-img" src="${tgUser.photo_url}" alt="">`
+        : '<div class="profile-avatar">👤</div>';
+
     document.getElementById("profileContent").innerHTML = `
         <div class="profile-card">
-            <div class="profile-avatar">👤</div>
+            ${avatarHtml}
             <h2>${escapeHtml(me.name || "Пользователь")}</h2>
             <p class="hint">Telegram ID: <code>${escapeHtml(me.telegram_user_id)}</code></p>
             <span class="badge badge-role">${roleText}</span>
-            <button class="btn btn-sm btn-secondary" style="margin-top:12px" onclick="editName()">✏️ Изменить имя</button>
+            <button class="btn btn-sm btn-secondary mt-12" onclick="editName()">✏️ Изменить имя</button>
         </div>
         <h3 style="margin:20px 0 10px">Мои каналы</h3>
         ${channels.length === 0
@@ -553,9 +559,13 @@ async function api(path, options = {}) {
 // ─── Navigation ─────────────────────────────────────────────────
 
 function showPage(pageId) {
-    document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+    document.querySelectorAll(".page").forEach(p => { p.classList.remove("active"); p.classList.remove("page-enter"); });
     const page = document.getElementById(`page-${pageId}`);
-    if (page) page.classList.add("active");
+    if (page) {
+        page.classList.add("active");
+        // Лёгкий fade-переход между страницами (минимализм)
+        page.classList.add("page-enter");
+    }
     document.getElementById("loadingOverlay").classList.remove("active");
 }
 
@@ -650,8 +660,10 @@ function renderEvents(events) {
     for (const e of events) {
         const dateStr = formatDate(e.date);
         const soldOut = e.available_tickets <= 0;
+        const poster = e.media_file_id ? `<img class="event-poster" src="/api/events/${e.id}/media" alt="" loading="lazy">` : '';
         html += `
             <div class="event-card" onclick="showEventDetail('${e.id}')">
+                ${poster}
                 <div class="event-card-header">
                     <h3>${escapeHtml(e.title)}</h3>
                     ${soldOut ? '<span class="badge badge-soldout">Sold out</span>' : ''}
@@ -710,8 +722,11 @@ function renderEvent(event) {
         buyButton = `<button class="btn btn-primary btn-lg" onclick="showConfirm('${event.id}')">🎟 Купить билет — ${formatPrice(event.price)}</button>`;
     }
 
+    const poster = event.media_file_id ? `<img class="event-poster event-poster-detail" src="/api/events/${event.id}/media" alt="">` : '';
+
     container.innerHTML = `
         <div class="event-detail">
+            ${poster}
             <h2>${escapeHtml(event.title)}</h2>
             ${event.description ? `<p class="event-description">${escapeHtml(event.description)}</p>` : ''}
             <div class="event-meta">
