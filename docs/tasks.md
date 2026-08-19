@@ -250,6 +250,7 @@
 | 199 | Feat: промокоды — frontend (поле «Промокод» в подтверждении, скидка/итого на странице успеха, секция «Промокоды» в админке: форма + список + вкл/выкл) | ✅ done (код) | 2026-08-17 | — (feature/promo-codes) |
 | 200 | Тесты: промокоды — 22 сервисных (TestPromoCodes), 9 web API (TestPromoCodesAPI), 2 frontend smoke, 1 e2e (test_promo_e2e.py) — всего 465 | ✅ done (код) | 2026-08-17 | — (feature/promo-codes) |
 | 201 | Feat: динамические цены по дате (early bird, pro) — модель EventPriceRange + миграция 0013 + published_at + PUT/GET /price-ranges + effective_price_at + статистика по факту + анонсы с актуальной ценой | ✅ done (код) | 2026-08-18 | — (feature/dynamic-pricing) |
+| 202 | Feat: admin-подписка организатора без канала — POST /admin/users/{telegram_user_id}/subscription (суперадмин, по Telegram ID, дни+tier), подписка в /admin/users/{id}, UI блок «Подписать» в инфо о пользователе | ✅ done (код) | 2026-08-18 | — (feature/admin-user-subscription) |
 
 ## Feature Future — что не реализовано по действиям пользователей (2026-08-13)
 

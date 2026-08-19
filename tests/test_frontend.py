@@ -194,3 +194,20 @@ def test_appjs_dynamic_pricing():
     assert "addPriceRangeRow" in APP_JS
     assert "adminCreatePriceRange" in APP_JS
     assert "adminDeletePriceRange" in APP_JS
+
+
+# ─── Admin-подписка организатора (суперадмин) ───────────────────
+
+
+def test_appjs_admin_user_subscribe():
+    """Суперадмин выдаёт подписку организатору в «Инфо о пользователе»."""
+    assert "Подписать" in APP_JS
+    assert "adminUserSubscribe" in APP_JS
+    assert "/subscription" in APP_JS
+
+
+def test_appjs_admin_user_list_subscribe():
+    """В списке «Пользователи» суперадмин может подписать прямо из карточки."""
+    assert "adminListUserSubscribe" in APP_JS
+    assert "ul_sub_days_" in APP_JS
+    assert "🟢 Подписать" in APP_JS
