@@ -1828,6 +1828,9 @@ async def admin_user_info(
         "telegram_user_id": telegram_user_id,
         "name": user.name,
         "created_at": user.created_at.isoformat() if user.created_at else None,
+        "is_subscription_active": user.is_subscription_active,
+        "subscription_tier": user.subscription_tier.value if user.subscription_tier else None,
+        "subscription_until": user.subscription_until.isoformat() if user.subscription_until else None,
         "channels": [
             {
                 "id": str(ch.id),
@@ -1838,6 +1841,34 @@ async def admin_user_info(
             }
             for ch in channels
         ],
+    }
+
+
+@router.post("/admin/users/{telegram_user_id}/subscription")
+async def admin_user_subscribe(
+    telegram_user_id: str,
+    body: SubscribeIn,
+    current: CurrentUser = Depends(require_super_admin),
+):
+    """Активировать/продлить подписку организатора без канала (по Telegram ID, суперадмин).
+
+    Аналог канальной подписки (/admin/channels/{id}/subscribe), но для
+    пользователя: суперадмин выдаёт подписку организатору напрямую.
+    """
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_by_platform_user_id(PlatformType.telegram, telegram_user_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+        user = await user_svc.activate_subscription(
+            user.id, days=body.duration_days, tier=body.tier,
+        )
+        await session.commit()
+
+    return {
+        "telegram_user_id": telegram_user_id,
+        "subscription_tier": user.subscription_tier.value,
+        "subscription_until": user.subscription_until.isoformat() if user.subscription_until else None,
     }
 
 

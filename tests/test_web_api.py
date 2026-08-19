@@ -886,6 +886,9 @@ class TestSuperAdminGaps:
         mock_user = Mock(id=USER_ID)
         mock_user.name = "Иван"
         mock_user.created_at = None
+        mock_user.is_subscription_active = False
+        mock_user.subscription_tier.value = "basic"
+        mock_user.subscription_until = None
 
         with (
             admin_auth(is_super=True, channel_ids=[]),
@@ -2694,3 +2697,73 @@ class TestPriceRangesAPI:
             resp = client.get(f"/api/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200, resp.text
         assert resp.json()["price"] == 200.0
+
+
+class TestAdminUserSubscribe:
+    """Суперадмин выдаёт подписку организатору без канала (по Telegram ID)."""
+
+    def test_admin_user_subscribe_success(self, client):
+        """Суперадмин выдаёт подписку пользователю (200)."""
+        mock_user = Mock()
+        mock_user.id = _UUID(USER_ID)
+        mock_user.telegram_user_id = "12345"
+        mock_user.is_subscription_active = True
+        mock_user.subscription_tier.value = "pro"
+        mock_user.subscription_until = datetime.now(timezone.utc)
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.get_by_platform_user_id", new_callable=AsyncMock, return_value=mock_user),
+            patch("app.web.routes.UserService.activate_subscription", new_callable=AsyncMock, return_value=mock_user),
+        ):
+            resp = client.post(
+                "/api/admin/users/12345/subscription",
+                headers={"X-Skip-Auth": "1"},
+                json={"duration_days": 30, "tier": "pro"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["subscription_tier"] == "pro"
+
+    def test_admin_user_subscribe_not_super(self, client):
+        """Не суперадмин → 403."""
+        with admin_auth(is_super=False, channel_ids=[]):
+            resp = client.post(
+                "/api/admin/users/12345/subscription",
+                headers={"X-Skip-Auth": "1"},
+                json={"duration_days": 30, "tier": "pro"},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_user_subscribe_not_found(self, client):
+        """Юзер не в БД → 404."""
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.get_by_platform_user_id", new_callable=AsyncMock, return_value=None),
+        ):
+            resp = client.post(
+                "/api/admin/users/99999/subscription",
+                headers={"X-Skip-Auth": "1"},
+                json={"duration_days": 30, "tier": "pro"},
+            )
+        assert resp.status_code == 404
+
+    def test_admin_user_info_returns_subscription(self, client):
+        """GET /admin/users/{id} отдаёт подписку пользователя."""
+        mock_user = Mock()
+        mock_user.id = _UUID(USER_ID)
+        mock_user.telegram_user_id = "12345"
+        mock_user.name = "Dev"
+        mock_user.created_at = datetime.now(timezone.utc)
+        mock_user.is_subscription_active = True
+        mock_user.subscription_tier.value = "pro"
+        mock_user.subscription_until = datetime.now(timezone.utc)
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.get_by_platform_user_id", new_callable=AsyncMock, return_value=mock_user),
+            patch("app.web.routes.ChannelService.get_channels_by_admin", new_callable=AsyncMock, return_value=[]),
+        ):
+            resp = client.get("/api/admin/users/12345", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_subscription_active"] is True
+        assert resp.json()["subscription_tier"] == "pro"

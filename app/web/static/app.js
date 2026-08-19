@@ -420,13 +420,39 @@ async function showAdminUserList() {
         const users = await api("/api/admin/users");
         let html = `<h2 style="padding:16px">👥 Пользователи (${users.length})</h2>`;
         for (const u of users) {
+            const active = u.is_subscription_active;
             html += `<div class="event-card" style="margin:0 16px 8px">
-                <div><b>${escapeHtml(u.name || u.telegram_user_id)}</b></div>
-                <div class="hint">ID: ${escapeHtml(u.telegram_user_id)} · ${u.subscription_tier}</div>
+                <div><b>${escapeHtml(u.name || u.telegram_user_id)}</b>
+                    <span class="badge ${u.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${escapeHtml(u.subscription_tier || '—')}</span>
+                    ${active ? '<span class="badge badge-published">🟢</span>' : '<span class="badge badge-off">🔴</span>'}
+                </div>
+                <div class="hint">ID: ${escapeHtml(u.telegram_user_id)}</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+                    <input class="form-input" id="ul_sub_days_${escapeHtml(u.telegram_user_id)}" type="number" min="1" value="30" style="width:64px" title="Дни">
+                    <select class="form-input" id="ul_sub_tier_${escapeHtml(u.telegram_user_id)}" style="width:90px">
+                        <option value="basic">basic</option>
+                        <option value="pro">pro</option>
+                    </select>
+                    <button class="btn btn-sm btn-primary" onclick="adminListUserSubscribe('${escapeHtml(u.telegram_user_id)}')">🟢 Подписать</button>
+                </div>
             </div>`;
         }
         document.getElementById("homeContent").innerHTML = html;
     } catch (e) { showToast(e.message, true); }
+}
+
+async function adminListUserSubscribe(userId) {
+    const days = parseInt(document.getElementById(`ul_sub_days_${userId}`).value, 10) || 30;
+    const tier = document.getElementById(`ul_sub_tier_${userId}`).value;
+    try {
+        await api(`/api/admin/users/${encodeURIComponent(userId)}/subscription`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ duration_days: days, tier }),
+        });
+        showToast("✅ Подписка выдана");
+        await showAdminUserList();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
 async function showProfile() {
@@ -2340,6 +2366,23 @@ async function doUserInfoLookup() {
                 <h2>${escapeHtml(user.name || "Без имени")}</h2>
                 <p class="hint">Telegram ID: <code>${escapeHtml(user.telegram_user_id)}</code></p>
             </div>
+            <div class="profile-card" style="margin-top:16px">
+                <h3>Подписка организатора</h3>
+                <p class="hint">
+                    Статус: ${user.is_subscription_active ? '🟢 активна' : '🔴 нет'}
+                    · тариф: ${escapeHtml(user.subscription_tier || '—')}
+                    · до: ${user.subscription_until ? formatDate(user.subscription_until) : '—'}
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                    <input class="form-input" id="ui_sub_days" type="number" min="1" value="30" style="width:80px" title="Дни">
+                    <select class="form-input" id="ui_sub_tier" style="width:110px">
+                        <option value="basic">basic</option>
+                        <option value="pro">pro</option>
+                    </select>
+                    <button class="btn btn-sm btn-primary" onclick="adminUserSubscribe('${user.telegram_user_id}')">🟢 Подписать</button>
+                </div>
+                <div class="hint" style="margin:4px 0 0">Если пользователь не найден — он должен хоть раз зайти в бота/Mini App</div>
+            </div>
             <h3 style="margin:16px 0 8px">Каналы (${channels.length})</h3>
             ${channels.length === 0
                 ? '<p class="hint">Нет каналов</p>'
@@ -2354,6 +2397,20 @@ async function doUserInfoLookup() {
     } catch (e) {
         resultBox.innerHTML = `<div class="checkin-result checkin-fail">❌ ${escapeHtml(e.message || "Пользователь не найден")}</div>`;
     }
+}
+
+async function adminUserSubscribe(userId) {
+    const days = parseInt(document.getElementById("ui_sub_days").value, 10) || 30;
+    const tier = document.getElementById("ui_sub_tier").value;
+    try {
+        await api(`/api/admin/users/${encodeURIComponent(userId)}/subscription`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ duration_days: days, tier }),
+        });
+        showToast("✅ Подписка выдана");
+        doUserInfoLookup();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
 // ─── Здоровье (super-admin) ───────────────────────────────────
