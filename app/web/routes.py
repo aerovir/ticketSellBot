@@ -57,7 +57,8 @@ from app.web.dependencies import (
     validate_init_data,
 )
 from app.platforms.telegram.formatting import format_event_text
-from app.web.announce import _get_bot, post_event_announcement, send_announcement_dm, send_broadcast
+from app.web.announce import post_event_announcement, send_announcement_dm, send_broadcast
+from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import post_to_group_wall, verify_group_token, send_vk_ticket_dm
 
 logger = logging.getLogger("ticketbot.web.routes")
@@ -66,7 +67,7 @@ router = APIRouter()
 
 async def _send_ticket_dm(telegram_user_id: str, text: str) -> bool:
     """Отправить сообщение о билете в личные сообщения пользователю."""
-    bot = _get_bot()
+    bot = get_telegram_bot()
     if bot is None:
         return False
     try:
@@ -115,6 +116,8 @@ async def list_events(
             "price": EventService.resolve_price(ranges_map.get(e.id), e, now),
             "available_tickets": e.available_tickets,
             "total_tickets": e.total_tickets,
+            "media_file_id": e.media_telegram_file_id,
+            "media_type": e.media_type,
         }
         for e in events
     ]
@@ -148,7 +151,65 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         "available_tickets": event.available_tickets,
         "total_tickets": event.total_tickets,
         "is_active": event.is_active,
+        "media_file_id": event.media_telegram_file_id,
+        "media_type": event.media_type,
     }
+
+
+# Простой in-memory кэш постеров (file_id → bytes), чтобы не дёргать Telegram API на каждый запрос.
+_media_cache: dict[str, bytes] = {}
+_MEDIA_CACHE_MAX = 64
+
+
+@router.get("/events/{event_id}/media")
+async def event_media(event_id: str):
+    """Постер мероприятия: скачивает media_telegram_file_id через Telegram Bot.
+
+    Публичный (постер виден как анонс). 404 если нет media, 502 если TG недоступен.
+    """
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event = await EventService(session).get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        file_id = event.media_telegram_file_id
+        media_type = event.media_type or "photo"
+
+    if not file_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="У мероприятия нет постера")
+
+    # Кэш
+    cached = _media_cache.get(file_id)
+    if cached is not None:
+        return StreamingResponse(io.BytesIO(cached), media_type="image/jpeg")
+
+    bot = get_telegram_bot()
+    if bot is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Telegram API недоступен")
+
+    try:
+        tg_file = await bot.get_file(file_id)
+        data = await bot.download_file(tg_file.file_path)
+        raw = data.read() if hasattr(data, "read") else bytes(data)
+    except Exception as e:
+        logger.warning("Не удалось скачать постер %s: %s", event_id, e)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Ошибка загрузки постера")
+
+    # Кэшируем (простейший LRU-по размеру)
+    if len(_media_cache) >= _MEDIA_CACHE_MAX:
+        _media_cache.pop(next(iter(_media_cache)))
+    _media_cache[file_id] = raw
+
+    mime = "image/jpeg"
+    if media_type == "video":
+        mime = "video/mp4"
+    elif raw[:3] == b"\x89PN":
+        mime = "image/png"
+    return StreamingResponse(io.BytesIO(raw), media_type=mime)
 
 
 @router.post("/events/{event_id}/buy", status_code=status.HTTP_201_CREATED)
@@ -866,6 +927,8 @@ async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
             "is_published": e.is_published,
             "is_free": e.is_free,
             "is_premium": premium_map.get(e.id, False),
+            "media_file_id": e.media_telegram_file_id,
+            "media_type": e.media_type,
         }
         for e in events
     ]
@@ -962,6 +1025,8 @@ async def admin_get_event(
         "is_published": event.is_published,
         "is_free": event.is_free,
         "is_premium": is_premium,
+        "media_file_id": event.media_telegram_file_id,
+        "media_type": event.media_type,
     }
 
 
@@ -1937,7 +2002,7 @@ async def admin_health(current: CurrentUser = Depends(require_super_admin)):
             db_ok = False
 
     bot_username = None
-    bot = _get_bot()
+    bot = get_telegram_bot()
     if bot is not None:
         try:
             me = await bot.get_me()

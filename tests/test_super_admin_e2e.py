@@ -248,7 +248,7 @@ class TestSuperAdminE2E:
             # send_broadcast живёт в app.web.announce — патчим его сессию и бота,
             # чтобы функция увидела каналы из db_session и отправила «в сеть» фейком
             patch("app.web.announce.async_session_factory", factory),
-            patch("app.web.announce._get_bot", return_value=_FakeBot()),
+            patch("app.web.announce.get_telegram_bot", return_value=_FakeBot()),
         ):
             resp = await db_client.post(
                 "/api/admin/broadcast",

@@ -13,6 +13,7 @@ STATIC = Path(__file__).resolve().parent.parent / "app" / "web" / "static"
 APP_JS = (STATIC / "app.js").read_text(encoding="utf-8")
 INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 VK_APP = (STATIC / "vk-app.html").read_text(encoding="utf-8")
+STYLES = (STATIC / "styles.css").read_text(encoding="utf-8")
 
 
 def test_vk_app_includes_bridge_and_appjs():
@@ -211,3 +212,32 @@ def test_appjs_admin_user_list_subscribe():
     assert "adminListUserSubscribe" in APP_JS
     assert "ul_sub_days_" in APP_JS
     assert "🟢 Подписать" in APP_JS
+
+
+# ─── Редизайн: постеры, аватар, переходы ───────────────────────
+
+
+def test_appjs_has_event_poster():
+    """Постеры мероприятий на карточках/деталях."""
+    assert "event-poster" in APP_JS
+    assert "/media" in APP_JS
+
+
+def test_appjs_profile_avatar_photo():
+    """Аватар из фото Telegram (initDataUnsafe.user.photo_url)."""
+    assert "photo_url" in APP_JS
+    assert "profile-avatar-img" in APP_JS
+
+
+def test_appjs_minimalism_classes():
+    """Fade-переходы страниц (page-enter в JS + fadeIn в CSS)."""
+    assert "page-enter" in APP_JS
+    assert "fadeIn" in STYLES
+
+
+def test_styles_minimalism():
+    """Сдержанный минимализм: приглушённые бейджи, тени, утилиты."""
+    assert "--badge-green-bg" in STYLES
+    assert "--shadow-card" in STYLES
+    assert ".profile-avatar-img" in STYLES
+    assert ".event-poster" in STYLES
