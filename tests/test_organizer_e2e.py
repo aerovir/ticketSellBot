@@ -55,18 +55,18 @@ class TestOrganizerE2E:
         user = await _organizer_user(db_session)
         await db_session.commit()
 
-        # ── Фаза «покупатель» (без подписки, без канала): создание ОТКРЫТО, role=user ──
+        # ── Фаза «покупатель» (без подписки): роль user, НЕ создаёт ──
         resp = await db_client.get("/api/me", headers=HEADERS)
         assert resp.status_code == 200
         assert resp.json()["role"] == "user"
 
-        # Создание бесплатного открыто даже без подписки (201)
+        # Покупатель НЕ может создать мероприятие (403 — только организатор)
         resp = await db_client.post(
             "/api/admin/events",
             headers=HEADERS,
             json=_event_payload(owner_user_id=str(user.id)),
         )
-        assert resp.status_code == 201, resp.text
+        assert resp.status_code == 403, resp.text
 
         # ── Активируем подписку пользователя через РЕАЛЬНЫЙ API (покупка) ──
         resp = await db_client.post(
@@ -597,8 +597,8 @@ class TestOrganizerE2E:
         assert stats["available"] == 9, stats
 
     async def test_buyer_cannot_admin(self, db_client, db_session):
-        """Покупатель (без подписки и канала): открытое создание мероприятий,
-        но нет доступа к организаторским функциям (статистика, каналы)."""
+        """Покупатель (без подписки и канала): роль user — минимальный ЛК,
+        без организаторских функций (создание, админ-список, статистика, каналы)."""
         await _organizer_user(db_session)
         await db_session.commit()
 
@@ -606,11 +606,11 @@ class TestOrganizerE2E:
         assert resp.status_code == 200
         assert resp.json()["role"] == "user"
 
-        # GET /admin/events — 200 (открыто: свои owner-мероприятия)
+        # GET /admin/events — 403 (только организатор)
         resp = await db_client.get("/api/admin/events", headers=HEADERS)
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 403, resp.text
 
-        # POST /admin/events — 201 для бесплатного своего (открытое создание)
+        # POST /admin/events — 403 (только организатор создаёт)
         me = await db_client.get("/api/me", headers=HEADERS)
         my_uid = me.json()["id"]
         resp = await db_client.post(
@@ -618,9 +618,9 @@ class TestOrganizerE2E:
             headers=HEADERS,
             json=_event_payload(owner_user_id=my_uid, price=0),
         )
-        assert resp.status_code == 201, resp.text
+        assert resp.status_code == 403, resp.text
 
-        # Статистика (GET /admin/stats) — 403 (только организатор)
+        # Статистика (GET /admin/stats) — 403 (только суперадмин)
         resp = await db_client.get("/api/admin/stats", headers=HEADERS)
         assert resp.status_code == 403, resp.text
 
@@ -646,7 +646,29 @@ class TestRealUserPath:
         assert resp.status_code == 200
         assert resp.json()["role"] == "user"
 
-        # 2. Создание бесплатного — ОТКРЫТО (201)
+        # 2. Создание без подписки — 403 (только организатор)
+        resp = await db_client.post(
+            "/api/admin/events",
+            headers=HEADERS,
+            json=_event_payload(owner_user_id=str(user.id), price=0, total=10),
+        )
+        assert resp.status_code == 403, resp.text
+
+        # 3. Покупка basic через реальный API → организатор
+        resp = await db_client.post(
+            "/api/me/subscription",
+            headers=HEADERS,
+            json={"tier": "basic"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["subscription_tier"] == "basic"
+
+        # 4. Роль → organizer
+        resp = await db_client.get("/api/me", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "organizer"
+
+        # 5. Бесплатное теперь можно → 201
         resp = await db_client.post(
             "/api/admin/events",
             headers=HEADERS,
@@ -655,7 +677,7 @@ class TestRealUserPath:
         assert resp.status_code == 201, resp.text
         free_event_id = resp.json()["id"]
 
-        # 3. Платное без pro → 409
+        # 6. Платное без pro → 409
         resp = await db_client.post(
             "/api/admin/events",
             headers=HEADERS,
@@ -663,7 +685,7 @@ class TestRealUserPath:
         )
         assert resp.status_code == 409, resp.text
 
-        # 4. Покупка pro через реальный API
+        # 7. Покупка pro через реальный API
         resp = await db_client.post(
             "/api/me/subscription",
             headers=HEADERS,
@@ -672,12 +694,7 @@ class TestRealUserPath:
         assert resp.status_code == 200, resp.text
         assert resp.json()["subscription_tier"] == "pro"
 
-        # 5. Роль → organizer
-        resp = await db_client.get("/api/me", headers=HEADERS)
-        assert resp.status_code == 200
-        assert resp.json()["role"] == "organizer"
-
-        # 6. Платное теперь можно → 201
+        # 8. Платное теперь можно → 201
         resp = await db_client.post(
             "/api/admin/events",
             headers=HEADERS,

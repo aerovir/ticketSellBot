@@ -40,3 +40,37 @@
 | 3.3 | Негативный тест «Basic не может платное» | Нет канала с тарифом basic |
 | 4-6 | Покупка билетов, коды, вход | Не дошло |
 | 7-8 | Super-admin функции, статистика | Не дошло |
+
+---
+
+## 2026-08-13 — Сессия 2 (прод VPS): QR-сканер на входе (#94, Feature Future #5)
+
+**Среда:** прод VPS (`31.56.180.231`), деплой через `dev` (workflow `31705529796` → test ✅ → deploy ✅), контейнеры `ticketbot-web`/`ticketbot-telegram`/`ticketbot-db` (healthy).
+
+**Автоматический регресс:** `pytest tests/` → **431 passed** ✅ (в т.ч. `TestValidateAccess` +5, e2e-шаг validate в `TestCabinetFlow`, smoke `test_frontend` +5).
+
+### Что проверено на проде (через SSH)
+
+| Проверка | Результат | Как |
+|---|---|---|
+| Web раздаёт новый `app.js` (сканер) | ✅ | `curl /static/app.js` → `openQrScanner`/`QR_CODE_RE` найдены |
+| jsQR CDN подключён (index + vk-app) | ✅ | `curl /` и `/vk-app` → `jsqr@1.4.0` найдено |
+| `/health` | ✅ 200 | `curl` |
+| Контейнер `ticketbot-web`: `event_id` в validate_ticket | ✅ 5 вхождений | `docker exec ... grep` |
+| Контейнер `ticketbot-web`: `_normalize_ticket_code` | ✅ 3 вхождения | `docker exec ... grep` |
+| Контейнер `ticketbot-web`: фото-фоллбек (`qrScanPhotoFallback`) | ✅ 5 вхождений | `docker exec ... grep` |
+| jsQR CDN достижим из контейнера | ✅ 256885 байт | `docker exec ... urllib.request` |
+| Логи web после деплоя — ошибок нет | ✅ | `docker logs --since 10m ... grep -iE 'error\|exception'` |
+| **E2E контракт на реальной БД прода:** `validate_ticket` возвращает `event_id`/`ticket_id` | ✅ `KEYS: ...,event_id,...,ticket_id,...`, `HAS_EVENT_ID: True`, `FOUND: True`, `STATUS: active` | `docker exec ticketbot-web python` (реальная БД) |
+| **E2E формат-гейт сканера:** активный билет `6FDD-749B` → `validate_ticket` (found + event_id + ticket_id) + код матчит `^[0-9A-F]{4}-[0-9A-F]{4}$` | ✅ `E2E_OK: True` | `docker exec ticketbot-web python` (реальная БД) |
+
+### ⚠️ Что осталось (требует человека с камерой)
+
+| Шаг | Что проверить | Причина |
+|---|---|---|
+| Живой скан камерой | Организатор сканирует QR → авто-check-in (Вход разрешён) | Нужна камера в Telegram WebView; в CI/через SSH не воспроизводится |
+| Повторный скан | 409 «Билет уже использован» | Тот же сценарий, живой |
+| Android TG WebView | getUserMedia нестабилен → фото-фоллбек должен сработать | tma.js #681; проверяется только на устройстве |
+| iOS / VK | Живой поток камеры | Проверяется только на устройстве |
+
+**Итог:** деплой подтверждён на всех уровнях, контракт API на проде работает. Финальный чек камеры — мануальный (см. `docs/test-plan-manual.md` → добавить раздел сканера).

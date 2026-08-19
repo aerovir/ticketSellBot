@@ -2,26 +2,26 @@
 Контрактные тесты ролей: матрица «роль × эндпоинт» на реальных данных.
 
 Роль задаётся РЕАЛЬНЫМ состоянием БД (подписка/канал), не моком.
-Проверяет, что каждая роль видит только свои функции (по матрице фич).
+Проверяет, что каждая роль видит только свои функции (по матрице ролей).
 
-Роли:
-- user (покупатель, без подписки): создание бесплатного 201, платного 409,
-  управление СВОИМИ мероприятиями, статистика/пригласительные/QR 403
-- organizer (с подпиской): свои 200, чужое 403
-- super_admin: всё 200
+Роли (матрица ролей, docs/roles-matrix.md):
+- user (покупатель, без подписки): НЕ создаёт мероприятия (403),
+  минимальный ЛК (билеты), «Стать организатором»
+- organizer (с подпиской): создаёт свои мероприятия, управляет ими
+- super_admin: глобальные разделы (статистика, подписки организаторов),
+  НЕ управляет мероприятиями/каналами организаторов
 
-КЛЮЧЕВОЙ КОНТРАКТ (защита от регресса расхождения frontend/backend):
-  Если POST /admin/events возвращает 201 для роли X — значит роль X
-  ДОЛЖНА иметь доступ к управлению своими мероприятиями через API.
-  Фронтенд ОБЯЗАН показывать UI для любой роли, которая может создавать
-  мероприятия (т.е. для всех ролей, включая "user").
+КЛЮЧЕВОЙ КОНТРАКТ (защита от регресса):
+  Только организатор создаёт мероприятия. user и суперадмин — 403 на POST
+  /admin/events. Фронтенд ролевой: кнопки «Создать» только у организатора.
 """
 import uuid
 import pytest
 from datetime import datetime, timezone, timedelta
+from unittest.mock import AsyncMock, patch
 
 from app.core.models import PlatformType, SubscriptionTier
-from app.core.services import UserService, ChannelService, ChannelAdminService
+from app.core.services import UserService, EventService, ChannelAdminService
 
 HEADERS = {"X-Skip-Auth": "1"}
 
@@ -52,218 +52,79 @@ class TestRoleContract:
     """Матрица роль × эндпоинт на реальных данных."""
 
     # ────────────────────────────────────────────────────────────────
-    # User (без подписки) — полный жизненный цикл своего мероприятия
+    # User (без подписки) — минимальный ЛК, НЕ создаёт
     # ────────────────────────────────────────────────────────────────
 
-    async def test_user_without_subscription_can_create_free_event(self, db_client, db_session):
-        """Покупатель (без подписки): бесплатное 201 — ОТКРЫТОЕ СОЗДАНИЕ."""
+    async def test_user_cannot_create_event(self, db_client, db_session):
+        """Покупатель (без подписки): НЕ может создать мероприятие (403)."""
         user = await _user(db_session)
         await db_session.commit()
         uid = str(user.id)
 
         resp = await db_client.post("/api/admin/events", headers=HEADERS,
                                     json=_event_payload(owner_user_id=uid, price=0))
-        assert resp.status_code == 201, resp.text
-        assert "id" in resp.json()
+        assert resp.status_code == 403, resp.text
 
-    async def test_user_without_subscription_cannot_create_paid_event(self, db_client, db_session):
-        """Покупатель (без подписки): платное 409 — нет pro."""
+    async def test_user_cannot_list_admin_events(self, db_client, db_session):
+        """Покупатель: GET /admin/events → 403 (только организатор)."""
         user = await _user(db_session)
         await db_session.commit()
-        uid = str(user.id)
 
-        resp = await db_client.post("/api/admin/events", headers=HEADERS,
-                                    json=_event_payload(owner_user_id=uid, price=500))
-        assert resp.status_code == 409, resp.text
+        resp = await db_client.get("/api/admin/events", headers=HEADERS)
+        assert resp.status_code == 403, resp.text
 
-    async def test_user_without_subscription_role_is_user(self, db_client, db_session):
-        """Покупатель (без подписки): role = user."""
-        user = await _user(db_session)
+    async def test_user_role_is_user_has_group_false(self, db_client, db_session):
+        """Покупатель: role=user, has_group=false."""
+        await _user(db_session)
         await db_session.commit()
 
         resp = await db_client.get("/api/me", headers=HEADERS)
-        assert resp.json()["role"] == "user"
+        me = resp.json()
+        assert me["role"] == "user"
+        assert me["has_group"] is False
 
-    async def test_user_manages_own_event_lifecycle(self, db_client, db_session):
-        """Покупатель (без подписки): полный жизненный цикл СВОЕГО мероприятия.
-
-        КОНТРАКТ: если роль может создать мероприятие (POST 201),
-        она должна мочь им управлять (list/get/patch/toggle/delete).
-
-        publish не тестируем — он дёргает Telegram API для анонса,
-        что недоступно в тестовом окружении без сети.
-        """
+    async def test_user_can_buy_ticket(self, db_client, db_session):
+        """Покупатель: может покупать билеты (открытая покупка)."""
+        from app.core.services import EventService
         user = await _user(db_session)
         await db_session.commit()
         uid = str(user.id)
-
-        # 1. Создать бесплатное мероприятие
-        resp = await db_client.post("/api/admin/events", headers=HEADERS,
-                                    json=_event_payload(owner_user_id=uid, price=0))
-        assert resp.status_code == 201, resp.text
-        event_id = resp.json()["id"]
-
-        # 2. Видеть в своём списке (GET /admin/events)
-        resp = await db_client.get("/api/admin/events", headers=HEADERS)
-        assert resp.status_code == 200, resp.text
-        my_ids = {e["id"] for e in resp.json()}
-        assert event_id in my_ids, "Созданное мероприятие должно быть в списке"
-
-        # 3. Получить детали своего мероприятия
-        resp = await db_client.get(f"/api/admin/events/{event_id}", headers=HEADERS)
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["title"] == "Contract Event"
-
-        # 4. Редактировать своё мероприятие
-        resp = await db_client.patch(f"/api/admin/events/{event_id}", headers=HEADERS,
-                                     json={"title": "Updated Title"})
-        assert resp.status_code == 200, resp.text
-
-        # 5. Переключить active
-        resp = await db_client.post(f"/api/admin/events/{event_id}/toggle", headers=HEADERS)
-        assert resp.status_code == 200, resp.text
-
-        # 6. Мягко удалить
-        resp = await db_client.post(f"/api/admin/events/{event_id}/delete", headers=HEADERS)
-        assert resp.status_code == 200, resp.text
-
-    async def test_user_cannot_access_other_users_event(self, db_client, db_session):
-        """Покупатель не может управлять чужим мероприятием."""
-        from app.core.services import EventService
-
-        # Создать чужое мероприятие напрямую через сервис (owner = другой пользователь)
-        owner = await _user(db_session, platform_id="owner123")
-        await db_session.commit()
-        other_event = await EventService(db_session).create(
-            title="Other Event",
-            description=None,
-            date=datetime.now(timezone.utc) + timedelta(days=7),
-            location=None,
-            price=0,
-            total_tickets=10,
-            channel_id=None,
-            owner_user_id=owner.id,
+        # Организатор (с подпиской) создаёт событие
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.pro,
         )
         await db_session.commit()
-        other_event_id = str(other_event.id)
+        ev = await EventService(db_session).create(
+            title="Buy Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=100, total_tickets=10,
+            channel_id=None, owner_user_id=uid,
+        )
+        ev.is_published = True
+        await db_session.commit()
 
-        # Текущий пользователь (platform_id="12345") пытается получить доступ
-        resp = await db_client.get(f"/api/admin/events/{other_event_id}", headers=HEADERS)
-        assert resp.status_code == 403, resp.text
-
-        resp = await db_client.patch(f"/api/admin/events/{other_event_id}", headers=HEADERS,
-                                     json={"title": "Hacked"})
-        assert resp.status_code == 403, resp.text
+        resp = await db_client.post(f"/api/events/{ev.id}/buy", headers=HEADERS)
+        assert resp.status_code == 201, resp.text
 
     async def test_user_cannot_access_admin_only_endpoints(self, db_client, db_session):
         """Покупатель (без подписки): админские эндпоинты 403."""
-        user = await _user(db_session)
+        await _user(db_session)
         await db_session.commit()
-        uid = str(user.id)
 
-        # Создать мероприятие чтобы было что проверять
-        resp = await db_client.post("/api/admin/events", headers=HEADERS,
-                                    json=_event_payload(owner_user_id=uid, price=0))
-        assert resp.status_code == 201, resp.text
-        event_id = resp.json()["id"]
-
-        # Статистика — 403 (только организатор)
+        # Статистика — 403 (только суперадмин)
         resp = await db_client.get("/api/admin/stats", headers=HEADERS)
         assert resp.status_code == 403, resp.text
 
-        # Пригласительные — 403 (pro only)
-        resp = await db_client.post(
-            f"/api/admin/events/{event_id}/invites", headers=HEADERS, json={"seats": 1},
-        )
-        assert resp.status_code == 403, resp.text
-
-        # Каналы — 403 (super-admin only)
+        # Каналы — 403 (суперадмин)
         resp = await db_client.get("/api/admin/channels", headers=HEADERS)
         assert resp.status_code == 403, resp.text
-
-    # ────────────────────────────────────────────────────────────────
-    # КОНТРАКТ: роль "user" и доступ к созданию мероприятий
-    # ────────────────────────────────────────────────────────────────
-
-    async def test_contract_user_role_must_have_create_access(self, db_client, db_session):
-        """КОНТРАКТ: если /api/me возвращает role='user',
-        то этот пользователь ДОЛЖЕН мочь создать бесплатное мероприятие.
-
-        Этот тест — защита от регресса. Если он падает, значит backend
-        заблокировал создание для обычных пользователей, но /api/me
-        продолжает возвращать role='user'. Фронтенд, ориентируясь на role,
-        скроет кнопку «Панель» — и пользователь не сможет создать мероприятие.
-        """
-        user = await _user(db_session)
-        await db_session.commit()
-        uid = str(user.id)
-
-        # Шаг 1: роль — user
-        resp = await db_client.get("/api/me", headers=HEADERS)
-        me = resp.json()
-        assert me["role"] == "user", (
-            "Ожидается role='user' для пользователя без подписки. "
-            "Если роль изменилась — обновите этот тест."
-        )
-
-        # Шаг 2: user ДОЛЖЕН мочь создать бесплатное мероприятие
-        resp = await db_client.post("/api/admin/events", headers=HEADERS,
-                                    json=_event_payload(owner_user_id=uid, price=0))
-        assert resp.status_code == 201, (
-            f"КОНТРАКТ НАРУШЕН: role='user', но POST /admin/events вернул {resp.status_code}. "
-            f"Фронтенд скрывает кнопку «Панель» для role='user' — пользователь не сможет "
-            f"создать мероприятие. Либо откройте эндпоинт, либо измените role на не-'user'."
-        )
-
-        # Шаг 3: user ДОЛЖЕН видеть созданное мероприятие в списке
-        event_id = resp.json()["id"]
-        resp = await db_client.get("/api/admin/events", headers=HEADERS)
-        assert resp.status_code == 200, (
-            f"КОНТРАКТ НАРУШЕН: role='user', но GET /admin/events вернул {resp.status_code}. "
-            f"Фронтенд вызывает этот эндпоинт для отображения списка мероприятий в панели."
-        )
-        assert any(e["id"] == event_id for e in resp.json()), (
-            "КОНТРАКТ НАРУШЕН: созданное мероприятие не появилось в GET /admin/events."
-        )
-
-    async def test_contract_user_can_publish_own_event(self, db_client, db_session):
-        """КОНТРАКТ: пользователь с role='user' может опубликовать своё мероприятие.
-
-        Для owner-мероприятий (без канала) анонс не требуется —
-        post_event_announcement возвращает False без вызова Telegram API.
-        """
-        from unittest.mock import AsyncMock, patch
-
-        user = await _user(db_session)
-        await db_session.commit()
-        uid = str(user.id)
-
-        # Создать бесплатное owner-мероприятие
-        resp = await db_client.post("/api/admin/events", headers=HEADERS,
-                                    json=_event_payload(owner_user_id=uid, price=0))
-        assert resp.status_code == 201, resp.text
-        event_id = resp.json()["id"]
-
-        # Публиковать — post_event_announcement и send_announcement_dm замоканы (в тестах нет сети)
-        with (
-            patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=False),
-            patch("app.web.routes.send_announcement_dm", new_callable=AsyncMock, return_value=False),
-        ):
-            resp = await db_client.post(f"/api/admin/events/{event_id}/publish", headers=HEADERS)
-        assert resp.status_code == 200, (
-            f"КОНТРАКТ НАРУШЕН: role='user', но POST /admin/events/{event_id}/publish "
-            f"вернул {resp.status_code}. Пользователь должен мочь публиковать свои мероприятия."
-        )
-        assert resp.json()["is_published"] is True
-        # При недоступности канала должен быть вызван DM-fallback
-        assert resp.json()["dm_sent"] is False  # замокан
 
     # ────────────────────────────────────────────────────────────────
     # Organizer (с подпиской)
     # ────────────────────────────────────────────────────────────────
 
     async def test_organizer_with_subscription(self, db_client, db_session):
-        """Организатор (с подпиской): свои 200, чужое 403."""
+        """Организатор (с подпиской): создаёт свои, чужое 403."""
         user = await _user(db_session)
         await UserService(db_session).activate_subscription(
             user.id, days=30, tier=SubscriptionTier.basic,
@@ -286,17 +147,13 @@ class TestRoleContract:
         assert resp.status_code == 200, resp.text
 
         # пригласительные: basic-организатор → 403 (invite_tickets = pro)
-        await UserService(db_session).activate_subscription(
-            user.id, days=30, tier=SubscriptionTier.basic,
-        )
-        await db_session.commit()
         resp = await db_client.post(
             f"/api/admin/events/{my_event}/invites", headers=HEADERS, json={"seats": 1},
         )
         assert resp.status_code == 403, resp.text
 
     async def test_organizer_pro_invites_qr(self, db_client, db_session):
-        """Организатор pro: пригласительные 201, QR доступен."""
+        """Организатор pro: пригласительные 201."""
         user = await _user(db_session)
         await UserService(db_session).activate_subscription(
             user.id, days=30, tier=SubscriptionTier.pro,
@@ -309,29 +166,103 @@ class TestRoleContract:
         assert resp.status_code == 201, resp.text
         event_id = resp.json()["id"]
 
-        # пригласительное pro → 201
         resp = await db_client.post(
             f"/api/admin/events/{event_id}/invites", headers=HEADERS, json={"seats": 1},
         )
         assert resp.status_code == 201, resp.text
 
-    # ────────────────────────────────────────────────────────────────
-    # Super-admin
-    # ────────────────────────────────────────────────────────────────
-
-    async def test_super_admin_everything(self, db_client, db_session):
-        """Супер-админ: всё доступно."""
+    async def test_organizer_has_group_transition(self, db_client, db_session):
+        """Бесшовный переход: без группы → с группой (после добавления канала)."""
+        from app.core.models import Channel
+        from app.core.services import ChannelService
         user = await _user(db_session)
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.basic,
+        )
         await db_session.commit()
 
-        # супер-админ через admin_telegram_ids
-        from unittest.mock import patch
+        # Без площадки → has_group=false
+        resp = await db_client.get("/api/me", headers=HEADERS)
+        assert resp.json()["has_group"] is False
+
+        # Добавить канал с активной подпиской → has_group=true
+        channel = await ChannelService(db_session).create(
+            telegram_channel_id="@org_channel", admin_telegram_user_id="12345", title="Org"
+        )
+        await ChannelService(db_session).activate_subscription(
+            channel.id, duration_days=30, tier=SubscriptionTier.basic,
+        )
+        await ChannelAdminService(db_session).sync_admins(channel.id, ["12345"])
+        await db_session.commit()
+
+        resp = await db_client.get("/api/me", headers=HEADERS)
+        assert resp.json()["has_group"] is True
+
+    # ────────────────────────────────────────────────────────────────
+    # Super-admin — НЕ управляет мероприятиями/каналами организаторов
+    # ────────────────────────────────────────────────────────────────
+
+    async def test_super_admin_global_but_no_events(self, db_client, db_session):
+        """Супер-админ: глобальные разделы 200, мероприятия/каналы — НЕ управляет."""
+        user = await _user(db_session)
+        await db_session.commit()
+        uid = str(user.id)
+
+        # Создать мероприятие как организатор (owner)
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.basic,
+        )
+        await db_session.commit()
+        resp = await db_client.post("/api/admin/events", headers=HEADERS,
+                                    json=_event_payload(owner_user_id=uid))
+        assert resp.status_code == 201, resp.text
+        event_id = resp.json()["id"]
+
+        # Суперадмин
         with patch("app.web.dependencies.settings.admin_telegram_ids", "12345"):
             resp = await db_client.get("/api/me", headers=HEADERS)
             assert resp.json()["role"] == "super_admin"
 
+            # Глобальные разделы — 200
             resp = await db_client.get("/api/admin/stats", headers=HEADERS)
             assert resp.status_code == 200, resp.text
 
-            resp = await db_client.get("/api/admin/channels", headers=HEADERS)
+            # Мероприятия — пусто (не управляет)
+            resp = await db_client.get("/api/admin/events", headers=HEADERS)
             assert resp.status_code == 200, resp.text
+            assert resp.json() == [], "Суперадмин не видит мероприятия"
+
+            # Не может создать мероприятие (403)
+            resp = await db_client.post("/api/admin/events", headers=HEADERS,
+                                        json=_event_payload(owner_user_id=uid))
+            assert resp.status_code == 403, resp.text
+
+            # Не может управлять чужим мероприятием (403)
+            resp = await db_client.get(f"/api/admin/events/{event_id}", headers=HEADERS)
+            assert resp.status_code == 403, resp.text
+
+    async def test_super_admin_can_validate_ticket_by_code(self, db_client, db_session):
+        """Супер-админ может найти покупателя по коду (валидация, без управления)."""
+        from app.core.services import TicketService
+        user = await _user(db_session)
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.pro,
+        )
+        await db_session.commit()
+        uid = str(user.id)
+        ev = await EventService(db_session).create(
+            title="Valid Event", description=None,
+            date=datetime.now(timezone.utc) + timedelta(days=7),
+            location=None, price=100, total_tickets=10,
+            channel_id=None, owner_user_id=uid,
+        )
+        ev.is_published = True
+        await db_session.commit()
+        ticket = await TicketService(db_session).buy_ticket(uid, ev.id)
+        await db_session.commit()
+
+        with patch("app.web.dependencies.settings.admin_telegram_ids", "12345"):
+            resp = await db_client.get(
+                f"/api/admin/tickets/validate?code={ticket.validation_code}", headers=HEADERS)
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["found"] is True

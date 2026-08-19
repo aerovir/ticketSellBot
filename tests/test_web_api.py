@@ -515,6 +515,11 @@ def admin_auth(is_super=False, channel_ids=None, sub_valid=True, organizer=False
             new_callable=AsyncMock,
             return_value=[],
         ))
+        stack.enter_context(patch(
+            "app.web.dependencies.VKGroupService.list_vk_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ))
         yield
 
 
@@ -547,7 +552,7 @@ class TestAdminAPI:
     def test_me_role_organizer_with_channel(self, client):
         """GET /api/me — роль organizer при канале с активной подпиской."""
         with (
-            admin_auth(is_super=False, channel_ids=[CHANNEL_ID], sub_valid=True),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], sub_valid=True),
             patch("app.web.routes.ChannelService.get_channels_by_admin", new_callable=AsyncMock, return_value=[_mock_channel()]),
         ):
             resp = client.get("/api/me", headers={"X-Skip-Auth": "1"})
@@ -566,45 +571,24 @@ class TestAdminAPI:
         assert data["role"] == "super_admin"
         assert data["is_super_admin"] is True
 
-    def test_admin_events_open_for_regular_user(self, client):
-        """GET /api/admin/events — 200 для обычного пользователя (открытое создание).
-        Возвращает список своих owner-мероприятий (пустой, если нет)."""
+    def test_admin_events_forbidden_for_regular_user(self, client):
+        """GET /api/admin/events — 403 для обычного пользователя (только организатор)."""
         with (
             admin_auth(is_super=False, channel_ids=[]),
             patch("app.web.routes.EventService.list_all", new_callable=AsyncMock, return_value=[]),
-            patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=None),
+        ):
+            resp = client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 403
+
+    def test_admin_events_list_super_empty(self, client):
+        """GET /api/admin/events — суперадмин видит пусто (НЕ управляет мероприятиями)."""
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.EventService.list_all", new_callable=AsyncMock, return_value=[Mock()]),
         ):
             resp = client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
         assert resp.json() == []
-
-    def test_admin_events_list_super(self, client):
-        """GET /api/admin/events — super-admin видит все."""
-        from datetime import datetime, timezone
-        mock_event = Mock()
-        mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
-        mock_event.title = "Test"
-        mock_event.date = datetime.now(timezone.utc)
-        mock_event.location = "Moscow"
-        mock_event.price = 100.0
-        mock_event.total_tickets = 100
-        mock_event.available_tickets = 50
-        mock_event.is_active = True
-        mock_event.is_published = True
-        mock_event.is_free = False
-        mock_event.media_telegram_file_id = None
-        mock_event.media_type = None
-
-        with (
-            admin_auth(is_super=True, channel_ids=[]),
-            patch("app.web.routes.EventService.list_all", new_callable=AsyncMock, return_value=[mock_event]),
-            patch("app.web.routes.EventService.get_event_premium_map", new_callable=AsyncMock, return_value={}),
-            patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=Mock(title="Channel")),
-        ):
-            resp = client.get("/api/admin/events", headers={"X-Skip-Auth": "1"})
-        assert resp.status_code == 200
-        assert len(resp.json()) == 1
 
     def test_admin_create_event_ok(self, client):
         """POST /api/admin/events — создание черновика."""
@@ -613,7 +597,7 @@ class TestAdminAPI:
         mock_event.is_published = False
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.create", new_callable=AsyncMock, return_value=mock_event),
         ):
             resp = client.post(
@@ -633,7 +617,7 @@ class TestAdminAPI:
     def test_admin_create_event_wrong_channel(self, client):
         """POST /api/admin/events — 403 если канал вне managed."""
         other_channel = "99999999-9999-4999-8999-999999999999"
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.post(
                 "/api/admin/events",
                 headers={"X-Skip-Auth": "1"},
@@ -650,7 +634,7 @@ class TestAdminAPI:
     def test_admin_create_event_conflict(self, client):
         """POST /api/admin/events — 409 при ValueError (напр. платное на basic)."""
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.create", new_callable=AsyncMock, side_effect=ValueError("Тариф не позволяет платные мероприятия")),
         ):
             resp = client.post(
@@ -670,10 +654,10 @@ class TestAdminAPI:
         """POST /api/admin/events/{id}/publish — публикация + анонс."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.update", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=True),
@@ -695,7 +679,7 @@ class TestAdminAPI:
         mock_event.channel_id = None
         mock_event.owner_user_id = _UUID(USER_ID)
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.TicketService.check_in_by_code", new_callable=AsyncMock, return_value=mock_ticket),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
         ):
@@ -732,7 +716,7 @@ class TestAdminAPI:
 
     def test_admin_channels_forbidden_for_channel_admin(self, client):
         """GET /api/admin/channels — 403 для channel-admin."""
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.get("/api/admin/channels", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 403
 
@@ -776,7 +760,7 @@ class TestAdminAPI:
 
     def test_admin_stats_forbidden(self, client):
         """GET /api/admin/stats — 403 для channel-admin."""
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.get("/api/admin/stats", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 403
 
@@ -794,10 +778,10 @@ class TestAdminAPI:
         """GET /api/admin/events/{id}/stats — channel-admin видит (без тарифного гейта)."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.get_event_stats", new_callable=AsyncMock, return_value={"total_tickets": 10, "sold": 2}),
         ):
@@ -809,7 +793,7 @@ class TestAdminAPI:
         """GET /api/admin/events/{id}/tickets.csv — CSV экспорт."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
         mock_tickets = [{
             "ticket_id": "t1", "event_title": "Test", "user_name": "User",
             "purchase_date": "2026-08-01T10:00:00Z", "status": "active",
@@ -817,7 +801,7 @@ class TestAdminAPI:
         }]
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.TicketService.export_event_tickets", new_callable=AsyncMock, return_value=mock_tickets),
         ):
@@ -879,7 +863,7 @@ class TestSuperAdminGaps:
 
     def test_admin_create_channel_forbidden(self, client):
         """POST /api/admin/channels — 403 для channel-admin."""
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.post(
                 "/api/admin/channels",
                 headers={"X-Skip-Auth": "1"},
@@ -917,7 +901,7 @@ class TestSuperAdminGaps:
 
     def test_admin_user_info_forbidden(self, client):
         """GET /api/admin/users/{id} — 403 для channel-admin."""
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.get("/api/admin/users/541587295", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 403
 
@@ -948,7 +932,7 @@ class TestSuperAdminGaps:
 
     def test_admin_broadcast_forbidden(self, client):
         """POST /api/admin/broadcast — 403 для channel-admin."""
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.post(
                 "/api/admin/broadcast",
                 headers={"X-Skip-Auth": "1"},
@@ -968,7 +952,7 @@ class TestSuperAdminGaps:
 
     def test_admin_health_forbidden(self, client):
         """GET /api/admin/health — 403 для channel-admin."""
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.get("/api/admin/health", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 403
 
@@ -1051,7 +1035,7 @@ class TestInviteApi:
         """POST /admin/events/{id}/invites — админ канала выдаёт пригласительное."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         mock_invite = Mock()
         mock_invite.id = EVENT_ID
@@ -1060,7 +1044,7 @@ class TestInviteApi:
         mock_invite.status.value = "active"
 
         with (
-            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.TicketService.issue_invite", new_callable=AsyncMock, return_value=mock_invite),
@@ -1077,7 +1061,7 @@ class TestInviteApi:
         """POST invites — 403 для суперадмина (не выдаёт пригласительные)."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
             admin_auth(is_super=True, channel_ids=[]),
@@ -1094,7 +1078,7 @@ class TestInviteApi:
         """POST invites — 403 если канал не в managed."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
             admin_auth(is_super=False, channel_ids=["99999999-9999-4999-8999-999999999999"]),
@@ -1111,10 +1095,10 @@ class TestInviteApi:
         """POST invites — 403 если канал не pro (require_feature False)."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=False),
         ):
@@ -1129,10 +1113,10 @@ class TestInviteApi:
         """POST invites — 409 при ValueError."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.TicketService.issue_invite", new_callable=AsyncMock, side_effect=ValueError("Квота исчерпана")),
@@ -1148,13 +1132,13 @@ class TestInviteApi:
         """POST invites/{tid}/cancel — отмена пригласительного."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
         mock_invite = Mock()
         mock_invite.id = EVENT_ID
         mock_invite.status.value = "refunded"
 
         with (
-            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.TicketService.cancel_invite", new_callable=AsyncMock, return_value=mock_invite),
         ):
@@ -1169,10 +1153,10 @@ class TestInviteApi:
         """GET /admin/events/{id}/invites — список пригласительных."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=False, channel_ids=[CHANNEL_ID]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.TicketService.get_event_invites", new_callable=AsyncMock, return_value=[{"is_invite": True, "validation_code": "AB3X-K7M9"}]),
         ):
@@ -1184,14 +1168,14 @@ class TestInviteApi:
         """GET /admin/tickets/{id}/qr — PNG-картинка QR."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
         mock_ticket = Mock()
         mock_ticket.id = EVENT_ID
         mock_ticket.event_id = EVENT_ID
         mock_ticket.validation_code = "AB3X-K7M9"
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
             patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.generate_qr_png", new_callable=Mock, return_value=b"\x89PNG..."),
@@ -1486,9 +1470,13 @@ class TestCabinetFlow:
         from app.core.services import UserService
         from sqlalchemy import select
 
-        # Юзер 12345 без подписки = free-организатор
+        # Юзер 12345 = free-организатор (basic-подписка, лимит 1 опубликованное будущее)
         user = await UserService(db_session).get_or_create(
             PlatformType.telegram, "12345", "Free Org",
+        )
+        from app.core.models import SubscriptionTier
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.basic,
         )
         await db_session.commit()
 
@@ -1543,6 +1531,10 @@ class TestCabinetFlow:
 
         user = await UserService(db_session).get_or_create(
             PlatformType.telegram, "12345", "Org",
+        )
+        from app.core.models import SubscriptionTier
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.basic,
         )
         await db_session.commit()
 
@@ -1604,7 +1596,7 @@ class TestCoverageGaps:
         from datetime import datetime, timezone
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
         mock_event.title = "Test"
         mock_event.description = None
         mock_event.date = datetime.now(timezone.utc)
@@ -1619,7 +1611,7 @@ class TestCoverageGaps:
         mock_event.media_type = None
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.get_event_is_premium", new_callable=AsyncMock, return_value=False),
             patch("app.web.routes.ChannelService.get_by_id", new_callable=AsyncMock, return_value=Mock(title="Ch")),
@@ -1632,10 +1624,10 @@ class TestCoverageGaps:
         """PATCH /api/admin/events/{id} — обновление."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.update", new_callable=AsyncMock, return_value=mock_event),
         ):
@@ -1647,11 +1639,11 @@ class TestCoverageGaps:
         """POST /api/admin/events/{id}/toggle."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
         mock_event.is_active = False
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.set_active", new_callable=AsyncMock, return_value=mock_event),
         ):
@@ -1663,10 +1655,10 @@ class TestCoverageGaps:
         """POST /api/admin/events/{id}/delete."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.soft_delete", new_callable=AsyncMock, return_value=mock_event),
         ):
@@ -1678,10 +1670,10 @@ class TestCoverageGaps:
         """POST /api/admin/events/{id}/repost."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=True),
         ):
@@ -1693,10 +1685,10 @@ class TestCoverageGaps:
         """GET /api/admin/events/{id}/tickets."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.TicketService.get_event_tickets", new_callable=AsyncMock, return_value=[{"id": "t1"}]),
         ):
@@ -1708,12 +1700,12 @@ class TestCoverageGaps:
         """POST /api/admin/tickets/{id}/cancel (admin)."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
         mock_ticket = Mock()
         mock_ticket.status.value = "refunded"
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.TicketService.get_ticket_event", new_callable=AsyncMock, return_value=(mock_ticket, mock_event)),
             patch("app.web.routes.TicketService.admin_cancel_ticket", new_callable=AsyncMock, return_value=mock_ticket),
         ):
@@ -1801,10 +1793,10 @@ class TestCoverageGaps:
         """GET tickets.csv без билетов — 404."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
-        mock_event.channel_id = CHANNEL_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
 
         with (
-            admin_auth(is_super=True, channel_ids=[]),
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.TicketService.export_event_tickets", new_callable=AsyncMock, return_value=[]),
         ):
@@ -1872,7 +1864,7 @@ class TestSubscriptionApi:
 
     def test_admin_update_subscription_forbidden(self, client):
         """POST subscription — 403 для channel-admin."""
-        with admin_auth(is_super=False, channel_ids=[CHANNEL_ID]):
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]):
             resp = client.post(
                 f"/api/admin/channels/{CHANNEL_ID}/subscription",
                 headers={"X-Skip-Auth": "1"},
@@ -2223,10 +2215,10 @@ class TestQrGate:
 
 
 class TestOpenCreateAndSubscribe:
-    """Создание открыто + покупка подписки (TDD: до реализации)."""
+    """Только организатор создаёт + покупка подписки (матрица ролей)."""
 
-    def test_create_free_without_subscription(self, client):
-        """Пользователь БЕЗ подписки создаёт бесплатное мероприятие → 201."""
+    def test_create_forbidden_without_subscription(self, client):
+        """Пользователь БЕЗ подписки НЕ создаёт мероприятие → 403."""
         mock_event = Mock()
         mock_event.id = EVENT_ID
         mock_event.is_published = False
@@ -2244,24 +2236,28 @@ class TestOpenCreateAndSubscribe:
                     "channel_id": None, "owner_user_id": USER_ID,
                 },
             )
-        assert resp.status_code == 201, resp.text
+        assert resp.status_code == 403, resp.text
 
-    def test_create_paid_without_pro(self, client):
-        """Платное мероприятие БЕЗ pro-подписки → 409."""
+    def test_create_organizer_with_subscription(self, client):
+        """Организатор (с подпиской) создаёт мероприятие → 201."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.is_published = False
+
         with (
-            admin_auth(is_super=False, channel_ids=[], organizer=False),
-            patch("app.web.routes.EventService.create", new_callable=AsyncMock, side_effect=ValueError("Нужна подписка Pro")),
+            admin_auth(is_super=False, channel_ids=[], organizer=True),
+            patch("app.web.routes.EventService.create", new_callable=AsyncMock, return_value=mock_event),
         ):
             resp = client.post(
                 "/api/admin/events",
                 headers={"X-Skip-Auth": "1"},
                 json={
-                    "title": "Paid", "date": "2026-12-01T19:00:00Z",
-                    "price": 500, "total_tickets": 50,
+                    "title": "Free Event", "date": "2026-12-01T19:00:00Z",
+                    "price": 0, "total_tickets": 50,
                     "channel_id": None, "owner_user_id": USER_ID,
                 },
             )
-        assert resp.status_code == 409, resp.text
+        assert resp.status_code == 201, resp.text
 
     def test_buy_subscription_me(self, client):
         """POST /api/me/subscription — покупка подписки (активация)."""

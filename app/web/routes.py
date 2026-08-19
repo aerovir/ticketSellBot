@@ -540,6 +540,9 @@ async def get_me(current: CurrentUser = Depends(get_current_user)):
         "name": current.name,
         "role": current.role,
         "is_super_admin": current.is_super_admin,
+        "is_organizer": current.is_organizer,
+        "has_group": current.has_group,
+        "vk_group_ids": [str(i) for i in current.vk_group_ids],
         "subscription_tier": user.subscription_tier.value if user else None,
         "is_subscription_active": user.is_subscription_active if user else False,
         "subscription_until": user.subscription_until.isoformat() if user and user.subscription_until else None,
@@ -878,27 +881,24 @@ async def remove_my_vk_group(
 
 
 @router.get("/admin/events")
-async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
-    """Список мероприятий доступных текущему пользователю.
+async def admin_list_events(current: CurrentUser = Depends(require_admin)):
+    """Список мероприятий организатора (свои каналы + owner-мероприятия).
 
-    Суперадмин видит всё. Организатор — свои каналы + owner-мероприятия.
-    Обычный пользователь — свои owner-мероприятия (открытое создание).
+    Матрица ролей: только организатор. Суперадмин НЕ управляет мероприятиями
+    (пусто). Обычный пользователь — 403 (нет доступа к панели).
     """
     async with async_session_factory() as session:
         event_svc = EventService(session)
         channel_svc = ChannelService(session)
         if current.is_super_admin:
-            events = await event_svc.list_all()
-        elif current.is_admin:
+            events = []
+        else:
             events = []
             # мероприятия по каналам организатора
             for cid in current.managed_channel_ids:
                 events.extend(await event_svc.list_all(channel_id=cid))
             # мероприятия организатора без канала (по owner)
             events.extend(await event_svc.list_all(owner_user_id=current.user_id))
-        else:
-            # Обычный пользователь: только свои owner-мероприятия
-            events = await event_svc.list_all(owner_user_id=current.user_id)
 
         # Карта каналов для названий (owner-события без канала — пропускаем None)
         channel_ids = {e.channel_id for e in events if e.channel_id is not None}
@@ -941,9 +941,15 @@ async def admin_create_event(
 ):
     """Создать мероприятие (черновик).
 
-    Мероприятие принадлежит каналу (если указан) ИЛИ организатору-пользователю
-    (owner_user_id = текущий организатор). Проверка доступа.
+    Матрица ролей: только организатор (is_creator). Суперадмин эксклюзивен —
+    не создаёт мероприятия. Обычный пользователь — 403.
+    Мероприятие принадлежит каналу (если указан) ИЛИ организатору-пользователю.
     """
+    if not current.is_creator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Создавать мероприятия может только организатор",
+        )
     # Канальный путь: организатор должен управлять каналом
     if body.channel_id is not None and not current.can_manage(body.channel_id):
         raise HTTPException(
@@ -1530,7 +1536,8 @@ async def admin_validate_ticket(
     """Проверить билет по коду (без отметки входа).
 
     Доступ: проверяющий должен управлять мероприятием билета
-    (owner/manager/channel-admin), иначе 403.
+    (owner/manager/channel-admin), либо суперадмин (поиск покупателя —
+    глобальная операция, без права управления событием). Иначе 403.
     """
     async with async_session_factory() as session:
         ticket_svc = TicketService(session)
@@ -1539,7 +1546,7 @@ async def admin_validate_ticket(
         if result.get("found") and result.get("event_id"):
             event_svc = EventService(session)
             event = await event_svc.get_by_id(UUID(result["event_id"]))
-            if event is not None and not _can_manage_event(current, event):
+            if event is not None and not current.is_super_admin and not _can_manage_event(current, event):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому билету")
     return result
 
@@ -2035,10 +2042,10 @@ def _normalize_ticket_code(raw: str) -> str:
 
 
 def _can_manage_event(current: CurrentUser, event) -> bool:
-    """Доступ к продажам мероприятия: супер-админ, владелец (owner),
-    соработник (manager) или организатор канала."""
+    """Доступ к продажам мероприятия: владелец (owner), соработник (manager)
+    или организатор канала. Суперадмин эксклюзивен — НЕ управляет мероприятиями."""
     if current.is_super_admin:
-        return True
+        return False
     # Владелец (owner-событие) — даже если event привязан к каналу
     if event.owner_user_id == current.user_id:
         return True
@@ -2053,9 +2060,10 @@ def _can_manage_event(current: CurrentUser, event) -> bool:
 
 def _can_admin_event(current: CurrentUser, event) -> bool:
     """Доступ к управлению мероприятием (редактирование/удаление/менеджеры):
-    супер-админ, владелец (owner) или организатор канала. Менеджер — только продажи."""
+    владелец (owner) или организатор канала. Суперадмин эксклюзивен — НЕ управляет;
+    менеджер — только продажи."""
     if current.is_super_admin:
-        return True
+        return False
     if event.owner_user_id == current.user_id:
         return True
     if event.channel_id is not None:

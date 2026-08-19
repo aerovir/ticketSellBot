@@ -257,6 +257,10 @@ async function loadMe() {
     const me = await api("/api/me");
     state.me = me;
     state.role = me.role || "user";
+    // Матрица ролей: derived-флаги для ролевого меню
+    state.isOrganizer = state.role === "organizer";
+    state.isOrganizerWithGroup = state.role === "organizer" && !!me.has_group;
+    state.isSuper = state.role === "super_admin";
     return me;
 }
 
@@ -354,26 +358,26 @@ async function showHome() {
 function renderHomeDashboard() {
     const container = document.getElementById("homeContent");
     const me = state.me || {};
-    const isOrganizer = state.role !== "user";
-    const isSuper = state.role === "super_admin";
 
     const events = state.events || [];
     const tickets = state.tickets || [];
     const channels = me.channels || [];
 
-    let cards = [
-        { icon: "🎫", value: events.length, label: "Мероприятий", onclick: "showAdminEvents()" },
-        { icon: "🎟", value: tickets.length, label: "Билетов", onclick: "showMyTickets()" },
-    ];
-
-    if (isOrganizer) {
-        cards.push({ icon: "📢", value: channels.length, label: "Каналов", onclick: "showMyChannels()" });
-        cards.push({ icon: "🔍", value: "Вход", label: "Проверка билета", onclick: "showCheckin()" });
-    }
-
-    if (isSuper) {
-        cards.push({ icon: "👥", value: "—", label: "Пользователи", onclick: "showAdminUserList()" });
-        cards.push({ icon: "📊", value: "—", label: "Статистика", onclick: "showAdminStats()" });
+    // Матрица ролей: ролевые карточки главной
+    let cards = [];
+    if (state.role === "user") {
+        // Пользователь: минимальный ЛК — лента + билеты + стать организатором
+        cards.push({ icon: "🎫", value: events.length, label: "Мероприятия", onclick: "showEvents()" });
+        cards.push({ icon: "🎟", value: tickets.length, label: "Мои билеты", onclick: "showMyTickets()" });
+        cards.push({ icon: "🚀", value: "—", label: "Стать организатором", onclick: "becomeOrganizer()" });
+    } else if (state.role === "organizer") {
+        // Организатор: свои мероприятия + продажи/вход + площадки
+        cards.push({ icon: "🎫", value: events.length, label: "Мои мероприятия", onclick: "showAdminEvents()" });
+        cards.push({ icon: "🔍", value: "Вход", label: "Продажи / Вход", onclick: "showCheckin()" });
+        cards.push({ icon: "📢", value: channels.length, label: "Мои площадки", onclick: "showMyChannels()" });
+    } else {
+        // Супер-админ: глобальная панель (без мероприятий/площадок организаторов)
+        cards.push({ icon: "🛠", value: "—", label: "Панель", onclick: "showAdminDashboard()" });
     }
 
     let html = `<h2 style="padding:16px 16px 0">Привет, ${escapeHtml(me.name || 'Гость')}!</h2>`;
@@ -475,6 +479,41 @@ function renderProfile() {
         ? `<img class="profile-avatar-img" src="${tgUser.photo_url}" alt="">`
         : '<div class="profile-avatar">👤</div>';
 
+    // Матрица ролей: профиль ролевой. Пользователь — минимальный.
+    let extraSections = "";
+    let actionButtons = "";
+    if (me.role === "user") {
+        // Пользователь: только билеты + стать организатором
+        actionButtons = `
+            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
+            <button class="btn btn-primary" onclick="becomeOrganizer()">🚀 Стать организатором</button>`;
+    } else if (me.role === "organizer") {
+        extraSections = `
+            <h3 style="margin:20px 0 10px">Мои площадки</h3>
+            ${channels.length === 0
+                ? '<p class="hint">Нет каналов</p>'
+                : `<div class="admin-list">
+                    ${channels.map(ch => `
+                        <div class="admin-list-item">
+                            <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
+                                <span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>
+                            </div>
+                            <div class="hint">${ch.is_subscription_active ? '🟢 Активна' : '🔴 Неактивна'}${ch.subscription_until ? ' до ' + formatDate(ch.subscription_until) : ''}</div>
+                        </div>`).join('')}
+                </div>`}`;
+        actionButtons = `
+            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
+            <button class="btn btn-secondary" onclick="showMyChannels()">📢 Мои каналы</button>
+            <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>
+            ${state.platform === 'vk'
+                ? `<button class="btn btn-secondary" onclick="linkVKByCode()">🔗 Привязать Telegram (ввести код)</button>`
+                : `<button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Привязать VK (получить код)</button>`}`;
+    } else {
+        // Суперадмин: панель (глобальная), без организаторских разделов
+        actionButtons = `
+            <button class="btn btn-primary" onclick="showAdminDashboard()">🛠 Панель</button>`;
+    }
+
     document.getElementById("profileContent").innerHTML = `
         <div class="profile-card">
             ${avatarHtml}
@@ -483,25 +522,9 @@ function renderProfile() {
             <span class="badge badge-role">${roleText}</span>
             <button class="btn btn-sm btn-secondary mt-12" onclick="editName()">✏️ Изменить имя</button>
         </div>
-        <h3 style="margin:20px 0 10px">Мои каналы</h3>
-        ${channels.length === 0
-            ? '<p class="hint">Нет каналов</p>'
-            : `<div class="admin-list">
-                ${channels.map(ch => `
-                    <div class="admin-list-item">
-                        <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
-                            <span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>
-                        </div>
-                        <div class="hint">${ch.is_subscription_active ? '🟢 Активна' : '🔴 Неактивна'}${ch.subscription_until ? ' до ' + formatDate(ch.subscription_until) : ''}</div>
-                    </div>`).join('')}
-            </div>`}
+        ${extraSections}
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
-            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
-            <button class="btn btn-secondary" onclick="showMyChannels()">📢 Мои каналы</button>
-            <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>
-            ${state.platform === 'vk'
-                ? `<button class="btn btn-secondary" onclick="linkVKByCode()">🔗 Привязать Telegram (ввести код)</button>`
-                : `<button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Привязать VK (получить код)</button>`}
+            ${actionButtons}
         </div>
     `;
 }
@@ -622,8 +645,8 @@ async function showEvents() {
     state.lastAction = "showEvents";
     setActiveTab("events");
     updateToolbar("Мероприятия", false, false);
-    // Организаторы видят свои мероприятия с управлением, покупатели — публичную ленту
-    if (state.role !== "user") {
+    // Матрица ролей: только организатор видит свои мероприятия; user и суперадмин — публичную ленту
+    if (state.role === "organizer") {
         await showAdminEvents();
         return;
     }
@@ -649,13 +672,13 @@ function renderEvents(events) {
             <div class="empty-state">
                 <div class="empty-icon">🎫</div>
                 <h3>Нет предстоящих мероприятий</h3>
-                <button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>
+                ${state.role === "organizer" ? '<button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>' : ''}
             </div>
         `;
         return;
     }
 
-    let html = '<button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>';
+    let html = state.role === "organizer" ? '<button class="btn btn-primary" onclick="showAdminEventForm()">+ Создать мероприятие</button>' : '';
     html += '<div class="events-list" style="margin-top:12px">';
     for (const e of events) {
         const dateStr = formatDate(e.date);
@@ -1076,31 +1099,18 @@ function showEmpty(containerId, message) {
 // ═══════════════════════════════════════════════════════════════
 
 function showAdminDashboard() {
+    // Суперадминская панель: только глобальные разделы (матрица ролей).
+    // НЕ управляет мероприятиями, каналами и площадками организаторов.
+    if (state.role !== "super_admin") return;
     setActiveTab("admin");
     updateToolbar("Панель", false, false);
     showPage("admin");
-    const isSuper = state.role === "super_admin";
-    const isOrganizer = state.role !== "user";  // organizer или super_admin
     document.getElementById("adminContent").innerHTML = `
-        <h2 style="margin-bottom:16px">Панель управления</h2>
+        <h2 style="margin-bottom:16px">Панель супер-админа</h2>
         <div class="admin-menu-grid">
-            <button class="admin-menu-card" onclick="showAdminEvents()">
-                <div class="admin-menu-icon">🎫</div>
-                <div>Мероприятия</div>
-            </button>
-            ${isOrganizer ? `
             <button class="admin-menu-card" onclick="showCheckin()">
                 <div class="admin-menu-icon">🔍</div>
-                <div>Проверка билета</div>
-            </button>` : ''}
-            <button class="admin-menu-card" onclick="showMyChannels()">
-                <div class="admin-menu-icon">📢</div>
-                <div>Мои каналы</div>
-            </button>
-            ${isSuper ? `
-            <button class="admin-menu-card" onclick="showAdminChannels()">
-                <div class="admin-menu-icon">📋</div>
-                <div>Все каналы</div>
+                <div>Поиск по коду / QR</div>
             </button>
             <button class="admin-menu-card" onclick="showAdminStats()">
                 <div class="admin-menu-icon">📊</div>
@@ -1112,12 +1122,12 @@ function showAdminDashboard() {
             </button>
             <button class="admin-menu-card" onclick="showUserInfo()">
                 <div class="admin-menu-icon">👥</div>
-                <div>Инфо о юзере</div>
+                <div>Подписки организаторов</div>
             </button>
             <button class="admin-menu-card" onclick="showAdminHealth()">
                 <div class="admin-menu-icon">🩺</div>
                 <div>Здоровье</div>
-            </button>` : ''}
+            </button>
         </div>
     `;
 }
@@ -2425,6 +2435,20 @@ async function adminUserSubscribe(userId) {
         });
         showToast("✅ Подписка выдана");
         doUserInfoLookup();
+    } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// Матрица ролей: пользователь → организатор (через подписку)
+async function becomeOrganizer() {
+    try {
+        await api("/api/me/subscription", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tier: "basic" }),
+        });
+        showToast("✅ Вы стали организатором");
+        await loadMe();
+        await showHome();
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
