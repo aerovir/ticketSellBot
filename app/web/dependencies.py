@@ -240,6 +240,7 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
     user_data = auth_data.get("user", {})
     platform_user_id = str(user_data.get("id", "0"))
     name = user_data.get("first_name", "")
+    username = user_data.get("username")  # Telegram ник (без @) — для поиска суперадмином
 
     # Платформа из auth_data: telegram (по умолчанию) или vk (launch params)
     platform_name = auth_data.get("platform", "telegram")
@@ -251,6 +252,7 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
             platform=platform,
             platform_user_id=platform_user_id,
             name=name,
+            username=username,
         )
 
         channel_svc = ChannelService(session)

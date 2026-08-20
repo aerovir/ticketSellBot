@@ -2371,8 +2371,8 @@ function showUserInfo() {
     showPage("admin-userinfo");
     document.getElementById("adminUserInfoContent").innerHTML = `
         <div class="form-field">
-            <label class="form-label">Telegram ID пользователя</label>
-            <input class="form-input" id="ui_userid" placeholder="123456789" inputmode="numeric">
+            <label class="form-label">Telegram ID или @username организатора</label>
+            <input class="form-input" id="ui_userid" placeholder="123456789 или @ivan">
         </div>
         <button class="btn btn-primary" onclick="doUserInfoLookup()">🔍 Найти</button>
         <div id="uiResult"></div>
@@ -2393,7 +2393,10 @@ async function doUserInfoLookup() {
             <div class="profile-card" style="margin-top:16px">
                 <div class="profile-avatar">👤</div>
                 <h2>${escapeHtml(user.name || "Без имени")}</h2>
-                <p class="hint">Telegram ID: <code>${escapeHtml(user.telegram_user_id)}</code></p>
+                <p class="hint">
+                    ${user.username ? `<code>@${escapeHtml(user.username)}</code> · ` : ''}
+                    Telegram ID: <code>${escapeHtml(user.telegram_user_id)}</code>
+                </p>
             </div>
             <div class="profile-card" style="margin-top:16px">
                 <h3>Подписка организатора</h3>
