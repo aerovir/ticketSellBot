@@ -376,8 +376,12 @@ function renderHomeDashboard() {
         cards.push({ icon: "🔍", value: "Вход", label: "Продажи / Вход", onclick: "showCheckin()" });
         cards.push({ icon: "📢", value: channels.length, label: "Мои площадки", onclick: "showMyChannels()" });
     } else {
-        // Супер-админ: глобальная панель (без мероприятий/площадок организаторов)
-        cards.push({ icon: "🛠", value: "—", label: "Панель", onclick: "showAdminDashboard()" });
+        // Супер-админ: инструменты ПРЯМО на главной (без промежуточной «Панели»)
+        cards.push({ icon: "🔍", value: "—", label: "Поиск по коду", onclick: "showCheckin()" });
+        cards.push({ icon: "📊", value: "—", label: "Статистика", onclick: "showAdminStats()" });
+        cards.push({ icon: "📣", value: "—", label: "Рассылка", onclick: "showBroadcast()" });
+        cards.push({ icon: "👥", value: "—", label: "Подписки", onclick: "showUserInfo()" });
+        cards.push({ icon: "🩺", value: "—", label: "Здоровье", onclick: "showAdminHealth()" });
     }
 
     let html = `<h2 style="padding:16px 16px 0">Привет, ${escapeHtml(me.name || 'Гость')}!</h2>`;
@@ -509,9 +513,9 @@ function renderProfile() {
                 ? `<button class="btn btn-secondary" onclick="linkVKByCode()">🔗 Привязать Telegram (ввести код)</button>`
                 : `<button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Привязать VK (получить код)</button>`}`;
     } else {
-        // Суперадмин: панель (глобальная), без организаторских разделов
+        // Суперадмин: инструменты на главной (без организаторских разделов)
         actionButtons = `
-            <button class="btn btn-primary" onclick="showAdminDashboard()">🛠 Панель</button>`;
+            <button class="btn btn-primary" onclick="showHome()">🛠 Инструменты (главная)</button>`;
     }
 
     document.getElementById("profileContent").innerHTML = `
