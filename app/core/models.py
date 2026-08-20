@@ -85,6 +85,8 @@ class User(Base):
     )
     platform_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Ник пользователя (Telegram username без @) — для поиска суперадмином.
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

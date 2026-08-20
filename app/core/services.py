@@ -31,12 +31,15 @@ class UserService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_or_create(self, platform: PlatformType, platform_user_id: str, name: Optional[str] = None) -> User:
+    async def get_or_create(self, platform: PlatformType, platform_user_id: str, name: Optional[str] = None, username: Optional[str] = None) -> User:
         """Find existing user by platform+id, or create a new one.
 
         Резолвинг через user_identities: если (platform, platform_user_id) привязана
         к каноническому пользователю (линковка организатора TG↔VK), возвращаем канон.
         Для "legacy" пользователей (созданных до фичи user_identities) — backfill identity.
+
+        username: ник (Telegram username без @) — сохраняется при создании или
+        дописывается, если пришёл новый (поиск суперадмином по нику).
         """
         start = time.perf_counter()
 
@@ -45,6 +48,7 @@ class UserService:
         if identity is not None:
             user = await self.session.get(User, identity.user_id)
             if user is not None:
+                self._maybe_set_username(user, username)
                 logger.info("", extra={
                     "event_type": "user.found",
                     "platform": platform.value,
@@ -63,6 +67,7 @@ class UserService:
         user = result.scalar_one_or_none()
         if user is not None:
             await self._ensure_identity(user.id, platform, platform_user_id)
+            self._maybe_set_username(user, username)
             return user
 
         # 3. Новый пользователь: user + identity
@@ -70,6 +75,7 @@ class UserService:
             platform=platform,
             platform_user_id=platform_user_id,
             name=name,
+            username=username or None,
         )
         self.session.add(user)
         await self.session.flush()
@@ -83,6 +89,12 @@ class UserService:
         })
         return user
 
+    @staticmethod
+    def _maybe_set_username(user: User, username: str | None) -> None:
+        """Дописать ник пользователю, если пришёл и отличается (иначе не трогаем)."""
+        if username and username != user.username:
+            user.username = username
+
     async def get_by_platform_user_id(self, platform: PlatformType, platform_user_id: str) -> User | None:
         """Find a user by platform+id WITHOUT creating (unlike get_or_create).
 
@@ -95,6 +107,21 @@ class UserService:
         stmt = select(User).where(
             and_(User.platform == platform, User.platform_user_id == platform_user_id)
         )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_username(self, username: str) -> User | None:
+        """Find a user by Telegram username (без @), WITHOUT creating.
+
+        Для поиска суперадмином организатора по нику.
+        """
+        uname = username.lstrip("@").strip().lower()
+        if not uname:
+            return None
+        stmt = select(User).where(
+            func.lower(User.username) == uname,
+            User.deleted_at.is_(None),
+        ).limit(1)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

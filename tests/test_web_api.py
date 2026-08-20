@@ -480,6 +480,7 @@ def admin_auth(is_super=False, channel_ids=None, sub_valid=True, organizer=False
         stack.enter_context(patch("app.web.dependencies.settings.admin_telegram_ids", "12345" if is_super else ""))
         _mock_user = Mock(id=_UUID(USER_ID))
         _mock_user.name = "Dev"
+        _mock_user.username = None
         _mock_user.platform_user_id = "12345"
         _mock_user.subscription_tier = Mock()
         _mock_user.subscription_tier.value = "basic"
@@ -873,7 +874,9 @@ class TestSuperAdminGaps:
 
     def test_admin_user_info(self, client):
         """GET /api/admin/users/{id} — инфо о пользователе."""
-        mock_user = Mock(id=USER_ID)
+        mock_user = Mock(id=_UUID(USER_ID))
+        mock_user.platform_user_id = "541587295"
+        mock_user.username = "ivan"
         mock_user.name = "Иван"
         mock_user.created_at = None
         mock_user.is_subscription_active = False
@@ -2759,7 +2762,8 @@ class TestAdminUserSubscribe:
         """GET /admin/users/{id} отдаёт подписку пользователя."""
         mock_user = Mock()
         mock_user.id = _UUID(USER_ID)
-        mock_user.telegram_user_id = "12345"
+        mock_user.platform_user_id = "12345"
+        mock_user.username = "dev_nick"
         mock_user.name = "Dev"
         mock_user.created_at = datetime.now(timezone.utc)
         mock_user.is_subscription_active = True
@@ -2848,3 +2852,25 @@ class TestEventMedia:
         ):
             resp = client.get(f"/api/events/{EVENT_ID}/media", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 404
+
+    def test_admin_user_info_by_username(self, client):
+        """GET /admin/users/{nick} — поиск по @username (не числовому ID)."""
+        mock_user = Mock()
+        mock_user.id = _UUID(USER_ID)
+        mock_user.platform_user_id = "12345"
+        mock_user.username = "ivan_dev"
+        mock_user.name = "Ivan"
+        mock_user.created_at = datetime.now(timezone.utc)
+        mock_user.is_subscription_active = True
+        mock_user.subscription_tier.value = "pro"
+        mock_user.subscription_until = datetime.now(timezone.utc)
+
+        with (
+            admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.UserService.get_by_username", new_callable=AsyncMock, return_value=mock_user),
+            patch("app.web.routes.ChannelService.get_channels_by_admin", new_callable=AsyncMock, return_value=[]),
+        ):
+            resp = client.get("/api/admin/users/ivan_dev", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["username"] == "ivan_dev"
+        assert resp.json()["telegram_user_id"] == "12345"

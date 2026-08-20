@@ -244,6 +244,10 @@ jobs:
             );
             CREATE INDEX IF NOT EXISTS ix_event_price_ranges_event_id ON event_price_ranges(event_id);
 
+            -- Ник пользователя (миграция 0014) — поиск суперадмином по @username
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(64);
+            CREATE INDEX IF NOT EXISTS ix_users_username ON users(username);
+
             -- Организатор: подписка на пользователя + owner-мероприятия
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ;

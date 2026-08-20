@@ -1883,21 +1883,27 @@ async def admin_user_info(
     telegram_user_id: str,
     current: CurrentUser = Depends(require_super_admin),
 ):
-    """Информация о пользователе по Telegram ID (без создания).
+    """Информация о пользователе по Telegram ID или @username (без создания).
 
+    Если вход числовой — по platform_user_id; иначе (ник) — по username.
     Зеркалит бота sa_user_info, но без side-effect get_or_create.
     """
     async with async_session_factory() as session:
         user_svc = UserService(session)
-        user = await user_svc.get_by_platform_user_id(PlatformType.telegram, telegram_user_id)
+        is_numeric = telegram_user_id.strip().lstrip("-").isdigit()
+        if is_numeric:
+            user = await user_svc.get_by_platform_user_id(PlatformType.telegram, telegram_user_id)
+        else:
+            user = await user_svc.get_by_username(telegram_user_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
         channel_svc = ChannelService(session)
-        channels = await channel_svc.get_channels_by_admin(telegram_user_id)
+        channels = await channel_svc.get_channels_by_admin(user.platform_user_id)
 
     return {
         "id": str(user.id),
-        "telegram_user_id": telegram_user_id,
+        "telegram_user_id": user.platform_user_id,
+        "username": user.username,
         "name": user.name,
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "is_subscription_active": user.is_subscription_active,
