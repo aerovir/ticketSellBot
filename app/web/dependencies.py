@@ -24,7 +24,7 @@ from fastapi import Depends, Header, HTTPException, status
 from app.config import settings
 from app.core.database import async_session_factory
 from app.core.models import PlatformType
-from app.core.services import ChannelService, EventService, UserService
+from app.core.services import ChannelService, EventService, UserService, VKGroupService
 
 # Maximum age of initData in seconds (24 hours)
 _MAX_INIT_DATA_AGE = 86400
@@ -191,6 +191,10 @@ class CurrentUser:
     is_organizer: bool = False
     #: ID мероприятий, где пользователь — соработник (event_managers).
     manager_event_ids: list[UUID] = field(default_factory=list)
+    #: ID VK-групп организатора (self-service).
+    vk_group_ids: list[UUID] = field(default_factory=list)
+    #: Есть ли у организатора площадка (TG-канал с активной подпиской ИЛИ VK-группа).
+    has_group: bool = False
 
     @property
     def is_admin(self) -> bool:
@@ -204,8 +208,20 @@ class CurrentUser:
             return "organizer"
         return "user"
 
+    @property
+    def is_creator(self) -> bool:
+        """Может создавать/управлять мероприятиями. Организатор, НО не суперадмин.
+
+        Суперадмин эксклюзивен — он не организатор (role=super_admin приоритетен).
+        """
+        return not self.is_super_admin and (self.is_organizer or bool(self.managed_channel_ids))
+
+    @property
+    def organizer_with_group(self) -> bool:
+        return self.role == "organizer" and self.has_group
+
     def can_manage(self, channel_id: UUID) -> bool:
-        return self.is_super_admin or channel_id in self.managed_channel_ids
+        return channel_id in self.managed_channel_ids
 
     def can_manage_event(self, event_id: UUID) -> bool:
         """Является ли пользователь соработником (manager) мероприятия."""
@@ -248,18 +264,26 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
         # Соработник: ID мероприятий, где пользователь — менеджер
         event_svc = EventService(session)
         manager_event_ids = await event_svc.get_manager_event_ids(user.id)
+        # VK-группы организатора (self-service) — площадка
+        group_svc = VKGroupService(session)
+        vk_groups = await group_svc.list_vk_groups(user.id)
+        vk_group_ids = [g.id for g in vk_groups]
         # Persist the row if get_or_create inserted a new user (read-only requests
         # still carry this dependency); commit is a no-op when nothing changed.
         await session.commit()
 
+    is_super = _is_super_admin(platform_user_id)
     return CurrentUser(
         user_id=user.id,
         telegram_user_id=platform_user_id,
         name=user.name,
-        is_super_admin=_is_super_admin(platform_user_id),
+        is_super_admin=is_super,
         managed_channel_ids=managed,
         is_organizer=is_organizer,
         manager_event_ids=manager_event_ids,
+        vk_group_ids=vk_group_ids,
+        # Площадка: канал с активной подпиской ИЛИ VK-группа (суперадмин эксклюзивен)
+        has_group=(not is_super) and (bool(managed) or bool(vk_group_ids)),
     )
 
 

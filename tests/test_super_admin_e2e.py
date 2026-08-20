@@ -177,36 +177,38 @@ class TestSuperAdminE2E:
     # ─── F15: глобальная статистика ───────────────────────────────────
 
     async def test_f15_global_stats_counts_sold_ticket(self, db_client, db_session):
-        """F15: мероприятие → покупка → /admin/stats учитывает проданный билет."""
+        """F15: организатор создаёт → покупка → /admin/stats учитывает билет (суперадмин смотрит)."""
         user = await UserService(db_session).get_or_create(
             PlatformType.telegram, "12345", "Dev",
         )
+        # Организатор (подписка) создаёт мероприятие
+        await UserService(db_session).activate_subscription(
+            user.id, days=30, tier=SubscriptionTier.basic,
+        )
         await db_session.commit()
 
-        # Супер-админ создаёт мероприятие (владелец — 12345)
-        with patch(SUPER_ADMIN_IDS_PATCH, "12345"):
-            resp = await db_client.post(
-                "/api/admin/events",
-                headers=HEADERS,
-                json=_event_payload(owner_user_id=str(user.id)),
-            )
-            assert resp.status_code == 201, resp.text
-            event_id = resp.json()["id"]
+        resp = await db_client.post(
+            "/api/admin/events",
+            headers=HEADERS,
+            json=_event_payload(owner_user_id=str(user.id)),
+        )
+        assert resp.status_code == 201, resp.text
+        event_id = resp.json()["id"]
 
-            # Публикация (анонс — внешний side-effect, отправку мокаем)
-            with (
-                patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=False),
-                patch("app.web.routes.send_announcement_dm", new_callable=AsyncMock, return_value=False),
-            ):
-                resp = await db_client.post(f"/api/admin/events/{event_id}/publish", headers=HEADERS)
-            assert resp.status_code == 200, resp.text
-            assert resp.json()["is_published"] is True
+        # Публикация (анонс — внешний side-effect, отправку мокаем)
+        with (
+            patch("app.web.routes.post_event_announcement", new_callable=AsyncMock, return_value=False),
+            patch("app.web.routes.send_announcement_dm", new_callable=AsyncMock, return_value=False),
+        ):
+            resp = await db_client.post(f"/api/admin/events/{event_id}/publish", headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_published"] is True
 
         # Покупатель (X-Skip-Auth = 12345) покупает билет
         resp = await db_client.post(f"/api/events/{event_id}/buy", headers=HEADERS)
         assert resp.status_code == 201, resp.text
 
-        # Глобальная статистика — активный билет учтён
+        # Глобальная статистика — активный билет учтён (суперадмин смотрит)
         with patch(SUPER_ADMIN_IDS_PATCH, "12345"):
             resp = await db_client.get("/api/admin/stats", headers=HEADERS)
         assert resp.status_code == 200, resp.text
