@@ -214,6 +214,19 @@
 | 177 | Feat: VK-покупатель получает билет в ЛС VK — messages.send от группы, soft-ask + VKWebAppAllowMessagesFromGroup | ✅ done | 2026-08-12 | — (PR #8, errors #073) |
 | 178 | Docs: канонические user flows для всех ролей (docs/user-flows.md) — основа для e2e и новых фич | ✅ done | 2026-08-12 | — (см. docs/user-flows.md) |
 
+### Подготовка VK Mini App к публикации (2026-08-22)
+
+Доведение VK Mini App (App ID `54698875`) до публичной доступности: адрес приложения в кабинете VK, community token для анонсов на стену группы, прокидывание секрета шифрования на прод. Код VK-фич (#160-166) уже в `dev`.
+
+| # | Задача | Статус | Дата | Коммит |
+|---|--------|--------|------|--------|
+| 204 | Env: `VK_TOKEN_ENCRYPTION_KEY` (Fernet) — добавлен в GitHub Secrets и прокинут в `.env.telegram` через `deploy.yml` (для шифрования community token VK-групп) | ✅ done | 2026-08-22 | — (готово к коммиту) |
+| 205 | Feat: `VKWebAppGetCommunityToken` во фронтенде — при добавлении VK-группы в VK-контексте запрашивается community token (scope wall,messages,manage,photos,app_widget) и передаётся в `POST /api/me/vk-groups`; обработка ошибок (нет прав админа / приложение не установлено) | ✅ done | 2026-08-22 | — (готово к коммиту) |
+| 206 | Infra: CORS — добавлен `https://m.vk.com` (мобильный веб-клиент VK Mini App) | ✅ done | 2026-08-22 | — (готово к коммиту) |
+| 207 | Perf: кэш-бюст `app.js?v=3 → ?v=4` в `index.html` и `vk-app.html` (после правок JS) | ✅ done | 2026-08-22 | — (готово к коммиту) |
+| 208 | Ручные шаги в кабинете VK: тип приложения «Встраиваемое → VK App», адрес `https://pochtibot.online/vk-app`, установка приложения в группу, публикация/модерация | ⏳ ожидает владельца | 2026-08-22 | — |
+
+
 ### E2E-покрытие канонических flows (2026-08-12, `feature/e2e-coverage-flows`)
 
 Закрывает пробелы e2e по `docs/user-flows.md`: F2 QR, F3 возврат, F5/F7 TG-сим, F13-F17 супер-админ, F1 send-vk. Все на реальной БД (`db_client`/`sf`); роль супер-админа — из конфига, БД/сервисы реальные.

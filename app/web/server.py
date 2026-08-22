@@ -51,10 +51,12 @@ def create_app() -> FastAPI:
         "https://pochtibot.online",
         "https://vk.com",
         "https://api.vk.com",
+        "https://m.vk.com",
     ] if settings.webapp_url else [
         "https://pochtibot.online",
         "https://vk.com",
         "https://api.vk.com",
+        "https://m.vk.com",
     ]
 
     app.add_middleware(
