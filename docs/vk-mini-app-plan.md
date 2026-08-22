@@ -176,7 +176,24 @@ event_managers(event_id FK, user_id FK)  -- PK (event_id, user_id)
 | 5 | DM-уведомления покупателю в VK (требует `VKWebAppAllowMessagesFromGroup`) | 📌 отложить |
 | 6 | VK Pay для платных | 📌 отложить (stub, как TG) |
 | 7 | Старый VK-бот (vkbottle, команды `/buy` и т.д.) — устарел в режиме «только web» | 📌 решить: убрать/оставить |
-| 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения token (сейчас бэкенд принимает token в POST) | 📌 подключить в Mini App при добавлении группы |
+| 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения token (сейчас бэкенд принимает token в POST) | ✅ подключён: при добавлении VK-группы в VK-контексте запрашивается community token (scope `wall,messages,manage,photos,app_widget`) и передаётся в POST `/api/me/vk-groups` (2026-08-22) |
+
+## 10. Публикация VK Mini App (чек-лист, 2026-08-22)
+
+Код VK-фич (#160-166) в `dev`. Для публичной доступности приложения (App ID `54698875`, владелец aerovir):
+
+**По коду (сделано):**
+- `deploy.yml` — `VK_TOKEN_ENCRYPTION_KEY` прокинут в `.env.telegram` (шифрование community token).
+- `app.js` — `VKWebAppGetCommunityToken` при добавлении VK-группы (закрывает вопрос №8).
+- CORS — добавлен `https://m.vk.com`.
+- Кэш-бюст `app.js?v=4`.
+
+**В кабинете VK (руками владельца):**
+1. Приложение `54698875` → тип «Встраиваемое приложение» → «VK App».
+2. **Адрес приложения:** `https://pochtibot.online/vk-app` (web + мобильные). На этот адрес VK открывает Mini App внутри клиента; путь `/vk-app` обязателен (фронтенд определяет VK-режим по `pathname.startsWith("/vk-app")`).
+3. Установить приложение в VK-группу («Встраиваемые приложения») — иначе `VKWebAppGetCommunityToken` не вернёт токен, анонсы на стену не уйдут.
+4. Открыть `https://vk.com/app54698875` → проверить загрузку и авторизацию (launch params).
+5. Опубликовать / отправить на модерацию (требование VK: приложение открывается и отвечает).
 
 ---
 

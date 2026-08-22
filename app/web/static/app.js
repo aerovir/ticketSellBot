@@ -12,6 +12,7 @@
 const state = {
     initData: "",
     platform: "telegram", // "telegram" | "vk"
+    vkAppId: "",          // VK App ID из launch params (для VKWebAppGetCommunityToken)
     events: [],
     currentEvent: null,
     tickets: [],
@@ -144,6 +145,7 @@ async function initVKAuth() {
             }
         }
         const lp = normalizeVKLaunchParams(res);
+        state.vkAppId = String(lp.vk_app_id || "");
         if (lp.sign && lp.vk_user_id) {
             const query = Object.entries(lp)
                 .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
@@ -2214,13 +2216,42 @@ async function addMyVKGroup() {
     const groupId = document.getElementById("vkg_id").value.trim();
     if (!groupId) { showToast("Введите ID VK-группы", true); return; }
     const title = document.getElementById("vkg_title").value.trim() || null;
+
+    // В VK Mini App запрашиваем community token (VKWebAppGetCommunityToken):
+    // приложение должно быть установлено в группу, пользователь — её админ.
+    // Токен нужен для wall.post/messages.send (анонсы и DM билета).
+    let communityToken;
+    if (window.vkBridge && state.platform === "vk") {
+        showLoading();
+        try {
+            const res = await window.vkBridge.send("VKWebAppGetCommunityToken", {
+                app_id: parseInt(state.vkAppId, 10) || undefined,
+                group_id: parseInt(groupId, 10),
+                scope: "wall,messages,manage,photos,app_widget",
+            });
+            communityToken = (res && res.access_token) || "";
+        } catch (e) {
+            hideLoading();
+            showToast("Не удалось получить токен группы. Установите приложение в группу и убедитесь, что вы её администратор", true);
+            return;
+        }
+        if (!communityToken) {
+            hideLoading();
+            showToast("Токен группы не получен (нет прав админа или приложение не установлено в группу)", true);
+            return;
+        }
+        hideLoading();
+    }
+
+    const payload = { group_id: groupId, title };
+    if (communityToken) payload.community_token = communityToken;
     try {
         await api("/api/me/vk-groups", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ group_id: groupId, title }),
+            body: JSON.stringify(payload),
         });
-        showToast("✅ VK-группа добавлена");
+        showToast("✅ VK-группа добавлена" + (communityToken ? " (с токеном)" : ""));
         await showMyVKGroups();
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }
