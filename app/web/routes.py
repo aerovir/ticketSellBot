@@ -137,6 +137,10 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         event = await svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        # Публичный доступ только к опубликованным, активным, не удалённым мероприятиям.
+        # Черновики/неактивные/удалённые не должны быть видны по прямой ссылке.
+        if not event.is_published or not event.is_active or event.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
         # Актуальная цена по дате (динамические цены)
         now = datetime.now(timezone.utc)
         ranges_map = await svc.price_ranges_map([uid])

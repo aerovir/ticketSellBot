@@ -1045,7 +1045,12 @@ class EventService:
         stmt = (
             select(Event)
             .where(
-                and_(Event.is_active == True, Event.is_published == True, Event.date >= now)
+                and_(
+                    Event.is_active == True,
+                    Event.is_published == True,
+                    Event.date >= now,
+                    Event.deleted_at.is_(None),
+                )
             )
             .order_by(Event.date.asc())
         )

@@ -263,6 +263,8 @@ class TestAPIEndpoints:
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
         mock_event.is_active = True
+        mock_event.is_published = True
+        mock_event.deleted_at = None
         mock_event.age_restriction = "16+"
         mock_event.media_telegram_file_id = None
         mock_event.media_type = None
@@ -278,6 +280,51 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         assert resp.json()["title"] == "Test Event"
         assert resp.json()["age_restriction"] == "16+"
+
+    def test_event_detail_draft_404(self, client):
+        """GET /api/events/{id} — черновик (is_published=False) → 404 (не утекает наружу)."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.is_active = True
+        mock_event.is_published = False
+        mock_event.deleted_at = None
+
+        with (
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+        ):
+            resp = client.get(f"/api/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 404
+
+    def test_event_detail_inactive_404(self, client):
+        """GET /api/events/{id} — неактивное мероприятие → 404."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.is_active = False
+        mock_event.is_published = True
+        mock_event.deleted_at = None
+
+        with (
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+        ):
+            resp = client.get(f"/api/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 404
+
+    def test_event_detail_deleted_404(self, client):
+        """GET /api/events/{id} — удалённое мероприятие → 404."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.is_active = True
+        mock_event.is_published = True
+        mock_event.deleted_at = datetime.now(timezone.utc)
+
+        with (
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+        ):
+            resp = client.get(f"/api/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 404
 
     def test_event_detail_not_found(self, client):
         """GET /api/events/{id} — 404 если нет."""
@@ -621,6 +668,57 @@ class TestAdminAPI:
         assert resp.json()["is_published"] is False
         # age_restriction проброшен в сервис
         assert m_create.await_args.kwargs["age_restriction"] == "18+"
+
+    def test_admin_create_event_bad_age_restriction(self, client):
+        """POST /api/admin/events — недопустимое age_restriction ("21+") → 422."""
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True):
+            resp = client.post(
+                "/api/admin/events",
+                headers={"X-Skip-Auth": "1"},
+                json={
+                    "title": "New Event",
+                    "date": "2026-12-01T19:00:00Z",
+                    "price": 0,
+                    "total_tickets": 50,
+                    "channel_id": CHANNEL_ID,
+                    "age_restriction": "21+",
+                },
+            )
+        assert resp.status_code == 422
+
+    def test_admin_create_event_empty_age_restriction(self, client):
+        """POST /api/admin/events — пустой age_restriction → 422 (только 0+/6+/12+/16+/18+)."""
+        with admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True):
+            resp = client.post(
+                "/api/admin/events",
+                headers={"X-Skip-Auth": "1"},
+                json={
+                    "title": "New Event",
+                    "date": "2026-12-01T19:00:00Z",
+                    "price": 0,
+                    "total_tickets": 50,
+                    "channel_id": CHANNEL_ID,
+                    "age_restriction": "",
+                },
+            )
+        assert resp.status_code == 422
+
+    def test_admin_update_event_bad_age_restriction(self, client):
+        """PATCH /api/admin/events/{id} — недопустимое age_restriction ("21+") → 422."""
+        mock_event = Mock()
+        mock_event.id = EVENT_ID
+        mock_event.channel_id = _UUID(CHANNEL_ID)
+
+        with (
+            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
+        ):
+            resp = client.patch(
+                f"/api/admin/events/{EVENT_ID}",
+                headers={"X-Skip-Auth": "1"},
+                json={"age_restriction": "21+"},
+            )
+        assert resp.status_code == 422
 
     def test_admin_create_event_wrong_channel(self, client):
         """POST /api/admin/events — 403 если канал вне managed."""
@@ -2695,6 +2793,8 @@ class TestPriceRangesAPI:
         ev.available_tickets = 50
         ev.total_tickets = 100
         ev.is_active = True
+        ev.is_published = True
+        ev.deleted_at = None
         ev.age_restriction = "0+"
         ev.media_telegram_file_id = None
         ev.media_type = None
@@ -2826,6 +2926,8 @@ class TestEventMedia:
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
         mock_event.is_active = True
+        mock_event.is_published = True
+        mock_event.deleted_at = None
         mock_event.age_restriction = "0+"
         mock_event.media_telegram_file_id = "AgAC_123"
         mock_event.media_type = "photo"
