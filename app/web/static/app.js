@@ -531,6 +531,7 @@ function renderProfile() {
         ${extraSections}
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
             ${actionButtons}
+            <button class="btn btn-danger" style="margin-top:8px" onclick="deleteAccount()">🗑 Удалить аккаунт</button>
         </div>
     `;
 }
@@ -551,6 +552,30 @@ async function editName() {
         await loadMe();
         renderProfile();
     } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+// Удаление аккаунта (п.1.1.10 Правил VK) — self-service, анонимизация данных.
+// После удаления пользователь может вернуться — создастся чистый аккаунт.
+async function deleteAccount() {
+    const ok = await tgConfirm(
+        "Удалить аккаунт и данные? Это действие необратимо: профиль, имя и подписка будут удалены. Купленные билеты останутся действительными для входа.",
+        "Удалить",
+        "Отмена"
+    );
+    if (!ok) return;
+    showLoading();
+    try {
+        await api("/api/me", { method: "DELETE" });
+        hideLoading();
+        // Очистить локальное состояние и показать «удалено»
+        state.me = null;
+        state.role = "user";
+        showToast("✅ Аккаунт удалён");
+        showHome();
+    } catch (e) {
+        hideLoading();
+        showToast(e.message || "Ошибка удаления", true);
+    }
 }
 
 // ─── API helper ─────────────────────────────────────────────────
