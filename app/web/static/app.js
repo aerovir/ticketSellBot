@@ -834,6 +834,7 @@ function renderEvent(event) {
                 <div class="meta-row"><span class="meta-label">📍 Место</span><span>${event.location || 'Не указано'}</span></div>
                 <div class="meta-row"><span class="meta-label">💰 Цена</span><span>${formatPrice(event.price)}</span></div>
                 <div class="meta-row"><span class="meta-label">🎟 Билетов</span><span>${event.available_tickets} из ${event.total_tickets}</span></div>
+                <div class="meta-row"><span class="meta-label">🔞 Возраст</span><span>${escapeHtml(event.age_restriction || '0+')}</span></div>
             </div>
             <div class="buy-section">
                 ${buyButton}
