@@ -604,6 +604,12 @@ function renderProfile() {
             ${actionButtons}
             <button class="btn btn-danger" style="margin-top:8px" onclick="deleteAccount()">🗑 Удалить аккаунт</button>
         </div>
+        <div class="support-block">
+            <h3 style="margin:20px 0 8px">🛟 Поддержка</h3>
+            <p class="hint" style="margin:0 0 8px">Вопросы, замечания, помощь с покупкой билетов:</p>
+            <a class="btn btn-secondary" href="https://t.me/aerovir" target="_blank" rel="noopener">✈️ Telegram: @aerovir</a>
+            <a class="btn btn-secondary" href="mailto:aerovir@mail.ru">📧 aerovir@mail.ru</a>
+        </div>
     `;
 }
 
