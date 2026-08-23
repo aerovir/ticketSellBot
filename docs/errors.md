@@ -1269,3 +1269,37 @@
   - Обновлён шаг «Синхронизировать схему БД» в `deploy.yml`: добавлены 3 колонки payments (идемпотентно) — чтобы будущие деплои чинили схему.
 - **Коммит:** — (см. PR, ветка feature/promo-codes + фикс deploy)
 - **Тесты:** e2e `test_promo_e2e.py` не ловит (в тестах БД создаётся `create_all` → колонки есть; проблема только на проде с реальной миграцией). Пройден ручной e2e на проде после фикса.
+
+---
+
+## 078 — Публичная утечка черновиков + отсутствие валидации age_restriction (найдено e2e на проде)
+
+- **Дата:** 2026-08-24
+- **Статус:** ✅ Исправлено
+- **Описание:** E2E-тест на реальном проде (`https://pochtibot.online`) выявил два дефекта:
+  - **Д1.** `GET /api/events/{id}` (публичный) отдавал 200 с полным телом для **черновика** (`is_published=False`). Любой, кто знает UUID, видел неопубликованное мероприятие.
+  - **Д2.** `age_restriction` принимал произвольные значения (например `"21+"` → 200), хотя по ФЗ-436 допустимы только `0+/6+/12+/16+/18+`.
+- **Анализ:**
+  - **Д1 (подтверждено `routes.py` get_event):** публичный эндпоинт не проверял `is_published`/`is_active`/`deleted_at` — только `event is None`.
+  - **Д1 (подтверждено `services.py` list_upcoming):** не фильтровал `deleted_at` — удалённое могло появиться в списке.
+  - **Д2 (подтверждено `schemas.py`):** `age_restriction` имел только `max_length=4`, но не набор `AGE_RESTRICTIONS` (константа была объявлена, но не применена).
+- **Исправление:**
+  - `routes.py` get_event: добавлен гейт `if not event.is_published or not event.is_active or event.deleted_at is not None → 404`.
+  - `services.py` list_upcoming: добавлен `Event.deleted_at.is_(None)` в WHERE.
+  - `schemas.py`: `field_validator` в `EventCreate`/`EventUpdateIn` — значение должно быть в `AGE_RESTRICTIONS`.
+- **Коммит:** `0c66b32` (ветка `bugfix/event-public-gate-age-validation`)
+- **Тесты:** +6 web (draft/inactive/deleted → 404; `"21+"`/`""` → 422 на create и update). Полный прогон 522 passed.
+
+---
+
+## 079 — DELETE /api/me (удаление аккаунта, #213) отсутствовал на проде
+
+- **Дата:** 2026-08-24
+- **Статус:** ✅ Исправлено
+- **Описание:** При e2e на проде `DELETE /api/me` вернул 405. Удаление аккаунта (п.1.1.10 Правил VK) не работало.
+- **Анализ:**
+  - **Подтверждено (`git merge-base --is-ancestor a3bb516 dev` → false):** ветка `feature/vk-account-delete` (коммит `a3bb516`) **не была смержена в dev** — фича существовала только в отдельной ветке, деплой на прод шёл без неё.
+- **Исправление:**
+  - Смержен `feature/vk-account-delete` в `dev` (мерж-коммит `41b7ae3`): `UserService.delete_account`, `DELETE /api/me`, кнопка «Удалить аккаунт» в UI.
+- **Коммит:** `41b7ae3` (Merge feature/vk-account-delete)
+- **Тесты:** 7 сервисных + 1 web из ветки; полный прогон после мержа 529 passed.
