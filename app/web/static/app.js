@@ -132,17 +132,24 @@ function normalizeVKLaunchParams(res) {
 async function initVKAuth() {
     const bridge = window.vkBridge;
     try {
-        bridge.send("VKWebAppInit");
-        let res = await bridge.send("VKWebAppGetLaunchParams");
-        if (!res || (!res.sign && !res.vk_user_id)) {
-            // В веб-версии (desktop/web) bridge может не отдать launch params —
-            // берём их из URL (/vk-app?vk_user_id=...&vk_ts=...&sign=...).
-            const qs = new URLSearchParams(window.location.search);
-            if (qs.get("sign") && qs.get("vk_user_id")) {
-                const fromUrl = {};
-                qs.forEach((v, k) => { fromUrl[k] = v; });
-                res = fromUrl;
-            }
+        // Приоритет — launch params из URL-query: VK всегда передаёт их в iframe
+        // (/vk-app?vk_user_id=...&vk_ts=...&sign=...). Это работает даже если
+        // bridge ещё не готов или не ответил (на десктопе VKWebAppGetLaunchParams
+        // может зависнуть — promise не резолвится вне VK-окружения).
+        const qs = new URLSearchParams(window.location.search);
+        let res = null;
+        if (qs.get("sign") && qs.get("vk_user_id")) {
+            const fromUrl = {};
+            qs.forEach((v, k) => { fromUrl[k] = v; });
+            res = fromUrl;
+        }
+        // Если в URL нет — пробуем через bridge (с таймаутом, чтобы не зависнуть).
+        if (!res && bridge) {
+            bridge.send("VKWebAppInit");
+            res = await Promise.race([
+                bridge.send("VKWebAppGetLaunchParams"),
+                new Promise(r => setTimeout(() => r(null), 800)),
+            ]);
         }
         const lp = normalizeVKLaunchParams(res);
         state.vkAppId = String(lp.vk_app_id || "");
@@ -161,8 +168,10 @@ async function initVKAuth() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-    // VK Mini App (открывается на /vk-app)
-    const isVK = window.vkBridge && window.location.pathname.startsWith("/vk-app");
+    // VK Mini App (открывается на /vk-app). Определяем по пути, а не по vkBridge:
+    // vk-bridge мог не загрузиться (CDN недоступен в изолированном iframe VK),
+    // но launch params всё равно приходят в URL-query (/vk-app?vk_*&sign=...).
+    const isVK = window.location.pathname.startsWith("/vk-app");
     if (isVK) {
         await initVKAuth();
     } else if (window.Telegram && window.Telegram.WebApp) {
