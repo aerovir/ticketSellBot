@@ -220,6 +220,9 @@ jobs:
             -- invites_quota for events (invite tickets, pro)
             ALTER TABLE events ADD COLUMN IF NOT EXISTS invites_quota INTEGER NOT NULL DEFAULT 0;
 
+            -- Возрастное ограничение мероприятия (ФЗ-436, миграция 0015)
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS age_restriction VARCHAR(4) NOT NULL DEFAULT '0+';
+
             -- invite tickets: is_invite / seats / invited_by (user_id nullable)
             ALTER TABLE tickets ADD COLUMN IF NOT EXISTS is_invite BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE tickets ADD COLUMN IF NOT EXISTS seats INTEGER NOT NULL DEFAULT 1;
