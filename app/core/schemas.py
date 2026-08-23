@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.models import SubscriptionTier, PeriodUnit, PlatformType, DiscountType
 
@@ -44,6 +44,13 @@ class EventCreate(BaseModel):
     # Возрастное ограничение (ФЗ-436). По умолчанию "0+".
     age_restriction: str = Field(default="0+", max_length=4)
 
+    @field_validator("age_restriction")
+    @classmethod
+    def _validate_age_restriction(cls, v: str) -> str:
+        if v not in AGE_RESTRICTIONS:
+            raise ValueError(f"age_restriction должно быть одно из: {', '.join(AGE_RESTRICTIONS)}")
+        return v
+
 
 class EventUpdateIn(BaseModel):
     """Partial update for an event (all fields optional)."""
@@ -55,6 +62,13 @@ class EventUpdateIn(BaseModel):
     total_tickets: Optional[int] = Field(default=None, ge=0)
     invites_quota: Optional[int] = Field(default=None, ge=0)
     age_restriction: Optional[str] = Field(default=None, max_length=4)
+
+    @field_validator("age_restriction")
+    @classmethod
+    def _validate_age_restriction(cls, v: str | None) -> str | None:
+        if v is not None and v not in AGE_RESTRICTIONS:
+            raise ValueError(f"age_restriction должно быть одно из: {', '.join(AGE_RESTRICTIONS)}")
+        return v
 
 
 class InviteIssueIn(BaseModel):
