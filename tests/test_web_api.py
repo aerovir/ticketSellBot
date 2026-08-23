@@ -1699,6 +1699,21 @@ class TestCoverageGaps:
         assert resp.status_code == 200
         assert resp.json()["name"] == "Новое"
 
+    def test_delete_me(self, client):
+        """DELETE /api/me — удаление аккаунта (self-service, п.1.1.10)."""
+        _u = Mock()
+        _u.id = _UUID(USER_ID)
+        _u.deleted_at = datetime.now(timezone.utc)
+        with (
+            admin_auth(is_super=False, channel_ids=[]),
+            patch("app.web.routes.UserService.delete_account", new_callable=AsyncMock, return_value=_u),
+        ):
+            resp = client.delete("/api/me", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] is True
+        assert body["id"] == USER_ID
+
     def test_admin_get_event(self, client):
         """GET /api/admin/events/{id} — детали (админ)."""
         from datetime import datetime, timezone

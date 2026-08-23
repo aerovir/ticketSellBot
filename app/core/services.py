@@ -47,7 +47,7 @@ class UserService:
         identity = await self._find_identity(platform, platform_user_id)
         if identity is not None:
             user = await self.session.get(User, identity.user_id)
-            if user is not None:
+            if user is not None and user.deleted_at is None:
                 self._maybe_set_username(user, username)
                 logger.info("", extra={
                     "event_type": "user.found",
@@ -65,12 +65,55 @@ class UserService:
         )
         result = await self.session.execute(stmt)
         user = result.scalar_one_or_none()
-        if user is not None:
+        if user is not None and user.deleted_at is None:
             await self._ensure_identity(user.id, platform, platform_user_id)
             self._maybe_set_username(user, username)
             return user
 
+        # 2а. Удалённый пользователь (deleted_at задан) — создаём ЧИСТЫЙ аккаунт.
+        #     Старый пользователь остаётся удалённым; identity переназначается на нового.
+        if user is not None and user.deleted_at is not None:
+            logger.info("", extra={
+                "event_type": "user.recreated_after_delete",
+                "platform": platform.value,
+                "user_id": platform_user_id,
+                "old_user_id": str(user.id),
+                "status": "success",
+                "duration_ms": _ms(start),
+            })
+            return await self._create_fresh_user(
+                platform=platform,
+                platform_user_id=platform_user_id,
+                name=name,
+                username=username,
+                start=start,
+            )
+
         # 3. Новый пользователь: user + identity
+        return await self._create_fresh_user(
+            platform=platform,
+            platform_user_id=platform_user_id,
+            name=name,
+            username=username,
+            start=start,
+        )
+
+    async def _create_fresh_user(
+        self,
+        platform: PlatformType,
+        platform_user_id: str,
+        name: Optional[str],
+        username: Optional[str],
+        start: float,
+    ) -> User:
+        """Создать нового пользователя и переназначить identity на него.
+
+        Используется для нового пользователя и для «пересоздания» после удаления
+        аккаунта (п.1.1.10): старый (удалённый) пользователь остаётся в БД,
+        identity (platform, platform_user_id) привязывается к новому аккаунту.
+        """
+        # Переназначить существующую identity (если была привязана к удалённому)
+        identity = await self._find_identity(platform, platform_user_id)
         user = User(
             platform=platform,
             platform_user_id=platform_user_id,
@@ -79,7 +122,11 @@ class UserService:
         )
         self.session.add(user)
         await self.session.flush()
-        await self._ensure_identity(user.id, platform, platform_user_id)
+        if identity is not None:
+            identity.user_id = user.id
+            await self.session.flush()
+        else:
+            await self._ensure_identity(user.id, platform, platform_user_id)
         logger.info("", extra={
             "event_type": "user.created",
             "platform": platform.value,
@@ -378,6 +425,33 @@ class UserService:
             return None
         user.deleted_at = datetime.now(timezone.utc)
         await self.session.flush()
+        return user
+
+    async def delete_account(self, user_id: uuid.UUID) -> User | None:
+        """Удаление аккаунта самим пользователем (п.1.1.10 Правил VK).
+
+        Анонимизация + деактивация (билеты сохраняются — нужны для входа):
+        - deleted_at = now (аккаунт удалён);
+        - name/username = None (стирание персональных данных);
+        - подписка пользователя деактивируется (is_subscription_active=False,
+          subscription_until=None).
+        Идемпотентно: повторный вызов возвращает уже удалённого пользователя.
+        """
+        user = await self.session.get(User, user_id)
+        if user is None:
+            return None
+        user.deleted_at = datetime.now(timezone.utc)
+        user.name = None
+        user.username = None
+        user.is_subscription_active = False
+        user.subscription_until = None
+        await self.session.flush()
+        logger.info("", extra={
+            "event_type": "user.account_deleted",
+            "user_id": str(user.id),
+            "status": "success",
+            "duration_ms": _ms(time.perf_counter()),
+        })
         return user
 
     async def list_all(self) -> list[User]:

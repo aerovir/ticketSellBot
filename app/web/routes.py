@@ -579,6 +579,23 @@ async def update_me(
     return {"id": str(current.user_id), "name": user.name if user else None}
 
 
+@router.delete("/me")
+async def delete_me(current: CurrentUser = Depends(get_current_user)):
+    """Удалить свой аккаунт и данные (п.1.1.10 Правил VK Mini Apps).
+
+    Анонимизация профиля + деактивация подписки. Билеты сохраняются
+    (нужны для входа на купленные мероприятия). Повторный вход создаёт
+    новый (чистый) аккаунт.
+    """
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.delete_account(current.user_id)
+        await session.commit()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+    return {"id": str(current.user_id), "deleted": True}
+
+
 @router.post("/me/subscription")
 async def subscribe_me(
     body: SubscribeMeIn,

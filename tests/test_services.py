@@ -50,6 +50,77 @@ class TestUserService:
         )
         assert user2.id != sample_user.id
 
+    # ─── Удаление аккаунта (п.1.1.10 Правил VK) ────────────────
+
+    async def test_delete_account_marks_deleted(self, db_session, user_svc, sample_user):
+        """delete_account выставляет deleted_at."""
+        await user_svc.delete_account(sample_user.id)
+        await db_session.flush()
+        # Перечитаем
+        from sqlalchemy import select
+        res = await db_session.execute(select(User).where(User.id == sample_user.id))
+        user = res.scalar_one()
+        assert user.deleted_at is not None
+
+    async def test_delete_account_anonymizes(self, db_session, user_svc, sample_user):
+        """delete_account стирает имя и username (анонимизация)."""
+        await user_svc.delete_account(sample_user.id)
+        await db_session.flush()
+        res = await db_session.execute(select(User).where(User.id == sample_user.id))
+        user = res.scalar_one()
+        assert user.name is None
+        assert user.username is None
+
+    async def test_delete_account_deactivates_subscription(self, db_session, user_svc, sample_user):
+        """delete_account деактивирует подписку пользователя."""
+        await user_svc.activate_subscription(sample_user.id, days=30, tier=SubscriptionTier.pro)
+        await db_session.flush()
+        await user_svc.delete_account(sample_user.id)
+        await db_session.flush()
+        res = await db_session.execute(select(User).where(User.id == sample_user.id))
+        user = res.scalar_one()
+        assert user.is_subscription_active is False
+        assert user.subscription_until is None
+
+    async def test_delete_account_keeps_tickets(self, db_session, user_svc, sample_user, sample_event):
+        """delete_account сохраняет билеты (нужны для входа на мероприятие)."""
+        ticket_svc = TicketService(db_session)
+        ticket = await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
+        await db_session.flush()
+        await user_svc.delete_account(sample_user.id)
+        await db_session.flush()
+        res = await db_session.execute(select(Ticket).where(Ticket.id == ticket.id))
+        kept = res.scalar_one()
+        assert kept.user_id == sample_user.id  # билет не удалён и не отвязан
+
+    async def test_delete_account_then_get_or_create_fresh(self, db_session, user_svc, sample_user):
+        """После удаления повторный вход создаёт НОВОГО пользователя (чистый аккаунт)."""
+        platform_user_id = sample_user.platform_user_id
+        await user_svc.delete_account(sample_user.id)
+        await db_session.flush()
+        new_user = await user_svc.get_or_create(
+            platform=sample_user.platform,
+            platform_user_id=platform_user_id,
+            name="New Life",
+        )
+        assert new_user.id != sample_user.id
+        assert new_user.deleted_at is None
+        assert new_user.name == "New Life"
+
+    async def test_delete_account_idempotent(self, db_session, user_svc, sample_user):
+        """Повторный delete_account — не ошибка (идемпотентно)."""
+        await user_svc.delete_account(sample_user.id)
+        await db_session.flush()
+        # Второй раз — не должно падать
+        user = await user_svc.delete_account(sample_user.id)
+        assert user is not None
+        assert user.deleted_at is not None
+
+    async def test_delete_account_not_found(self, db_session, user_svc):
+        """delete_account несуществующего пользователя — None."""
+        user = await user_svc.delete_account(uuid.uuid4())
+        assert user is None
+
 
 # ═══════════════════════════════════════════════════════════════
 # ChannelService
