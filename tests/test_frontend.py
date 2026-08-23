@@ -58,10 +58,12 @@ def test_appjs_initvk_handles_direct_object():
     # (без обёртки launch_params): { vk_user_id, vk_ts, sign, ... }.
     # Раньше код читал только res.launch_params — из-за этого initData
     # оставался пустым и VK Mini App показывал «Откройте кабинет в Telegram».
-    # 1. Прямой объект vk-bridge (sign на верхнем уровне) обрабатывается:
-    assert "!res.sign" in APP_JS or "res.sign &&" in APP_JS
-    # 2. Fallback на launch params в URL (/vk-app?vk_user_id=...&sign=...):
-    assert "window.location.search" in APP_JS
+    # После фикса белого экрана: приоритет — launch params из URL-query
+    # (VK передаёт их в iframe), bridge — fallback с таймаутом.
+    # 1. Приоритет URL (/vk-app?vk_user_id=...&sign=...) — sign берётся из query:
+    assert 'qs.get("sign")' in APP_JS and 'qs.get("vk_user_id")' in APP_JS
+    # 2. Прямой объект vk-bridge (sign на верхнем уровне) обрабатывается:
+    assert "lp.sign && lp.vk_user_id" in APP_JS
     # 3. Объект/строка нормализуются в единый dict, затем — в initData:
     assert "normalizeVKLaunchParams" in APP_JS
     assert "Object.entries(lp)" in APP_JS
