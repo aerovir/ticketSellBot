@@ -21,6 +21,24 @@
             <p>Загрузка...</p>
         </div>
 
+        <!-- Онбординг: принятие условий (п.1.1.4 Правил VK Mini Apps) -->
+        <div class="onboarding-overlay" id="onboardingOverlay" style="display:none">
+            <div class="onboarding-card">
+                <div class="onboarding-icon">🎟</div>
+                <h2>Добро пожаловать в «Билетёр»!</h2>
+                <p class="onboarding-text">
+                    Сервис продажи билетов на мероприятия. Здесь вы можете
+                    просматривать афишу, покупать билеты и получать коды/QR для входа.
+                </p>
+                <div class="onboarding-terms">
+                    <p>Используя сервис, вы принимаете условия:</p>
+                    <a href="#" onclick="return false" class="terms-link" data-terms="user_agreement">📄 Пользовательское соглашение</a>
+                    <a href="#" onclick="return false" class="terms-link" data-terms="privacy_policy">🔒 Политика конфиденциальности</a>
+                </div>
+                <button class="btn btn-primary onboarding-btn" id="onboardingAccept" onclick="acceptTerms()">✅ Принять условия</button>
+            </div>
+        </div>
+
         <!-- Error toast -->
         <div class="toast" id="toast"></div>
 
@@ -166,6 +184,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-    <script src="/static/app.js?v=4"></script>
+    <script src="/static/app.js?v=5"></script>
 </body>
 </html>
