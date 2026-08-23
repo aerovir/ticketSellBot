@@ -1303,3 +1303,20 @@
   - Смержен `feature/vk-account-delete` в `dev` (мерж-коммит `41b7ae3`): `UserService.delete_account`, `DELETE /api/me`, кнопка «Удалить аккаунт» в UI.
 - **Коммит:** `41b7ae3` (Merge feature/vk-account-delete)
 - **Тесты:** 7 сервисных + 1 web из ветки; полный прогон после мержа 529 passed.
+
+---
+
+## 080 — Белый экран VK Mini App (launch params не извлекались)
+
+- **Дата:** 2026-08-24
+- **Статус:** ✅ Исправлено
+- **Описание:** При открытии VK Mini App (`/vk-app`) — белый экран, не отрисовываются иконки. Прод-логи: HTML/CSS/JS отдаются (200), но **ни одного API-запроса** — JS останавливался до авторизации.
+- **Анализ:**
+  - **Подтверждено (`app.js` initVKAuth):** `await bridge.send("VKWebAppGetLaunchParams")` **зависал навсегда** вне VK-окружения (desktop/web — promise не резолвится). Код не доходил до URL-fallback → `state.initData` пуст → `showNoInitData()` → «Откройте кабинет в Telegram».
+  - **Подтверждено (воспроизведение Playwright):** при заблокированном unpkg (`vk-bridge` не грузится) `window.vkBridge` = undefined → `isVK=false` → код уходит в Telegram-ветку → белый экран. Причина: `isVK = window.vkBridge && pathname.startsWith("/vk-app")` зависел от загрузки CDN.
+- **Исправление:**
+  - `isVK` определяется по `pathname.startsWith("/vk-app")` — независимо от vk-bridge.
+  - `initVKAuth`: **приоритет — launch params из URL-query** (`/vk-app?vk_user_id=...&sign=...`, VK всегда передаёт их в iframe); bridge — только fallback с таймаутом 800мс (`Promise.race`).
+  - `vk-bridge.min.js` (4.4KB) забандлен локально в `/static` и подключён вместо unpkg CDN.
+- **Коммит:** `95f1d32` (ветка `bugfix/vk-app-white-screen`)
+- **Тесты:** `test_appjs_initvk_handles_direct_object` обновлён под новую логику (`b30dcca`); полный прогон 530 passed.
