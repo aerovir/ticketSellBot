@@ -188,6 +188,20 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
     }
 
+    // Онбординг (п.1.1.4 Правил VK): при первом запуске требуем принятия условий.
+    // Пока не приняты — блокируем доступ к кабинету (показываем только онбординг).
+    if (!hasAcceptedTerms()) {
+        if (showOnboarding()) {
+            // Ждём нажатия «Принять» → acceptTerms() вызовет runAppStart()
+            return;
+        }
+    }
+
+    await runAppStart();
+});
+
+// Основной запуск кабинета (после инициализации auth и принятия условий).
+async function runAppStart() {
     // Загружаем профиль/роль и строим таб-бар (best-effort: не блокируем покупку)
     try {
         await loadMe();
@@ -209,7 +223,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else {
         await showHome();
     }
-});
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Пригласительное по ссылке (?invite=<код>)
@@ -316,6 +330,63 @@ function showNoInitData() {
             <div style="font-size:11px;color:#999;margin-top:16px;word-break:break-all">${diag}</div>
         </div>
     `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Онбординг: принятие условий (п.1.1.4 Правил VK Mini Apps)
+//
+// При первом запуске (localStorage['terms_accepted'] отсутствует) показываем
+// экран с условиями. До принятия — доступ к кабинету заблокирован. После
+// принятия сохраняем флаг и продолжаем обычный запуск.
+// ═══════════════════════════════════════════════════════════════
+const TERMS_STORAGE_KEY = "ticketbot_terms_accepted";
+
+function hasAcceptedTerms() {
+    try {
+        return localStorage.getItem(TERMS_STORAGE_KEY) === "1";
+    } catch (e) {
+        // localStorage может быть недоступен (приватный режим) — не блокируем
+        return true;
+    }
+}
+
+function showOnboarding() {
+    const el = document.getElementById("onboardingOverlay");
+    if (!el) return false;
+    el.classList.add("active");
+    renderTerms();
+    return true;
+}
+
+function hideOnboarding() {
+    const el = document.getElementById("onboardingOverlay");
+    if (el) el.classList.remove("active");
+}
+
+function acceptTerms() {
+    try {
+        localStorage.setItem(TERMS_STORAGE_KEY, "1");
+    } catch (e) { /* не критично */ }
+    hideOnboarding();
+    // Продолжаем обычный запуск (повторно инициализируем стартовую логику)
+    runAppStart();
+}
+
+// Показать условия (соглашение/политику) по клику на ссылку.
+// В режиме «типовые документы VK» условия принимаются на платформе VK;
+// здесь показываем краткую выжимку + ссылки на полные тексты (когда размещены).
+function renderTerms() {
+    const links = document.querySelectorAll(".terms-link");
+    links.forEach(link => {
+        link.addEventListener("click", (e) => {
+            e.preventDefault();
+            const type = link.getAttribute("data-terms");
+            const text = type === "user_agreement"
+                ? "Пользовательское соглашение: использование сервиса «Билетёр» означает согласие с условиями предоставления услуг, правилами покупки и возврата билетов, обязанностями организаторов и ответственностью сторон. Организатор самостоятельно определяет и несёт ответственность за возрастное ограничение мероприятия (0+, 6+, 12+, 16+, 18+), корректность этой маркировки и допуск лиц до 18 лет на 18+ мероприятия (ФЗ-436)."
+                : "Политика конфиденциальности: сервис обрабатывает данные (идентификатор VK/Telegram, имя, билеты) для продажи билетов и работы функций организатора. Токены доступа VK-групп хранятся в зашифрованном виде. Вы можете удалить аккаунт в любое время.";
+            tgAlert(text);
+        });
+    });
 }
 
 function renderTabBar() {
@@ -763,6 +834,7 @@ function renderEvent(event) {
                 <div class="meta-row"><span class="meta-label">📍 Место</span><span>${event.location || 'Не указано'}</span></div>
                 <div class="meta-row"><span class="meta-label">💰 Цена</span><span>${formatPrice(event.price)}</span></div>
                 <div class="meta-row"><span class="meta-label">🎟 Билетов</span><span>${event.available_tickets} из ${event.total_tickets}</span></div>
+                <div class="meta-row"><span class="meta-label">🔞 Возраст</span><span>${escapeHtml(event.age_restriction || '0+')}</span></div>
             </div>
             <div class="buy-section">
                 ${buyButton}
