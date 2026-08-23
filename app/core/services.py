@@ -1154,7 +1154,8 @@ class EventService:
     async def create(self, title: str, description: Optional[str], date: datetime,
                      location: Optional[str], price: float,
                      total_tickets: int, channel_id: uuid.UUID | None,
-                     invites_quota: int = 0, owner_user_id: uuid.UUID | None = None) -> Event:
+                     invites_quota: int = 0, owner_user_id: uuid.UUID | None = None,
+                     age_restriction: str = "0+") -> Event:
         start = time.perf_counter()
 
         # Мероприятие принадлежит каналу ИЛИ организатору-пользователю (не оба, не никого)
@@ -1189,6 +1190,7 @@ class EventService:
             invites_quota=invites_quota,
             channel_id=channel_id,
             owner_user_id=owner_user_id,
+            age_restriction=age_restriction,
         )
         self.session.add(event)
         await self.session.flush()
@@ -1201,6 +1203,7 @@ class EventService:
             "price": price,
             "total_tickets": total_tickets,
             "is_free": is_free,
+            "age_restriction": age_restriction,
             "status": "success",
             "duration_ms": _ms(start),
         })
@@ -2343,7 +2346,7 @@ class TicketService:
         """Get all tickets for a user with event info, optionally filtered by channel."""
         start = time.perf_counter()
         stmt = (
-            select(Ticket, Event.title)
+            select(Ticket, Event.title, Event.age_restriction)
             .join(Event, Ticket.event_id == Event.id)
             .where(Ticket.user_id == user_id)
         )
@@ -2354,7 +2357,7 @@ class TicketService:
         rows = result.all()
 
         tickets = []
-        for ticket, event_title in rows:
+        for ticket, event_title, age_restriction in rows:
             tickets.append({
                 "id": ticket.id,
                 "event_id": ticket.event_id,
@@ -2364,6 +2367,7 @@ class TicketService:
                 "validation_code": ticket.validation_code,
                 "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else None,
                 "is_free": ticket.is_free,
+                "age_restriction": age_restriction,
             })
 
         logger.info("", extra={

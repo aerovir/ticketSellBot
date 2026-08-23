@@ -368,6 +368,40 @@ class TestEventService:
         assert updated.title == "Новое название"
         assert updated.price == 3000.0
 
+    async def test_create_event_age_restriction_default(self, db_session, event_svc, sample_channel):
+        """Дефолт age_restriction = "0+", если не указан."""
+        future = datetime.now(timezone.utc) + timedelta(days=10)
+        event = await event_svc.create(
+            title="Концерт",
+            description=None,
+            date=future,
+            location=None,
+            price=0,
+            total_tickets=50,
+            channel_id=sample_channel.id,
+        )
+        assert event.age_restriction == "0+"
+
+    async def test_create_event_age_restriction_custom(self, db_session, event_svc, sample_channel):
+        """Указанный age_restriction сохраняется."""
+        future = datetime.now(timezone.utc) + timedelta(days=10)
+        event = await event_svc.create(
+            title="Концерт 18+",
+            description=None,
+            date=future,
+            location=None,
+            price=0,
+            total_tickets=50,
+            channel_id=sample_channel.id,
+            age_restriction="18+",
+        )
+        assert event.age_restriction == "18+"
+
+    async def test_update_event_age_restriction(self, db_session, event_svc, sample_event):
+        """Обновление age_restriction."""
+        updated = await event_svc.update(sample_event.id, age_restriction="16+")
+        assert updated.age_restriction == "16+"
+
     async def test_list_all(self, db_session, event_svc, sample_event, sample_past_event):
         """Все мероприятия (включая прошедшие)."""
         all_events = await event_svc.list_all()
