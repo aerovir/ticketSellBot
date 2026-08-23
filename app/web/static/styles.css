@@ -758,6 +758,20 @@ body {
     border-radius: var(--radius);
 }
 
+/* Контакты поддержки (п.2.4.1 Правил VK) */
+.support-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 0;
+}
+.support-block a.btn {
+    text-align: center;
+    text-decoration: none;
+    margin: 0;
+}
+
 .profile-avatar {
     font-size: 56px;
     margin-bottom: 12px;
