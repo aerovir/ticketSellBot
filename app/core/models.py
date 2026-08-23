@@ -271,6 +271,9 @@ class Event(Base):
     media_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "photo" или "video"
     is_free: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     invites_quota: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Возрастное ограничение (0+/6+/12+/16+/18+) — знак информационной продукции
+    # по ФЗ-436. Устанавливается организатором при создании мероприятия.
+    age_restriction: Mapped[str] = mapped_column(String(4), nullable=False, default="0+")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

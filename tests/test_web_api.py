@@ -230,6 +230,7 @@ class TestAPIEndpoints:
         mock_event.price = 1000.0
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
+        mock_event.age_restriction = "12+"
         mock_event.media_telegram_file_id = None
         mock_event.media_type = None
 
@@ -246,6 +247,7 @@ class TestAPIEndpoints:
         assert len(data) == 1
         assert data[0]["title"] == "Test Event"
         assert data[0]["price"] == 1000.0
+        assert data[0]["age_restriction"] == "12+"
 
     def test_event_detail_found(self, client):
         """GET /api/events/{id} — детали мероприятия."""
@@ -261,6 +263,7 @@ class TestAPIEndpoints:
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
         mock_event.is_active = True
+        mock_event.age_restriction = "16+"
         mock_event.media_telegram_file_id = None
         mock_event.media_type = None
 
@@ -274,6 +277,7 @@ class TestAPIEndpoints:
             )
         assert resp.status_code == 200
         assert resp.json()["title"] == "Test Event"
+        assert resp.json()["age_restriction"] == "16+"
 
     def test_event_detail_not_found(self, client):
         """GET /api/events/{id} — 404 если нет."""
@@ -599,7 +603,7 @@ class TestAdminAPI:
 
         with (
             admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
-            patch("app.web.routes.EventService.create", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.create", new_callable=AsyncMock, return_value=mock_event) as m_create,
         ):
             resp = client.post(
                 "/api/admin/events",
@@ -610,10 +614,13 @@ class TestAdminAPI:
                     "price": 0,
                     "total_tickets": 50,
                     "channel_id": CHANNEL_ID,
+                    "age_restriction": "18+",
                 },
             )
         assert resp.status_code == 201
         assert resp.json()["is_published"] is False
+        # age_restriction проброшен в сервис
+        assert m_create.await_args.kwargs["age_restriction"] == "18+"
 
     def test_admin_create_event_wrong_channel(self, client):
         """POST /api/admin/events — 403 если канал вне managed."""
@@ -1610,6 +1617,7 @@ class TestCoverageGaps:
         mock_event.is_active = True
         mock_event.is_published = True
         mock_event.is_free = False
+        mock_event.age_restriction = "18+"
         mock_event.media_telegram_file_id = None
         mock_event.media_type = None
 
@@ -1622,6 +1630,7 @@ class TestCoverageGaps:
             resp = client.get(f"/api/admin/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
         assert resp.json()["title"] == "Test"
+        assert resp.json()["age_restriction"] == "18+"
 
     def test_admin_update_event(self, client):
         """PATCH /api/admin/events/{id} — обновление."""
@@ -1632,11 +1641,17 @@ class TestCoverageGaps:
         with (
             admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
-            patch("app.web.routes.EventService.update", new_callable=AsyncMock, return_value=mock_event),
+            patch("app.web.routes.EventService.update", new_callable=AsyncMock, return_value=mock_event) as m_update,
         ):
-            resp = client.patch(f"/api/admin/events/{EVENT_ID}", headers={"X-Skip-Auth": "1"}, json={"title": "New"})
+            resp = client.patch(
+                f"/api/admin/events/{EVENT_ID}",
+                headers={"X-Skip-Auth": "1"},
+                json={"title": "New", "age_restriction": "16+"},
+            )
         assert resp.status_code == 200
         assert resp.json()["updated"] is True
+        # age_restriction проброшен в сервис (update(uid, **data))
+        assert m_update.await_args.kwargs["age_restriction"] == "16+"
 
     def test_admin_toggle(self, client):
         """POST /api/admin/events/{id}/toggle."""
@@ -1950,6 +1965,7 @@ class TestOrganizerApi:
         mock_event.is_active = True
         mock_event.is_published = True
         mock_event.is_free = True
+        mock_event.age_restriction = "0+"
         mock_event.media_telegram_file_id = None
         mock_event.media_type = None
 
@@ -2679,6 +2695,7 @@ class TestPriceRangesAPI:
         ev.available_tickets = 50
         ev.total_tickets = 100
         ev.is_active = True
+        ev.age_restriction = "0+"
         ev.media_telegram_file_id = None
         ev.media_type = None
         return ev
@@ -2809,6 +2826,7 @@ class TestEventMedia:
         mock_event.available_tickets = 50
         mock_event.total_tickets = 100
         mock_event.is_active = True
+        mock_event.age_restriction = "0+"
         mock_event.media_telegram_file_id = "AgAC_123"
         mock_event.media_type = "photo"
         with (

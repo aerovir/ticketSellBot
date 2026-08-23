@@ -116,6 +116,7 @@ async def list_events(
             "price": EventService.resolve_price(ranges_map.get(e.id), e, now),
             "available_tickets": e.available_tickets,
             "total_tickets": e.total_tickets,
+            "age_restriction": e.age_restriction,
             "media_file_id": e.media_telegram_file_id,
             "media_type": e.media_type,
         }
@@ -151,6 +152,7 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         "available_tickets": event.available_tickets,
         "total_tickets": event.total_tickets,
         "is_active": event.is_active,
+        "age_restriction": event.age_restriction,
         "media_file_id": event.media_telegram_file_id,
         "media_type": event.media_type,
     }
@@ -927,6 +929,7 @@ async def admin_list_events(current: CurrentUser = Depends(require_admin)):
             "is_published": e.is_published,
             "is_free": e.is_free,
             "is_premium": premium_map.get(e.id, False),
+            "age_restriction": e.age_restriction,
             "media_file_id": e.media_telegram_file_id,
             "media_type": e.media_type,
         }
@@ -982,6 +985,7 @@ async def admin_create_event(
                 channel_id=body.channel_id,
                 invites_quota=body.invites_quota,
                 owner_user_id=body.owner_user_id,
+                age_restriction=body.age_restriction,
             )
             await session.commit()
         except ValueError as e:
@@ -1031,6 +1035,7 @@ async def admin_get_event(
         "is_published": event.is_published,
         "is_free": event.is_free,
         "is_premium": is_premium,
+        "age_restriction": event.age_restriction,
         "media_file_id": event.media_telegram_file_id,
         "media_type": event.media_type,
     }

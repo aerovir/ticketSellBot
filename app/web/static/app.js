@@ -971,6 +971,7 @@ function renderTickets(tickets) {
                         ? `<span>🎟 <b>Код для входа:</b> <code>${escapeHtml(entryCode)}</code></span>`
                         : `<span>🔒 <b>Платный билет</b> — предъявите QR на входе</span>`}
                     <span>📅 Куплен: ${dateStr}</span>
+                    <span>🔞 Возраст: ${escapeHtml(t.age_restriction || '0+')}</span>
                 </div>
                 ${isActive ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
                     ${isFree ? '' : `<button class="btn btn-primary btn-sm" onclick="showBuyerTicketQr('${t.id}')">📱 Показать QR</button>`}
@@ -1228,6 +1229,15 @@ async function showAdminEventForm(eventId) {
                 <input class="form-input" id="f_location" value="${escapeHtml(event ? (event.location || '') : '')}">
             </div>
             <div class="form-field">
+                <label class="form-label">Возрастное ограничение (ФЗ-436)</label>
+                <select class="form-input" id="f_age_restriction">
+                    ${["0+", "6+", "12+", "16+", "18+"].map(v =>
+                        `<option value="${v}" ${(event ? (event.age_restriction || '0+') : '0+') === v ? 'selected' : ''}>${v}</option>`
+                    ).join('')}
+                </select>
+                <div class="hint" style="margin:4px 0 0">Организатор отвечает за корректность маркировки и допуск лиц до 18 лет</div>
+            </div>
+            <div class="form-field">
                 <label class="form-label">Цена (₽, 0 = бесплатно)${canPaid ? '' : ' — только бесплатные на вашем тарифе'}</label>
                 <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}" ${canPaid ? '' : 'disabled'}>
             </div>
@@ -1304,12 +1314,16 @@ async function submitAdminEventForm(eventId) {
     const invitesQuotaEl = document.getElementById("f_invites");
     const invites_quota = invitesQuotaEl ? (parseInt(invitesQuotaEl.value, 10) || 0) : undefined;
 
+    const ageRestrictionEl = document.getElementById("f_age_restriction");
+    const age_restriction = ageRestrictionEl ? ageRestrictionEl.value : undefined;
+
     const payload = {
         title, description,
         date: new Date(dateStr).toISOString(),
         location, price, total_tickets,
     };
     if (invites_quota !== undefined) payload.invites_quota = invites_quota;
+    if (age_restriction !== undefined) payload.age_restriction = age_restriction;
     if (!eventId) {
         const channelId = document.getElementById("f_channel").value;
         payload.channel_id = channelId || null;

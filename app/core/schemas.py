@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.core.models import SubscriptionTier, PeriodUnit, PlatformType, DiscountType
 
+# Допустимые знаки информационной продукции (ФЗ-436, ст. 6).
+AGE_RESTRICTIONS = ("0+", "6+", "12+", "16+", "18+")
+
 
 # ─── User ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +41,8 @@ class EventCreate(BaseModel):
     channel_id: Optional[UUID] = None
     owner_user_id: Optional[UUID] = None
     invites_quota: int = Field(default=0, ge=0)
+    # Возрастное ограничение (ФЗ-436). По умолчанию "0+".
+    age_restriction: str = Field(default="0+", max_length=4)
 
 
 class EventUpdateIn(BaseModel):
@@ -49,6 +54,7 @@ class EventUpdateIn(BaseModel):
     price: Optional[float] = Field(default=None, ge=0)
     total_tickets: Optional[int] = Field(default=None, ge=0)
     invites_quota: Optional[int] = Field(default=None, ge=0)
+    age_restriction: Optional[str] = Field(default=None, max_length=4)
 
 
 class InviteIssueIn(BaseModel):
@@ -108,6 +114,7 @@ class EventOut(BaseModel):
     available_tickets: int
     is_active: bool
     is_free: bool
+    age_restriction: str = "0+"
 
     model_config = {"from_attributes": True}
 
@@ -121,6 +128,7 @@ class EventShortOut(BaseModel):
     location: Optional[str]
     price: float
     available_tickets: int
+    age_restriction: str = "0+"
 
     model_config = {"from_attributes": True}
 
