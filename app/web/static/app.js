@@ -8,6 +8,21 @@
  * - CSS variables: --tg-theme-bg-color, --tg-theme-button-color, etc.
  */
 
+// [DIAG] перехват ошибок — отправим на /api/__diag, чтобы увидеть в серверном логе
+window.addEventListener("error", function (e) {
+    try {
+        fetch("/api/__diag?stage=onerror&msg=" + encodeURIComponent(String(e.message).slice(0, 200)) +
+            "&line=" + (e.lineno || "") + "&col=" + (e.colno || "") + "&src=" + encodeURIComponent(String(e.filename || "").slice(0, 120)))
+            .catch(function () {});
+    } catch (err) {}
+});
+window.addEventListener("unhandledrejection", function (e) {
+    try {
+        fetch("/api/__diag?stage=unhandled&msg=" + encodeURIComponent(String(e.reason && e.reason.message ? e.reason.message : e.reason).slice(0, 200)))
+            .catch(function () {});
+    } catch (err) {}
+});
+
 // ─── State ──────────────────────────────────────────────────────
 const state = {
     initData: "",
