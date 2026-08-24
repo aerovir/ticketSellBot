@@ -1318,8 +1318,10 @@
   4. **Доказано на проде (Playwright):** после убирания инлайн-стиля — `display:flex`, кнопка видна, клик → идут `/api/me`/`/api/events`/`/api/tickets`, кабинет отрисовывается.
   - Второй слой (тоже исправлен): внешний CDN `cdn.jsdelivr.net/jsqr` блокировал `app.js` в iframe VK — jsQR.js скачан локально.
   - Третий слой (попутно, не корень): `initVKAuth` мог зависнуть на bridge — приоритет launch params из URL, таймаут bridge, локальный vk-bridge.
+  - **Четвёртый слой (заглушка VK «Проблема с инициализацией приложения»):** VK требует вызов `bridge.send("VKWebAppInit")` как сигнал инициализации приложения. При URL-приоритете (VK передаёт launch params в URL) код шёл в `if (!res && bridge)` — `res` уже был из URL, ветка пропускалась → `VKWebAppInit` НЕ вызывался → VK показывал заглушку ДО загрузки iframe.
 - **Исправление:**
   - **Главное:** убран инлайн `style="display:none"` из `div#onboardingOverlay` в обоих entry. Скрытие по CSS `.onboarding-overlay`, показ — классом `.active`.
+  - **VKWebAppInit** теперь вызывается ВСЕГДА в начале `initVKAuth` (если bridge есть), до URL-приоритета — иначе VK не инициализирует приложение.
   - Дополнительно: `jsQR.js` локально вместо CDN; vk-bridge локально; `isVK` по pathname; приоритет URL-params.
-- **Коммит:** `caf8d41` (ветка `bugfix/onboarding-inline-display`) + `ab375e7`/`408698f` (jsQR) + `95f1d32` (bridge)
-- **Тесты:** frontend-тесты 28 passed; полный прогон 530 passed. Проверено e2e на проде (Playwright): онбординг виден → клик → API-запросы идут.
+- **Коммит:** `caf8d41` (инлайн display) + `66695a5` (VKWebAppInit) + `ab375e7`/`408698f` (jsQR) + `95f1d32` (bridge)
+- **Тесты:** frontend-тесты 28 passed; полный прогон 530 passed. Проверено на проде (VK): приложение открывается, показывается онбординг с принятием условий.
