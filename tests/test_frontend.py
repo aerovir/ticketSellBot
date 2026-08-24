@@ -133,9 +133,14 @@ def test_appjs_event_premium():
 
 
 def test_html_includes_jsqr():
-    """jsQR подключён в оба entry (TG и VK) перед app.js."""
-    assert "jsqr@1.4.0" in INDEX
-    assert "jsqr@1.4.0" in VK_APP
+    """jsQR подключён в оба entry (TG и VK) перед app.js.
+
+    Локально (/static/jsQR.js), а не с внешнего CDN: в изолированном iframe VK
+    внешние CDN недоступны, блокирующий скрипт jsqr не грузился → app.js не стартовал
+    (белый экран). Все скрипты — с нашего домена.
+    """
+    assert "/static/jsQR.js" in INDEX
+    assert "/static/jsQR.js" in VK_APP
 
 
 def test_appjs_has_qr_scanner():
