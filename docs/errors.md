@@ -1306,17 +1306,18 @@
 
 ---
 
-## 080 — Белый экран VK Mini App (launch params не извлекались)
+## 080 — Белый экран VK Mini App (внешний CDN jsqr блокировал загрузку app.js)
 
 - **Дата:** 2026-08-24
 - **Статус:** ✅ Исправлено
-- **Описание:** При открытии VK Mini App (`/vk-app`) — белый экран, не отрисовываются иконки. Прод-логи: HTML/CSS/JS отдаются (200), но **ни одного API-запроса** — JS останавливался до авторизации.
+- **Описание:** При открытии VK Mini App (`/vk-app`) — белый экран, не отрисовываются иконки. Прод-логи (nginx): браузер загрузил `vk-app.html` → `styles.css` → `vk-bridge.min.js` → `app.js` (все 200), но **ни одного `/api/*` запроса** — JS не выполнился.
 - **Анализ:**
-  - **Подтверждено (`app.js` initVKAuth):** `await bridge.send("VKWebAppGetLaunchParams")` **зависал навсегда** вне VK-окружения (desktop/web — promise не резолвится). Код не доходил до URL-fallback → `state.initData` пуст → `showNoInitData()` → «Откройте кабинет в Telegram».
-  - **Подтверждено (воспроизведение Playwright):** при заблокированном unpkg (`vk-bridge` не грузится) `window.vkBridge` = undefined → `isVK=false` → код уходит в Telegram-ветку → белый экран. Причина: `isVK = window.vkBridge && pathname.startsWith("/vk-app")` зависел от загрузки CDN.
+  - **Подтверждено (nginx-лог прода, реальное открытие VK, referrer `https://vk.ru/`):** после `app.js` идёт `GET /static/browser.min.js.map 404` (vk-bridge запросил source-map), но **нет ни одного `/api/*`** — `app.js` не стартовал.
+  - **Подтверждено (`vk-app.html:190`):** `<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js">` — **блокирующий скрипт с внешнего CDN ПЕРЕД `app.js`**. В изолированном iframe VK (`vk.ru`) внешние CDN недоступны → браузер блокирует парсинг, ждёт jsqr → `app.js` никогда не выполняется → белый экран.
+  - **Доказано Playwright:** при блокировке ВСЕХ внешних доменов с CDN-jsqr — 0 табов (белый экран); после замены на локальный `/static/jsQR.js` — 4 таба, app.js выполняется, ошибок нет.
+  - Первая гипотеза (vk-bridge/launch params) — **опровергнута**: даже с локальным vk-bridge CDN-jsqr всё равно блокировал app.js.
 - **Исправление:**
-  - `isVK` определяется по `pathname.startsWith("/vk-app")` — независимо от vk-bridge.
-  - `initVKAuth`: **приоритет — launch params из URL-query** (`/vk-app?vk_user_id=...&sign=...`, VK всегда передаёт их в iframe); bridge — только fallback с таймаутом 800мс (`Promise.race`).
-  - `vk-bridge.min.js` (4.4KB) забандлен локально в `/static` и подключён вместо unpkg CDN.
-- **Коммит:** `95f1d32` (ветка `bugfix/vk-app-white-screen`)
-- **Тесты:** `test_appjs_initvk_handles_direct_object` обновлён под новую логику (`b30dcca`); полный прогон 530 passed.
+  - `jsQR.js` (256KB) скачан и подключён как `/static/jsQR.js` в обоих entry (`vk-app.html`, `index.html`). Все скрипты — с нашего домена, внешних CDN нет (кроме обязательного TG SDK `telegram.org` в index.html).
+  - Попутно (правильно, но не было корнем): `isVK` по pathname, приоритет launch params из URL, таймаут vk-bridge 800мс, локальный бандл vk-bridge (`95f1d32`).
+- **Коммит:** `ab375e7` + `408698f` (ветка `bugfix/vk-app-external-cdn`)
+- **Тесты:** `test_html_includes_jsqr` обновлён (`/static/jsQR.js` вместо `jsqr@1.4.0`); полный прогон 530 passed.
