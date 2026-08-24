@@ -10,8 +10,8 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
-from fastapi.responses import StreamingResponse, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from app.core.database import async_session_factory
 from app.core.models import PlatformType, Event
@@ -85,14 +85,6 @@ async def _send_ticket_dm(telegram_user_id: str, text: str) -> bool:
 # ═══════════════════════════════════════════════════════════════
 # Events
 # ═══════════════════════════════════════════════════════════════
-
-
-# [DIAG] временная диагностика белого экрана VK — логирует query, возвращает 204
-@router.get("/__diag")
-async def diag_probe(request: Request):
-    import logging
-    logging.getLogger("ticketbot.web").info("DIAG probe", extra={"diag": dict(request.query_params)})
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/events")

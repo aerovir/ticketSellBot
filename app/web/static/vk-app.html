@@ -6,15 +6,6 @@
     <title>TicketBot</title>
     <link rel="stylesheet" href="/static/styles.css?v=3">
     <script src="/static/vk-bridge.min.js"></script>
-    <script>
-        // [DIAG] инлайн-скрипт: выполняется даже если app.js заблокирован.
-        // Показывает, работает ли JS в VK WebView и доходит ли пинг.
-        try {
-            fetch("/api/__diag?stage=inline-html&ua=" + encodeURIComponent(String(navigator.userAgent).slice(0, 80)) +
-                "&path=" + encodeURIComponent(location.pathname) + "&has_vkbr=" + String(typeof window.vkBridge))
-                .catch(function () {});
-        } catch (e) {}
-    </script>
 </head>
 <body>
     <div id="app">

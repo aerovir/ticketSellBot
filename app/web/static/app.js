@@ -8,21 +8,6 @@
  * - CSS variables: --tg-theme-bg-color, --tg-theme-button-color, etc.
  */
 
-// [DIAG] перехват ошибок — отправим на /api/__diag, чтобы увидеть в серверном логе
-window.addEventListener("error", function (e) {
-    try {
-        fetch("/api/__diag?stage=onerror&msg=" + encodeURIComponent(String(e.message).slice(0, 200)) +
-            "&line=" + (e.lineno || "") + "&col=" + (e.colno || "") + "&src=" + encodeURIComponent(String(e.filename || "").slice(0, 120)))
-            .catch(function () {});
-    } catch (err) {}
-});
-window.addEventListener("unhandledrejection", function (e) {
-    try {
-        fetch("/api/__diag?stage=unhandled&msg=" + encodeURIComponent(String(e.reason && e.reason.message ? e.reason.message : e.reason).slice(0, 200)))
-            .catch(function () {});
-    } catch (err) {}
-});
-
 // ─── State ──────────────────────────────────────────────────────
 const state = {
     initData: "",
@@ -188,17 +173,6 @@ async function initVKAuth() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-    // [DIAG] временная диагностика белого экрана VK — пинг на /__diag
-    const diag = (stage) => {
-        try {
-            fetch("/api/__diag?" + new URLSearchParams({
-                stage, path: location.pathname, host: location.hostname,
-                platform: state.platform, initdata_len: String(state.initData || "").length,
-                has_bridge: String(typeof window.vkBridge), has_tg: String(!!(window.Telegram && window.Telegram.WebApp)),
-            })).catch(() => {});
-        } catch (e) {}
-    };
-    diag("start");
     // VK Mini App (открывается на /vk-app). Определяем по пути, а не по vkBridge:
     // vk-bridge мог не загрузиться (CDN недоступен в изолированном iframe VK),
     // но launch params всё равно приходят в URL-query (/vk-app?vk_*&sign=...).
@@ -221,13 +195,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
-    // [DIAG] после авторизации
-    diag("after-auth");
-
     // Если initData пуст — кабинет открыт вне Telegram (не как Mini App).
     // Показываем понятное сообщение вместо пустого списка.
     if (!state.initData && window.location.hostname !== "localhost") {
-        diag("no-initdata");
         showNoInitData();
         return;
     }
