@@ -147,6 +147,12 @@ function normalizeVKLaunchParams(res) {
 async function initVKAuth() {
     const bridge = window.vkBridge;
     try {
+        // VKWebAppInit — ОБЯЗАТЕЛЬНЫЙ сигнал VK, что приложение инициализируется.
+        // Без него VK показывает заглушку «Проблема с инициализацией приложения»
+        // (даже если launch params получены из URL). Вызываем ВСЕГДА, если bridge есть.
+        if (bridge) {
+            try { bridge.send("VKWebAppInit"); } catch (e) {}
+        }
         // Приоритет — launch params из URL-query: VK всегда передаёт их в iframe
         // (/vk-app?vk_user_id=...&vk_ts=...&sign=...). Это работает даже если
         // bridge ещё не готов или не ответил (на десктопе VKWebAppGetLaunchParams
@@ -160,7 +166,6 @@ async function initVKAuth() {
         }
         // Если в URL нет — пробуем через bridge (с таймаутом, чтобы не зависнуть).
         if (!res && bridge) {
-            bridge.send("VKWebAppInit");
             res = await Promise.race([
                 bridge.send("VKWebAppGetLaunchParams"),
                 new Promise(r => setTimeout(() => r(null), 800)),
