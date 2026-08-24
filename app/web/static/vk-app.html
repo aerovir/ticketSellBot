@@ -21,8 +21,10 @@
             <p>Загрузка...</p>
         </div>
 
-        <!-- Онбординг: принятие условий (п.1.1.4 Правил VK Mini Apps) -->
-        <div class="onboarding-overlay" id="onboardingOverlay" style="display:none">
+        <!-- Онбординг: принятие условий (п.1.1.4 Правил VK Mini Apps).
+             Без инлайн style="display:none": скрыт по CSS (.onboarding-overlay),
+             показывается классом .active — иначе инлайн перекрывает flex. -->
+        <div class="onboarding-overlay" id="onboardingOverlay">
             <div class="onboarding-card">
                 <div class="onboarding-icon">🎟</div>
                 <h2>Добро пожаловать в «Билетёр»!</h2>
