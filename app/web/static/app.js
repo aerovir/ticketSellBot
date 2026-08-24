@@ -168,6 +168,17 @@ async function initVKAuth() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+    // [DIAG] временная диагностика белого экрана VK — пинг на /__diag
+    const diag = (stage) => {
+        try {
+            fetch("/__diag?" + new URLSearchParams({
+                stage, path: location.pathname, host: location.hostname,
+                platform: state.platform, initdata_len: String(state.initData || "").length,
+                has_bridge: String(typeof window.vkBridge), has_tg: String(!!(window.Telegram && window.Telegram.WebApp)),
+            })).catch(() => {});
+        } catch (e) {}
+    };
+    diag("start");
     // VK Mini App (открывается на /vk-app). Определяем по пути, а не по vkBridge:
     // vk-bridge мог не загрузиться (CDN недоступен в изолированном iframe VK),
     // но launch params всё равно приходят в URL-query (/vk-app?vk_*&sign=...).
@@ -190,9 +201,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
+    // [DIAG] после авторизации
+    diag("after-auth");
+
     // Если initData пуст — кабинет открыт вне Telegram (не как Mini App).
     // Показываем понятное сообщение вместо пустого списка.
     if (!state.initData && window.location.hostname !== "localhost") {
+        diag("no-initdata");
         showNoInitData();
         return;
     }
