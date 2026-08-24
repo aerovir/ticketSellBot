@@ -172,6 +172,30 @@ async function initVKAuth() {
     }
 }
 
+// VK Mini App: применить тему (dark/light) из VKWebAppGetConfig.
+// В VK нет --tg-theme-* переменных (их отдаёт только Telegram WebView),
+// поэтому получаем appearance/scheme через bridge и ставим класс на <html>.
+async function applyVKTheme() {
+    try {
+        const bridge = window.vkBridge;
+        if (!bridge) return;
+        const config = await Promise.race([
+            bridge.send("VKWebAppGetConfig"),
+            new Promise(r => setTimeout(() => r(null), 800)),
+        ]);
+        let dark = false;
+        if (config) {
+            const appearance = config.appearance; // 'dark' | 'light' (iOS/Android)
+            const scheme = config.scheme;          // 'space_gray' | 'vkcom_dark' → тёмная
+            dark = appearance === "dark" || scheme === "space_gray" || scheme === "vkcom_dark";
+        }
+        document.documentElement.classList.add(dark ? "vk-theme-dark" : "vk-theme-light");
+    } catch (e) {
+        // Тема не критична — по умолчанию светлая
+        document.documentElement.classList.add("vk-theme-light");
+    }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
     // VK Mini App (открывается на /vk-app). Определяем по пути, а не по vkBridge:
     // vk-bridge мог не загрузиться (CDN недоступен в изолированном iframe VK),
@@ -179,6 +203,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const isVK = window.location.pathname.startsWith("/vk-app");
     if (isVK) {
         await initVKAuth();
+        await applyVKTheme();
     } else if (window.Telegram && window.Telegram.WebApp) {
         // Init Telegram WebApp
         const tg = window.Telegram.WebApp;
@@ -684,10 +709,19 @@ async function api(path, options = {}) {
         headers["X-Skip-Auth"] = "1";
     }
 
-    const resp = await fetch(path, {
-        ...options,
-        headers,
-    });
+    let resp;
+    try {
+        resp = await fetch(path, {
+            ...options,
+            headers,
+        });
+    } catch (e) {
+        // Сетевая ошибка (нет интернета / сервер недоступен) — понятное сообщение
+        if (!navigator.onLine) {
+            throw new Error("Нет соединения с интернетом. Проверьте подключение и попробуйте снова.");
+        }
+        throw new Error("Сервер временно недоступен. Попробуйте позже.");
+    }
 
     if (!resp.ok) {
         let detail = `HTTP ${resp.status}`;

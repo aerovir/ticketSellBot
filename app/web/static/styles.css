@@ -32,6 +32,36 @@
     --badge-gray-text: #5f6a6a;
 }
 
+/* ═══════════════════════════════════════════════════════════
+   VK Mini App — тема. В VK отсутствуют --tg-theme-* переменные
+   (их отдаёт только Telegram WebView). Получаем тему через
+   VKWebAppGetConfig (appearance/scheme) и переопределяем переменные.
+   ═══════════════════════════════════════════════════════════ */
+
+/* VK: светлая тема (по умолчанию для VK — white/light) */
+html.vk-theme-light {
+    --tg-theme-bg-color: #ffffff;
+    --tg-theme-text-color: #1a1a1a;
+    --tg-theme-hint-color: #818c99;
+    --tg-theme-link-color: #2d81e0;
+    --tg-theme-button-color: #2d81e0;
+    --tg-theme-button-text-color: #ffffff;
+    --tg-theme-secondary-bg-color: #f4f4f5;
+    --tg-theme-section-bg-color: #ffffff;
+}
+
+/* VK: тёмная тема (space_gray / vkcom_dark) */
+html.vk-theme-dark {
+    --tg-theme-bg-color: #19191a;
+    --tg-theme-text-color: #e1e3e6;
+    --tg-theme-hint-color: #76787a;
+    --tg-theme-link-color: #71aaeb;
+    --tg-theme-button-color: #5b7cfa;
+    --tg-theme-button-text-color: #ffffff;
+    --tg-theme-secondary-bg-color: #2a2a2b;
+    --tg-theme-section-bg-color: #232324;
+}
+
 * {
     margin: 0;
     padding: 0;
