@@ -1306,18 +1306,20 @@
 
 ---
 
-## 080 — Белый экран VK Mini App (внешний CDN jsqr блокировал загрузку app.js)
+## 080 — Белый экран VK Mini App (инлайн display:none на онбординге)
 
 - **Дата:** 2026-08-24
 - **Статус:** ✅ Исправлено
 - **Описание:** При открытии VK Mini App (`/vk-app`) — белый экран, не отрисовываются иконки. Прод-логи (nginx): браузер загрузил `vk-app.html` → `styles.css` → `vk-bridge.min.js` → `app.js` (все 200), но **ни одного `/api/*` запроса** — JS не выполнился.
-- **Анализ:**
-  - **Подтверждено (nginx-лог прода, реальное открытие VK, referrer `https://vk.ru/`):** после `app.js` идёт `GET /static/browser.min.js.map 404` (vk-bridge запросил source-map), но **нет ни одного `/api/*`** — `app.js` не стартовал.
-  - **Подтверждено (`vk-app.html:190`):** `<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js">` — **блокирующий скрипт с внешнего CDN ПЕРЕД `app.js`**. В изолированном iframe VK (`vk.ru`) внешние CDN недоступны → браузер блокирует парсинг, ждёт jsqr → `app.js` никогда не выполняется → белый экран.
-  - **Доказано Playwright:** при блокировке ВСЕХ внешних доменов с CDN-jsqr — 0 табов (белый экран); после замены на локальный `/static/jsQR.js` — 4 таба, app.js выполняется, ошибок нет.
-  - Первая гипотеза (vk-bridge/launch params) — **опровергнута**: даже с локальным vk-bridge CDN-jsqr всё равно блокировал app.js.
+- **Анализ (пошагово, доказано кодом + Playwright на проде):**
+  1. **Подтверждено (`vk-app.html:25`, `index.html:25`):** `<div class="onboarding-overlay" id="onboardingOverlay" style="display:none">` — **инлайн `style="display:none"`** на онбординге. Инлайн-стиль имеет приоритет над CSS-правилом `.onboarding-overlay.active { display:flex }`.
+  2. **Подтверждено (`app.js` showOnboarding):** при первом запуске `hasAcceptedTerms()` false → `showOnboarding()` добавляет класс `active`, но инлайн `display:none` держит оверлей скрытым. Кнопка «Принять условия» существует, но **не видна** (`btn.getBoundingClientRect().height === 0`).
+  3. **Подтверждено (`app.js` DOMContentLoaded handler, строки 202-207):** онбординг «показан» (класс active), handler делает `return` и **ждёт клик по невидимой кнопке** → `runAppStart()` НЕ вызывается → нет `/api/me`, нет рендера → белый экран.
+  4. **Доказано на проде (Playwright):** после убирания инлайн-стиля — `display:flex`, кнопка видна, клик → идут `/api/me`/`/api/events`/`/api/tickets`, кабинет отрисовывается.
+  - Второй слой (тоже исправлен): внешний CDN `cdn.jsdelivr.net/jsqr` блокировал `app.js` в iframe VK — jsQR.js скачан локально.
+  - Третий слой (попутно, не корень): `initVKAuth` мог зависнуть на bridge — приоритет launch params из URL, таймаут bridge, локальный vk-bridge.
 - **Исправление:**
-  - `jsQR.js` (256KB) скачан и подключён как `/static/jsQR.js` в обоих entry (`vk-app.html`, `index.html`). Все скрипты — с нашего домена, внешних CDN нет (кроме обязательного TG SDK `telegram.org` в index.html).
-  - Попутно (правильно, но не было корнем): `isVK` по pathname, приоритет launch params из URL, таймаут vk-bridge 800мс, локальный бандл vk-bridge (`95f1d32`).
-- **Коммит:** `ab375e7` + `408698f` (ветка `bugfix/vk-app-external-cdn`)
-- **Тесты:** `test_html_includes_jsqr` обновлён (`/static/jsQR.js` вместо `jsqr@1.4.0`); полный прогон 530 passed.
+  - **Главное:** убран инлайн `style="display:none"` из `div#onboardingOverlay` в обоих entry. Скрытие по CSS `.onboarding-overlay`, показ — классом `.active`.
+  - Дополнительно: `jsQR.js` локально вместо CDN; vk-bridge локально; `isVK` по pathname; приоритет URL-params.
+- **Коммит:** `caf8d41` (ветка `bugfix/onboarding-inline-display`) + `ab375e7`/`408698f` (jsQR) + `95f1d32` (bridge)
+- **Тесты:** frontend-тесты 28 passed; полный прогон 530 passed. Проверено e2e на проде (Playwright): онбординг виден → клик → API-запросы идут.
