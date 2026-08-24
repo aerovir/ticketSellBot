@@ -171,7 +171,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // [DIAG] временная диагностика белого экрана VK — пинг на /__diag
     const diag = (stage) => {
         try {
-            fetch("/__diag?" + new URLSearchParams({
+            fetch("/api/__diag?" + new URLSearchParams({
                 stage, path: location.pathname, host: location.hostname,
                 platform: state.platform, initdata_len: String(state.initData || "").length,
                 has_bridge: String(typeof window.vkBridge), has_tg: String(!!(window.Telegram && window.Telegram.WebApp)),
