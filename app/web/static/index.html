@@ -48,6 +48,19 @@
         <!-- Error toast -->
         <div class="toast" id="toast"></div>
 
+        <!-- ═══ Page: Tablet stub (заглушка для планшетов, чек-лист VK) ═══ -->
+        <div class="page" id="page-tablet">
+            <div class="page-content">
+                <div class="empty-state tablet-stub">
+                    <div class="empty-icon">📱</div>
+                    <h3>Откройте на телефоне</h3>
+                    <p>Приложение оптимизировано для смартфонов.<br>
+                    Рекомендуем открыть «Билетёр» на телефоне для лучшего опыта.</p>
+                    <button class="btn btn-primary" onclick="dismissTabletStub()">✅ Всё равно продолжить</button>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ Page: Home Dashboard ═══ -->
         <div class="page active" id="page-home">
             <div class="page-content" id="homeContent"></div>
@@ -190,6 +203,6 @@
     </div>
 
     <script src="/static/jsQR.js"></script>
-    <script src="/static/app.js?v=13"></script>
+    <script src="/static/app.js?v=14"></script>
 </body>
 </html>

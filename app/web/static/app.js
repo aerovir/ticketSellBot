@@ -241,6 +241,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 // Основной запуск кабинета (после инициализации auth и принятия условий).
 async function runAppStart() {
+    // Заглушка для планшетов (чек-лист VK): широкий тач-экран → рекомендуем телефон.
+    if (isTablet()) {
+        showTabletStub();
+        return;
+    }
+
     // Загружаем профиль/роль и строим таб-бар (best-effort: не блокируем покупку)
     try {
         await loadMe();
@@ -262,6 +268,27 @@ async function runAppStart() {
     } else {
         await showHome();
     }
+}
+
+// Планшет: широкий тач-экран (iPad и т.п.). Заглушка по чек-листу VK.
+function isTablet() {
+    try {
+        const touch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+        return touch && window.innerWidth >= 700 && window.innerHeight >= 700;
+    } catch (e) {
+        return false;
+    }
+}
+
+function showTabletStub() {
+    updateHeader("TicketBot");
+    showPage("tablet");
+    document.getElementById("tabBar").style.display = "none";
+}
+
+function dismissTabletStub() {
+    // Продолжаем обычный запуск (как после онбординга)
+    runAppStart();
 }
 
 // ═══════════════════════════════════════════════════════════════
