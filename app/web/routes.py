@@ -535,14 +535,19 @@ async def get_me(current: CurrentUser = Depends(get_current_user)):
     """Профиль текущего пользователя: роль + каналы, где он админ."""
     async with async_session_factory() as session:
         channel_svc = ChannelService(session)
-        channels = await channel_svc.get_channels_by_admin(current.telegram_user_id)
-        # Подписка пользователя (организатор без канала)
+        # Telegram channels are not exposed in the VK Mini App profile.
+        channels = (
+            await channel_svc.get_channels_by_admin(current.telegram_user_id)
+            if current.platform is PlatformType.telegram else []
+        )
+        # Subscription belongs to the authenticated platform identity.
         user_svc = UserService(session)
-        user = await user_svc.get_by_platform_user_id(PlatformType.telegram, current.telegram_user_id)
+        user = await user_svc.get_by_platform_user_id(current.platform, current.telegram_user_id)
 
-    return {
+    result = {
         "id": str(current.user_id),
-        "telegram_user_id": current.telegram_user_id,
+        "platform": current.platform.value,
+        "platform_user_id": current.telegram_user_id,
         "name": current.name,
         "role": current.role,
         "is_super_admin": current.is_super_admin,
@@ -564,6 +569,13 @@ async def get_me(current: CurrentUser = Depends(get_current_user)):
             for ch in channels
         ],
     }
+    # Keep the legacy field for Telegram clients only; VK must not expose a
+    # Telegram-labelled identity field in its profile contract.
+    if current.platform is PlatformType.telegram:
+        result["telegram_user_id"] = current.telegram_user_id
+    return result
+
+
 
 
 @router.patch("/me")

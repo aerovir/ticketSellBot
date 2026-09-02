@@ -1325,3 +1325,27 @@
   - Дополнительно: `jsQR.js` локально вместо CDN; vk-bridge локально; `isVK` по pathname; приоритет URL-params.
 - **Коммит:** `caf8d41` (инлайн display) + `66695a5` (VKWebAppInit) + `ab375e7`/`408698f` (jsQR) + `95f1d32` (bridge)
 - **Тесты:** frontend-тесты 28 passed; полный прогон 530 passed. Проверено на проде (VK): приложение открывается, показывается онбординг с принятием условий.
+
+---
+
+## 081 — VK Mini App отклонён модерацией: ссылки и сведения о других площадках
+
+- **Дата:** 2026-09-01
+- **Статус:** ✅ Исправлено
+- **Описание:** Модерация VK отклонила приложение по п. 4.1.8 Правил VK Mini Apps: «В сервисе присутствуют ссылки или информация о других площадках размещения сервиса».
+- **Анализ (причина подтверждена чтением кода):**
+  - `app/web/static/app.js:664` безусловно выводит в профиле `Telegram ID`, в том числе в `/vk-app`.
+  - `app/web/static/app.js:676-677` безусловно выводит пользователю ссылки `https://t.me/aerovir` и `mailto:aerovir@mail.ru`, в том числе в VK.
+  - `app/web/static/app.js:392-395` при отсутствии VK launch params показывает инструкцию «Откройте кабинет в Telegram».
+  - `app/web/static/app.js:651-653` в VK-профиле предлагает «Привязать Telegram».
+  - `app/web/static/app.js:452` в тексте политики для VK упоминает `VK/Telegram`.
+  - `app/web/static/app.js:1851`, `1872`, `1948` используют `X-Init-Data` напрямую, поэтому VK admin QR/CSV не используют свой заголовок `X-VK-Init-Data`.
+  - Telegram SDK подключён отдельно в `app/web/static/index.html:8`; `app/web/static/vk-app.html:7-8` использует локальные VK-ресурсы, поэтому Telegram SDK из VK shell не является причиной.
+- **Исправление (применено):**
+  - `app/web/static/app.js`: VK режим определяется до проверки авторизации; экран ошибки запуска не содержит Telegram-инструкций; политика и профиль используют platform-safe copy; в VK скрыты Telegram ID, Telegram/email support, Telegram-каналы и linking; super-admin dashboard закрыт для VK; admin QR/CSV используют `authHeaders()`.
+  - `app/web/dependencies.py`: super-admin определяется только для `PlatformType.telegram`.
+  - `app/web/routes.py`: `/api/me` использует authenticated platform, возвращает `platform`/`platform_user_id`, не отдаёт Telegram-labelled identity/channels для VK.
+  - `tests/test_frontend.py`, `tests/test_web_api.py`: добавлены регрессионные проверки shell, VK branches, QR/CSV headers и API profile contract.
+- **Проверка:** `tests/test_frontend.py` + `tests/test_web_api.py` — 188 passed; полный набор `pytest` — 540 passed, 3 warnings. `node --check app/web/static/app.js` и `py_compile` — успешно.
+- **Связанные ошибки:** #063, #064, #080.
+- **Коммит:** — (ветка `feature/vk-moderation-isolation`, ожидает ревью)

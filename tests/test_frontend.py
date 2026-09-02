@@ -266,3 +266,94 @@ def test_appjs_has_group_flag():
     """Флаг площадки организатора (has_group / organizer_with_group)."""
     assert "has_group" in APP_JS
     assert "organizer_with_group" in APP_JS or "isOrganizerWithGroup" in APP_JS
+
+
+# ─── Изоляция VK Mini App по п. 4.1.8 ─────────────────────────────
+
+
+def test_vk_shell_has_no_external_platform_assets_or_links():
+    """VK shell не должен загружать SDK или ссылки других площадок."""
+    assert "https://" not in VK_APP
+    assert "http://" not in VK_APP
+    assert "mailto:" not in VK_APP
+    assert "t.me" not in VK_APP.lower()
+    assert "telegram.org" not in VK_APP.lower()
+    assert "telegram.org/js/telegram-web-app.js" in INDEX
+
+
+def test_vk_mode_has_platform_scoped_copy_and_profile():
+    """VK-контур должен иметь отдельные platform-safe ветки."""
+    assert "isVKMode" in APP_JS
+    assert "внутри VK" in APP_JS
+    assert "Идентификатор пользователя" in APP_JS
+    assert "Раздел помощи доступен в приложении" in APP_JS
+    assert "createVKLinkCode" in APP_JS
+    assert "Telegram ID" in APP_JS
+    assert "https://t.me/aerovir" in APP_JS
+    assert "mailto:aerovir@mail.ru" in APP_JS
+
+    profile_start = APP_JS.index("function renderProfile")
+    profile_end = APP_JS.index("\nasync function editName", profile_start)
+    profile_body = APP_JS[profile_start:profile_end]
+    assert "isVKMode()" in profile_body
+    organizer_start = APP_JS.index("function renderOrganizerSections")
+    organizer_end = APP_JS.index("\nfunction renderProfile", organizer_start)
+    vk_branch = APP_JS[organizer_start:organizer_end]
+    vk_branch = vk_branch[vk_branch.index("if (isVKMode())"):vk_branch.index("return {")]
+    assert "Привязать Telegram" not in vk_branch
+
+
+def test_vk_no_auth_does_not_expose_telegram_copy():
+    """Telegram fallback copy remains outside the VK-specific branch."""
+    no_auth_start = APP_JS.index("function showNoInitData")
+    no_auth_end = APP_JS.index("\n// ═", no_auth_start + 1)
+    no_auth_body = APP_JS[no_auth_start:no_auth_end]
+    assert "Откройте кабинет в Telegram" in no_auth_body
+    assert "внутри VK" in no_auth_body
+    assert "isVKMode()" in APP_JS
+    assert "window.location.href" not in no_auth_body
+
+
+def test_vk_terms_use_neutral_platform_copy():
+    """VK policy summary does not mention another platform."""
+    terms_start = APP_JS.index("function renderTerms")
+    terms_end = APP_JS.index("\nfunction platformUserId", terms_start)
+    terms_body = APP_JS[terms_start:terms_end]
+    assert "isVKMode()" in terms_body
+    assert '"VK/Telegram"' not in terms_body
+    assert "идентификатор пользователя" in terms_body
+
+
+def test_vk_profile_does_not_unconditionally_render_external_support():
+    """External contacts are rendered by a platform-aware helper."""
+    support_start = APP_JS.index("function renderSupport")
+    support_end = APP_JS.index("\nfunction renderOrganizerSections", support_start)
+    support_body = APP_JS[support_start:support_end]
+    assert "isVKMode()" in support_body
+    assert "Раздел помощи доступен в приложении" in support_body
+    assert "https://t.me/aerovir" in support_body
+    assert "mailto:aerovir@mail.ru" in support_body
+
+
+def test_admin_binary_downloads_use_platform_auth_headers():
+    """QR/CSV админа должны работать с VK launch params."""
+    for function_name in ("showTicketQr", "downloadQr", "downloadCsv"):
+        start = APP_JS.index(f"async function {function_name}")
+        end = APP_JS.find("\nasync function ", start + 1)
+        body = APP_JS[start:] if end == -1 else APP_JS[start:end]
+        assert "authHeaders()" in body, function_name
+        assert '"X-Init-Data": state.initData' not in body, function_name
+
+
+def test_vk_super_admin_ui_is_platform_gated():
+    """Global super-admin tools are not available from VK."""
+    assert "if (isVKMode() || state.role !== \"super_admin\") return;" in APP_JS
+    assert 'state.platform = "vk"' in APP_JS
+
+
+def test_telegram_profile_contract_is_preserved():
+    """Telegram support and linking remain available in the shared app."""
+    assert "Telegram ID" in APP_JS
+    assert "https://t.me/aerovir" in APP_JS
+    assert "mailto:aerovir@mail.ru" in APP_JS
+    assert "createVKLinkCode" in APP_JS

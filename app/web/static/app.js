@@ -202,6 +202,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     // но launch params всё равно приходят в URL-query (/vk-app?vk_*&sign=...).
     const isVK = window.location.pathname.startsWith("/vk-app");
     if (isVK) {
+        // Mark the platform before auth so an invalid VK launch never falls
+        // through to Telegram-specific fallback copy.
+        state.platform = "vk";
         await initVKAuth();
         await applyVKTheme();
     } else if (window.Telegram && window.Telegram.WebApp) {
@@ -369,31 +372,31 @@ function extractInitDataFromUrl() {
     }
 }
 
+function isVKMode() {
+    return state.platform === "vk";
+}
+
 function showNoInitData() {
-    // Кабинет открыт вне Telegram Mini App — initData недоступен.
+    // Кабинет открыт без данных запуска — показываем только platform-safe copy.
     updateToolbar("TicketBot", false, false);
     showPage("events");
 
-    // Диагностика причины: есть ли Telegram SDK, что в initDataUnsafe
-    let diag = "window.Telegram: " + (window.Telegram ? "есть" : "нет");
-    if (window.Telegram && window.Telegram.WebApp) {
-        const tg = window.Telegram.WebApp;
-        diag += "<br>WebApp: есть, initData len=" + (tg.initData ? tg.initData.length : 0);
-        const u = (tg.initDataUnsafe && tg.initDataUnsafe.user) || {};
-        diag += ", user.id=" + (u.id ?? "—");
-    } else {
-        diag += "<br>WebApp: НЕТ";
-    }
-    diag += "<br>URL: " + window.location.href;
-
-    document.getElementById("eventsContent").innerHTML = `
-        <div class="empty-state">
-            <div class="empty-icon">⚠️</div>
+    const content = isVKMode()
+        ? `
+            <h3>Не удалось открыть приложение</h3>
+            <p>Не удалось получить данные запуска. Закройте приложение и откройте его снова внутри VK.</p>
+          `
+        : `
             <h3>Откройте кабинет в Telegram</h3>
             <p>Личный кабинет работает только внутри Telegram Mini App.<br>
             Откройте чат с ботом и нажмите кнопку <b>«Мероприятия»</b> внизу,
             либо кнопку <b>«🎫 Открыть кабинет»</b> в анонсах канала.</p>
-            <div style="font-size:11px;color:#999;margin-top:16px;word-break:break-all">${diag}</div>
+          `;
+
+    document.getElementById("eventsContent").innerHTML = `
+        <div class="empty-state">
+            <div class="empty-icon">⚠️</div>
+            ${content}
         </div>
     `;
 }
@@ -449,10 +452,113 @@ function renderTerms() {
             const type = link.getAttribute("data-terms");
             const text = type === "user_agreement"
                 ? "Пользовательское соглашение: использование сервиса «Билетёр» означает согласие с условиями предоставления услуг, правилами покупки и возврата билетов, обязанностями организаторов и ответственностью сторон. Организатор самостоятельно определяет и несёт ответственность за возрастное ограничение мероприятия (0+, 6+, 12+, 16+, 18+), корректность этой маркировки и допуск лиц до 18 лет на 18+ мероприятия (ФЗ-436)."
-                : "Политика конфиденциальности: сервис обрабатывает данные (идентификатор VK/Telegram, имя, билеты) для продажи билетов и работы функций организатора. Токены доступа VK-групп хранятся в зашифрованном виде. Вы можете удалить аккаунт в любое время.";
+                : (isVKMode()
+                    ? "Политика конфиденциальности: сервис обрабатывает идентификатор пользователя, имя и данные билетов для продажи билетов и работы функций организатора. Данные, необходимые для публикации в сообществах VK, хранятся в защищённом виде. Вы можете удалить аккаунт в любое время."
+                    : "Политика конфиденциальности: сервис обрабатывает данные (идентификатор VK/Telegram, имя, билеты) для продажи билетов и работы функций организатора. Токены доступа VK-групп хранятся в зашифрованном виде. Вы можете удалить аккаунт в любое время.");
             tgAlert(text);
         });
     });
+}
+
+function platformUserId(me) {
+    return me.platform_user_id || me.vk_user_id || me.telegram_user_id || me.id || "—";
+}
+
+function renderSupport() {
+    if (isVKMode()) {
+        return `
+            <div class="support-block">
+                <h3 style="margin:20px 0 8px">🛟 Поддержка</h3>
+                <p class="hint" style="margin:0">Раздел помощи доступен в приложении.</p>
+            </div>`;
+    }
+    return `
+        <div class="support-block">
+            <h3 style="margin:20px 0 8px">🛟 Поддержка</h3>
+            <p class="hint" style="margin:0 0 8px">Вопросы, замечания, помощь с покупкой билетов:</p>
+            <a class="btn btn-secondary" href="https://t.me/aerovir" target="_blank" rel="noopener">✈️ Telegram: @aerovir</a>
+            <a class="btn btn-secondary" href="mailto:aerovir@mail.ru">📧 aerovir@mail.ru</a>
+        </div>`;
+}
+
+function renderOrganizerSections(me, channels) {
+    if (isVKMode()) {
+        return {
+            extra: `
+                <h3 style="margin:20px 0 10px">Мои VK-группы</h3>
+                <p class="hint">Управление группами доступно в приложении.</p>`,
+            actions: `
+                <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
+                <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>`
+        };
+    }
+    return {
+        extra: `
+            <h3 style="margin:20px 0 10px">Мои площадки</h3>
+            ${channels.length === 0
+                ? '<p class="hint">Нет каналов</p>'
+                : `<div class="admin-list">
+                    ${channels.map(ch => `
+                        <div class="admin-list-item">
+                            <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
+                                <span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>
+                            </div>
+                            <div class="hint">${ch.is_subscription_active ? '🟢 Активна' : '🔴 Неактивна'}${ch.subscription_until ? ' до ' + formatDate(ch.subscription_until) : ''}</div>
+                        </div>`).join('')}
+                </div>`}`,
+        actions: `
+            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
+            <button class="btn btn-secondary" onclick="showMyChannels()">📢 Мои каналы</button>
+            <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>
+            <button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Привязать VK (получить код)</button>`
+    };
+}
+
+function renderProfile() {
+    const me = state.me;
+    const roleNames = { user: "Покупатель", organizer: "Организатор", super_admin: "Супер-админ" };
+    const roleText = roleNames[me.role] || me.role;
+    const channels = me.channels || [];
+
+    // Telegram avatar is read only in the Telegram Mini App.
+    const tgUser = !isVKMode() && window.Telegram && window.Telegram.WebApp
+        && window.Telegram.WebApp.initDataUnsafe
+        ? window.Telegram.WebApp.initDataUnsafe.user : null;
+    const avatarHtml = tgUser && tgUser.photo_url
+        ? `<img class="profile-avatar-img" src="${tgUser.photo_url}" alt="">`
+        : '<div class="profile-avatar">👤</div>';
+
+    let extraSections = "";
+    let actionButtons = "";
+    if (me.role === "user") {
+        actionButtons = `
+            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
+            <button class="btn btn-primary" onclick="becomeOrganizer()">🚀 Стать организатором</button>`;
+    } else if (me.role === "organizer") {
+        const sections = renderOrganizerSections(me, channels);
+        extraSections = sections.extra;
+        actionButtons = sections.actions;
+    } else if (!isVKMode()) {
+        actionButtons = `
+            <button class="btn btn-primary" onclick="showHome()">🛠 Инструменты (главная)</button>`;
+    }
+
+    const identifierLabel = isVKMode() ? "Идентификатор пользователя" : "Telegram ID";
+    document.getElementById("profileContent").innerHTML = `
+        <div class="profile-card">
+            ${avatarHtml}
+            <h2>${escapeHtml(me.name || "Пользователь")}</h2>
+            <p class="hint">${identifierLabel}: <code>${escapeHtml(platformUserId(me))}</code></p>
+            <span class="badge badge-role">${roleText}</span>
+            <button class="btn btn-sm btn-secondary mt-12" onclick="editName()">✏️ Изменить имя</button>
+        </div>
+        ${extraSections}
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+            ${actionButtons}
+            <button class="btn btn-danger" style="margin-top:8px" onclick="deleteAccount()">🗑 Удалить аккаунт</button>
+        </div>
+        ${renderSupport()}
+    `;
 }
 
 function renderTabBar() {
@@ -510,17 +616,31 @@ function renderHomeDashboard() {
         cards.push({ icon: "🎟", value: tickets.length, label: "Мои билеты", onclick: "showMyTickets()" });
         cards.push({ icon: "🚀", value: "—", label: "Стать организатором", onclick: "becomeOrganizer()" });
     } else if (state.role === "organizer") {
-        // Организатор: свои мероприятия + продажи/вход + площадки
+        // Организатор: свои мероприятия + продажи/вход + VK-площадки.
         cards.push({ icon: "🎫", value: events.length, label: "Мои мероприятия", onclick: "showAdminEvents()" });
         cards.push({ icon: "🔍", value: "Вход", label: "Продажи / Вход", onclick: "showCheckin()" });
-        cards.push({ icon: "📢", value: channels.length, label: "Мои площадки", onclick: "showMyChannels()" });
-    } else {
-        // Супер-админ: инструменты ПРЯМО на главной (без промежуточной «Панели»)
+        if (isVKMode()) {
+            cards.push({ icon: "📢", value: (me.vk_group_ids || []).length, label: "VK-группы", onclick: "showMyVKGroups()" });
+        } else {
+            cards.push({ icon: "📢", value: channels.length, label: "Мои площадки", onclick: "showMyChannels()" });
+        }
+    } else if (!isVKMode()) {
+        // Супер-админские инструменты доступны только в Telegram-контуре.
         cards.push({ icon: "🔍", value: "—", label: "Поиск по коду", onclick: "showCheckin()" });
         cards.push({ icon: "📊", value: "—", label: "Статистика", onclick: "showAdminStats()" });
         cards.push({ icon: "📣", value: "—", label: "Рассылка", onclick: "showBroadcast()" });
         cards.push({ icon: "👥", value: "—", label: "Подписки", onclick: "showUserInfo()" });
         cards.push({ icon: "🩺", value: "—", label: "Здоровье", onclick: "showAdminHealth()" });
+    }
+
+    // A VK user with a stale role response must never see global admin tools.
+    if (isVKMode() && state.role === "super_admin") {
+        state.role = "user";
+        cards = [
+            { icon: "🎫", value: events.length, label: "Мероприятия", onclick: "showEvents()" },
+            { icon: "🎟", value: tickets.length, label: "Мои билеты", onclick: "showMyTickets()" },
+            { icon: "🚀", value: "—", label: "Стать организатором", onclick: "becomeOrganizer()" },
+        ];
     }
 
     let html = `<h2 style="padding:16px 16px 0">Привет, ${escapeHtml(me.name || 'Гость')}!</h2>`;
@@ -600,83 +720,6 @@ async function adminListUserSubscribe(userId) {
         showToast("✅ Подписка выдана");
         await showAdminUserList();
     } catch (e) { showToast(e.message || "Ошибка", true); }
-}
-
-async function showProfile() {
-    if (!state.me) { try { await loadMe(); } catch (e) { showError("Не удалось загрузить профиль"); return; } }
-    setActiveTab("profile");
-    updateToolbar("Профиль", false, false);
-    showPage("profile");
-    renderProfile();
-}
-
-function renderProfile() {
-    const me = state.me;
-    const roleNames = { user: "Покупатель", organizer: "Организатор", super_admin: "Супер-админ" };
-    const roleText = roleNames[me.role] || me.role;
-    const channels = me.channels || [];
-
-    // Аватар из фото Telegram (если доступно), иначе эмодзи
-    const tgUser = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) || null;
-    const avatarHtml = tgUser && tgUser.photo_url
-        ? `<img class="profile-avatar-img" src="${tgUser.photo_url}" alt="">`
-        : '<div class="profile-avatar">👤</div>';
-
-    // Матрица ролей: профиль ролевой. Пользователь — минимальный.
-    let extraSections = "";
-    let actionButtons = "";
-    if (me.role === "user") {
-        // Пользователь: только билеты + стать организатором
-        actionButtons = `
-            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
-            <button class="btn btn-primary" onclick="becomeOrganizer()">🚀 Стать организатором</button>`;
-    } else if (me.role === "organizer") {
-        extraSections = `
-            <h3 style="margin:20px 0 10px">Мои площадки</h3>
-            ${channels.length === 0
-                ? '<p class="hint">Нет каналов</p>'
-                : `<div class="admin-list">
-                    ${channels.map(ch => `
-                        <div class="admin-list-item">
-                            <div><b>${escapeHtml(ch.title || ch.telegram_channel_id)}</b>
-                                <span class="badge ${ch.subscription_tier === 'pro' ? 'badge-tier-pro' : 'badge-tier-basic'}">${ch.subscription_tier}</span>
-                            </div>
-                            <div class="hint">${ch.is_subscription_active ? '🟢 Активна' : '🔴 Неактивна'}${ch.subscription_until ? ' до ' + formatDate(ch.subscription_until) : ''}</div>
-                        </div>`).join('')}
-                </div>`}`;
-        actionButtons = `
-            <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
-            <button class="btn btn-secondary" onclick="showMyChannels()">📢 Мои каналы</button>
-            <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>
-            ${state.platform === 'vk'
-                ? `<button class="btn btn-secondary" onclick="linkVKByCode()">🔗 Привязать Telegram (ввести код)</button>`
-                : `<button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Привязать VK (получить код)</button>`}`;
-    } else {
-        // Суперадмин: инструменты на главной (без организаторских разделов)
-        actionButtons = `
-            <button class="btn btn-primary" onclick="showHome()">🛠 Инструменты (главная)</button>`;
-    }
-
-    document.getElementById("profileContent").innerHTML = `
-        <div class="profile-card">
-            ${avatarHtml}
-            <h2>${escapeHtml(me.name || "Пользователь")}</h2>
-            <p class="hint">Telegram ID: <code>${escapeHtml(me.telegram_user_id)}</code></p>
-            <span class="badge badge-role">${roleText}</span>
-            <button class="btn btn-sm btn-secondary mt-12" onclick="editName()">✏️ Изменить имя</button>
-        </div>
-        ${extraSections}
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
-            ${actionButtons}
-            <button class="btn btn-danger" style="margin-top:8px" onclick="deleteAccount()">🗑 Удалить аккаунт</button>
-        </div>
-        <div class="support-block">
-            <h3 style="margin:20px 0 8px">🛟 Поддержка</h3>
-            <p class="hint" style="margin:0 0 8px">Вопросы, замечания, помощь с покупкой билетов:</p>
-            <a class="btn btn-secondary" href="https://t.me/aerovir" target="_blank" rel="noopener">✈️ Telegram: @aerovir</a>
-            <a class="btn btn-secondary" href="mailto:aerovir@mail.ru">📧 aerovir@mail.ru</a>
-        </div>
-    `;
 }
 
 async function editName() {
@@ -1284,9 +1327,8 @@ function showEmpty(containerId, message) {
 // ═══════════════════════════════════════════════════════════════
 
 function showAdminDashboard() {
-    // Суперадминская панель: только глобальные разделы (матрица ролей).
-    // НЕ управляет мероприятиями, каналами и площадками организаторов.
-    if (state.role !== "super_admin") return;
+    // Global super-admin tools are available only in the Telegram contour.
+    if (isVKMode() || state.role !== "super_admin") return;
     setActiveTab("admin");
     updateToolbar("Панель", false, false);
     showPage("admin");
@@ -1848,7 +1890,7 @@ async function adminCreatePriceRange(eventId) {
 
 async function showTicketQr(ticketId) {
     try {
-        const resp = await fetch(`/api/admin/tickets/${ticketId}/qr`, { headers: { "X-Init-Data": state.initData } });
+        const resp = await fetch(`/api/admin/tickets/${ticketId}/qr`, { headers: authHeaders() });
         if (!resp.ok) { showToast("Ошибка загрузки QR", true); return; }
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
@@ -1869,7 +1911,7 @@ async function showTicketQr(ticketId) {
 
 async function downloadQr(ticketId) {
     try {
-        const resp = await fetch(`/api/admin/tickets/${ticketId}/qr`, { headers: { "X-Init-Data": state.initData } });
+        const resp = await fetch(`/api/admin/tickets/${ticketId}/qr`, { headers: authHeaders() });
         if (!resp.ok) { showToast("Ошибка", true); return; }
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
@@ -1945,7 +1987,7 @@ async function adminCancelTicket(ticketId) {
 
 async function downloadCsv(eventId) {
     try {
-        const resp = await fetch(`/api/admin/events/${eventId}/tickets.csv`, { headers: { "X-Init-Data": state.initData } });
+        const resp = await fetch(`/api/admin/events/${eventId}/tickets.csv`, { headers: authHeaders() });
         if (!resp.ok) { showToast("Ошибка загрузки CSV", true); return; }
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);

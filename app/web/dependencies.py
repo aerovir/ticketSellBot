@@ -185,6 +185,7 @@ class CurrentUser:
     telegram_user_id: str
     name: str | None
     is_super_admin: bool
+    platform: PlatformType = PlatformType.telegram
     #: Каналы с активной подпиской, где пользователь — админ (channel_admins).
     managed_channel_ids: list[UUID] = field(default_factory=list)
     #: Организатор без канала — есть активная подписка пользователя.
@@ -274,11 +275,14 @@ async def get_current_user(auth_data: dict = Depends(validate_init_data)) -> Cur
         # still carry this dependency); commit is a no-op when nothing changed.
         await session.commit()
 
-    is_super = _is_super_admin(platform_user_id)
+    # Super-admin is configured by Telegram IDs; a VK user with the same
+    # numeric ID must never inherit Telegram global privileges.
+    is_super = platform is PlatformType.telegram and _is_super_admin(platform_user_id)
     return CurrentUser(
         user_id=user.id,
         telegram_user_id=platform_user_id,
         name=user.name,
+        platform=platform,
         is_super_admin=is_super,
         managed_channel_ids=managed,
         is_organizer=is_organizer,

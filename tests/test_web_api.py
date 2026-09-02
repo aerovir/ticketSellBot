@@ -1952,6 +1952,48 @@ class TestCoverageGaps:
         assert resp.status_code == 200
         assert resp.json()["platform"] == "vk"
 
+    def test_vk_me_profile_contract(self, client):
+        """GET /api/me exposes platform-neutral identity for VK."""
+        current = Mock()
+        current.user_id = _UUID(USER_ID)
+        current.telegram_user_id = "5305539"
+        current.platform = __import__("app.core.models", fromlist=["PlatformType"]).PlatformType.vk
+        current.name = "VK User"
+        current.role = "user"
+        current.is_super_admin = False
+        current.is_organizer = False
+        current.has_group = False
+        current.vk_group_ids = []
+        app = create_app()
+        from app.web.dependencies import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: current
+        with (
+            patch("app.web.routes.ChannelService.get_channels_by_admin", new_callable=AsyncMock, return_value=[]),
+            patch("app.web.routes.UserService.get_by_platform_user_id", new_callable=AsyncMock, return_value=None),
+            patch("app.web.server.init_db", new_callable=AsyncMock),
+            patch("app.web.server.close_db", new_callable=AsyncMock),
+            TestClient(app) as vk_client,
+        ):
+            resp = vk_client.get("/api/me")
+        app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["platform"] == "vk"
+        assert data["platform_user_id"] == "5305539"
+        assert "telegram_user_id" not in data
+        assert data["channels"] == []
+
+    def test_telegram_me_profile_contract_legacy_context(self, client):
+        """Legacy Telegram profile contract remains unchanged."""
+        with (
+            admin_auth(is_super=False, channel_ids=[]),
+            patch("app.web.routes.ChannelService.get_channels_by_admin", new_callable=AsyncMock, return_value=[]),
+        ):
+            resp = client.get("/api/me", headers={"X-Skip-Auth": "1"})
+        assert resp.status_code == 200
+        assert resp.json()["telegram_user_id"] == "12345"
+        assert resp.json()["platform"] == "telegram"
+
 
 class TestSubscriptionApi:
     """Тесты смены подписки (TDD: до реализации)."""
